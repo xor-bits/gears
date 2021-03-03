@@ -3,7 +3,18 @@ name = "gears"
 version = "0.1.0"
 authors = ["Overpeek <overpeek.fin@gmail.com>"]
 edition = "2018"
+exclude = ["examples/*"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+colored = "2.0.0"
+chrono = "0.4.19"
+winit = "0.24.0"
+gfx-hal = "0.7.0"
+gfx-auxil = "0.8.0"
+gfx-backend-empty = "0.7.0"
+gfx-backend-vulkan = "0.7.0"
+
+[workspace]
+members = ["examples/*"]
