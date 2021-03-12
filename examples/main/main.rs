@@ -1,6 +1,7 @@
 use gears::Gears;
-use log::*;
 
+#[cfg(target_arch = "wasm32")]
+use log::*;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
@@ -18,6 +19,6 @@ fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     env_logger::init();
 
-    let gears = Gears::new(900, 700);
+    let gears = Gears::new(600, 600);
     gears.run();
 }

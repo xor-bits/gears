@@ -20,6 +20,8 @@ unstable = []
 [dependencies]
 log = "0.4"
 colored = "2.0.0"
+instant = "0.1.9"
+cgmath = "0.18.0"
 winit = { version = "0.24.0", features = ["web-sys"] }
 gfx-hal = "0.7.0"
 gfx-auxil = "0.8.0"

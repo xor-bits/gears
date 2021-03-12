@@ -1,16 +1,61 @@
 use std::{io::Cursor, iter};
 
+use cgmath::{Vector2, Vector3};
 use gfx_hal::{
     device::Device,
+    format::Format,
     pass::Subpass,
     pso::{
-        BlendState, ColorBlendDesc, ColorMask, EntryPoint, GraphicsPipelineDesc,
-        InputAssemblerDesc, Primitive, PrimitiveAssemblerDesc, Rasterizer, Specialization,
+        AttributeDesc, BlendState, ColorBlendDesc, ColorMask, Element, EntryPoint,
+        GraphicsPipelineDesc, InputAssemblerDesc, Primitive, PrimitiveAssemblerDesc, Rasterizer,
+        Specialization, VertexBufferDesc, VertexInputRate,
     },
     Backend,
 };
 
-pub fn create_pipeline<B: Backend>(
+pub trait Vertex /* <const N: usize> */ {
+    // const generics not yet stable
+    fn binding_desc() -> Vec<VertexBufferDesc>;
+    fn attribute_desc() -> Vec<AttributeDesc>;
+}
+
+pub struct VertexData {
+    pub position: Vector2<f32>,
+    pub color: Vector3<f32>,
+}
+
+impl Vertex for VertexData {
+    fn binding_desc() -> Vec<VertexBufferDesc> {
+        vec![VertexBufferDesc {
+            binding: 0,
+            rate: VertexInputRate::Vertex,
+            stride: std::mem::size_of::<VertexData>() as u32,
+        }]
+    }
+
+    fn attribute_desc() -> Vec<AttributeDesc> {
+        vec![
+            AttributeDesc {
+                binding: 0,
+                location: 0,
+                element: Element {
+                    format: Format::Rg32Sfloat,
+                    offset: 0,
+                },
+            },
+            AttributeDesc {
+                binding: 0,
+                location: 1,
+                element: Element {
+                    format: Format::Rgb32Sfloat,
+                    offset: 4 * 2,
+                },
+            },
+        ]
+    }
+}
+
+pub fn create_pipeline<B: Backend, V: Vertex>(
     device: &B::Device,
     render_pass: &B::RenderPass,
 ) -> B::GraphicsPipeline {
@@ -37,18 +82,64 @@ pub fn create_pipeline<B: Backend>(
         specialization: Specialization::default(),
     };
 
-    let pipeline_layout = unsafe { device.create_pipeline_layout(iter::empty(), iter::empty()) }
-        .expect("Could not create a pipeline layout");
+    /* let set_layout = unsafe {
+        device.create_descriptor_set_layout(
+            vec![DescriptorSetLayoutBinding {
+                binding: 1,
+                ty: DescriptorType::Buffer {
+                    format: BufferDescriptorFormat::Structured {
+                        dynamic_offset: false,
+                    },
+                    ty: BufferDescriptorType::Uniform,
+                },
+                count: 1,
+                stage_flags: ShaderStageFlags::VERTEX,
+                immutable_samplers: false,
+            }]
+            .into_iter(),
+            iter::empty(),
+        )
+    }
+    .expect("Could not create a descriptor set layout");
+
+    let mut desc_pool = unsafe {
+        device.create_descriptor_pool(
+            1, // sets
+            vec![DescriptorRangeDesc {
+                ty: DescriptorType::Buffer {
+                    format: BufferDescriptorFormat::Structured {
+                        dynamic_offset: false,
+                    },
+                    ty: BufferDescriptorType::Uniform,
+                },
+                count: 1,
+            }]
+            .into_iter(),
+            DescriptorPoolCreateFlags::empty(),
+        )
+    }
+    .expect("Could not create a descriptor pool");
+    let mut desc_set = unsafe { desc_pool.allocate_one(&set_layout) }.unwrap(); */
+
+    let pipeline_layout = unsafe {
+        device.create_pipeline_layout(
+            iter::empty(), /* iter::once(&set_layout) */
+            iter::empty(),
+        )
+    }
+    .expect("Could not create a pipeline layout");
 
     let subpass = Subpass {
         index: 0,
         main_pass: render_pass,
     };
 
+    let buffers = V::binding_desc();
+    let attributes = V::attribute_desc();
     let mut pipeline_desc = GraphicsPipelineDesc::new(
         PrimitiveAssemblerDesc::Vertex {
-            buffers: &[],    // &[vertex_buffers],
-            attributes: &[], // &attributes,
+            buffers: &buffers[..],       // &[vertex_buffers],
+            attributes: &attributes[..], // &attributes,
             input_assembler: InputAssemblerDesc {
                 primitive: Primitive::TriangleList,
                 with_adjacency: false,

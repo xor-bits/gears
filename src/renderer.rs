@@ -1,12 +1,15 @@
+mod buffer;
 mod pipeline;
 pub mod queue;
 
+use cgmath::{Matrix2, Rad, Vector2, Vector3};
 use log::*;
 
 use std::{
     borrow::Borrow,
     iter,
     mem::{swap, ManuallyDrop},
+    ops::Div,
     pin::Pin,
     ptr,
 };
@@ -28,9 +31,12 @@ use gfx_hal::{
     Backend, Features, Instance,
 };
 
-use pipeline::create_pipeline;
+use pipeline::{create_pipeline, VertexData};
 
-use self::queue::{QueueFamilies, Queues};
+use self::{
+    buffer::{Buffer, BufferManager, VertexBuffer},
+    queue::{QueueFamilies, Queues},
+};
 
 #[derive(Debug)]
 pub enum RendererError {
@@ -45,12 +51,14 @@ pub struct GearsRenderer<B: Backend> {
     submit_fences: Vec<B::Fence>,
     submit_semaphores: Vec<B::Semaphore>,
 
+    vertex_buffer: ManuallyDrop<VertexBuffer<B>>,
     pipeline: ManuallyDrop<B::GraphicsPipeline>,
 
     render_pass: ManuallyDrop<B::RenderPass>,
     framebuffer: ManuallyDrop<B::Framebuffer>,
     surface: ManuallyDrop<B::Surface>,
 
+    buffer_manager: BufferManager,
     queues: Pin<Box<Queues<B>>>,
     device: B::Device,
     adapter: Adapter<B>,
@@ -61,6 +69,8 @@ pub struct GearsRenderer<B: Backend> {
     viewport: Viewport,
     frame: usize,
     frames_in_flight: usize,
+    frame_counter: usize,
+    frame_counter_tp: instant::Instant,
 }
 
 impl<B: Backend> GearsRenderer<B> {
@@ -174,10 +184,19 @@ impl<B: Backend> GearsRenderer<B> {
         });
 
         // graphics pipeline
-        let pipeline = ManuallyDrop::new(create_pipeline::<B>(&device, &render_pass));
+        let pipeline = ManuallyDrop::new(create_pipeline::<B, VertexData>(&device, &render_pass));
+
+        let memory_types = adapter.physical_device.memory_properties().memory_types;
+        let mut buffer_manager = BufferManager::new();
+        let vertex_buffer = ManuallyDrop::new(VertexBuffer::new::<VertexData>(
+            &device,
+            &mut buffer_manager,
+            &memory_types,
+            3,
+        ));
 
         // command pool for every 'frame in flight'
-        let frames_in_flight = 2;
+        let frames_in_flight = 3;
         let submit_semaphores = (0..frames_in_flight)
             .map(|_| {
                 device
@@ -208,12 +227,14 @@ impl<B: Backend> GearsRenderer<B> {
             submit_fences,
             submit_semaphores,
 
+            vertex_buffer,
             pipeline,
 
             render_pass,
             framebuffer,
             surface: ManuallyDrop::new(surface),
 
+            buffer_manager,
             queues,
             device,
             adapter,
@@ -224,66 +245,99 @@ impl<B: Backend> GearsRenderer<B> {
             viewport,
             frame: 0,
             frames_in_flight,
+            frame_counter: 0,
+            frame_counter_tp: instant::Instant::now(),
         }
     }
 
     pub fn render(&mut self) {
         // acquire the next image from the swapchain
-        let surface_image = unsafe {
-            match self.surface.acquire_image(1_000_000) {
-                Ok((image, _)) => image,
-                Err(AcquireError::NotReady { .. }) => {
-                    // debug!("Frame timeout");
-                    return;
-                }
-                Err(AcquireError::SurfaceLost(_)) => {
-                    error!("Swapchain surface was lost (display disconnected?)");
-                    panic!();
-                }
-                Err(AcquireError::DeviceLost(_)) => {
-                    error!("Device was lost (GPU disconnected?)");
-                    panic!();
-                }
-                Err(_) => {
-                    self.recreate_swapchain();
-                    return;
-                }
+        let surface_image = match unsafe { self.surface.acquire_image(!0) } {
+            Ok((image, _)) => image,
+            Err(AcquireError::SurfaceLost(_)) => {
+                error!("Swapchain surface was lost (display disconnected?)");
+                panic!();
+            }
+            Err(AcquireError::DeviceLost(_)) => {
+                error!("Device was lost (GPU disconnected?)");
+                panic!();
+            }
+            Err(_) => {
+                self.recreate_swapchain();
+                return;
             }
         };
 
-        // Compute index into our resource ring buffers based on the frame number
-        // and number of frames in flight. Pay close attention to where this index is needed
-        // versus when the swapchain image index we got from acquire_image is needed.
-        let frame_idx = self.frame as usize % self.frames_in_flight;
-        // debug!("Render frame: {}", self.frame);
-        self.frame += 1;
+        let rotation_matrix_trig = Matrix2::<f32>::from_angle(Rad {
+            0: std::f32::consts::PI * 2.0 / 3.0,
+        });
 
-        // Wait for the fence of the previous submission of this frame and reset it; ensures we are
-        // submitting only up to maximum number of frames_in_flight if we are submitting faster than
-        // the gpu can keep up with. This would also guarantee that any resources which need to be
-        // updated with a CPU->GPU data copy are not in use by the GPU, so we can perform those updates.
-        // In this case there are none to be done, however.
-        unsafe {
-            let fence = &mut self.submit_fences[frame_idx];
+        let rotation_matrix_time = Matrix2::<f32>::from_angle(Rad {
+            0: (self.frame as f32) / 50.0,
+        });
+
+        let vert_a = rotation_matrix_time * rotation_matrix_trig * Vector2::new(0.0, -0.8);
+        let vert_b = rotation_matrix_trig * vert_a;
+        let vert_c = rotation_matrix_trig * vert_b;
+
+        let vertices = [
+            VertexData {
+                position: vert_a,
+                color: Vector3::new(1.0, 0.0, 0.0),
+            },
+            VertexData {
+                position: vert_b,
+                color: Vector3::new(0.0, 1.0, 0.0),
+            },
+            VertexData {
+                position: vert_c,
+                color: Vector3::new(0.0, 0.0, 1.0),
+            },
+        ];
+        self.vertex_buffer
+            .write(&self.device, &mut self.buffer_manager, 0, &vertices);
+
+        let frame = self.frame % self.frames_in_flight;
+        self.frame += 1;
+        self.frame_counter += 1;
+
+        let fence = unsafe {
+            let fence = &mut self.submit_fences[frame];
             self.device
                 .wait_for_fence(fence, !0)
                 .expect("Failed to wait for fence");
             self.device
                 .reset_fence(fence)
                 .expect("Failed to reset fence");
-            self.command_pools[frame_idx].reset(false);
+            self.command_pools[frame].reset(false);
+            fence
+        };
+
+        // print average fps every 3 seconds
+        let avg_fps_interval = instant::Duration::from_secs_f32(3.0);
+        if self.frame_counter_tp.elapsed() > avg_fps_interval {
+            let time_per_frame = avg_fps_interval.div(self.frame_counter as u32);
+            debug!(
+                "Average frametime: {:?} ms ({} fps)",
+                time_per_frame.as_millis(),
+                self.frame_counter
+            );
+            self.frame_counter = 0;
+            self.frame_counter_tp = instant::Instant::now();
         }
 
         // Rendering
-        let cmd_buffer = &mut self.command_buffers[frame_idx];
         unsafe {
-            cmd_buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
+            let command_buffer = &mut self.command_buffers[frame];
+            command_buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
 
-            cmd_buffer.set_viewports(0, iter::once(self.viewport.clone()));
-            cmd_buffer.set_scissors(0, iter::once(self.viewport.rect));
-            cmd_buffer.bind_graphics_pipeline(&self.pipeline);
+            command_buffer.set_viewports(0, iter::once(self.viewport.clone()));
+            command_buffer.set_scissors(0, iter::once(self.viewport.rect));
+            command_buffer.bind_graphics_pipeline(&self.pipeline);
 
-            cmd_buffer.begin_render_pass(
+            self.vertex_buffer.bind(command_buffer);
+
+            command_buffer.begin_render_pass(
                 &self.render_pass,
                 &self.framebuffer,
                 self.viewport.rect,
@@ -297,23 +351,23 @@ impl<B: Backend> GearsRenderer<B> {
                 }),
                 SubpassContents::Inline,
             );
-            cmd_buffer.draw(0..3, 0..1);
-            cmd_buffer.end_render_pass();
-            cmd_buffer.finish();
+            command_buffer.draw(0..3, 0..1);
+            command_buffer.end_render_pass();
+            command_buffer.finish();
 
             let queues = Pin::get_unchecked_mut(self.queues.as_mut());
 
             queues.graphics.as_mut().queues[0].submit(
-                iter::once(&*cmd_buffer),
+                iter::once(&*command_buffer),
                 iter::empty(),
-                iter::once(&self.submit_semaphores[frame_idx]),
-                Some(&mut self.submit_fences[frame_idx]),
+                iter::once(&self.submit_semaphores[frame]),
+                Some(fence),
             );
 
             let result = queues.present.as_mut().queues[0].present(
                 &mut self.surface,
                 surface_image,
-                Some(&mut self.submit_semaphores[frame_idx]),
+                Some(&mut self.submit_semaphores[frame]),
             );
 
             if result.is_err() {
@@ -327,11 +381,6 @@ impl<B: Backend> GearsRenderer<B> {
         let config = SwapchainConfig::from_caps(&caps, self.format, self.dimensions);
         let framebuffer_attachment = config.framebuffer_attachment();
         self.dimensions = config.extent;
-        unsafe {
-            self.surface
-                .configure_swapchain(&self.device, config)
-                .expect("Could not configure the swapchain")
-        };
         self.viewport = Viewport {
             rect: Rect {
                 x: 0,
@@ -340,6 +389,14 @@ impl<B: Backend> GearsRenderer<B> {
                 h: self.dimensions.height as i16,
             },
             depth: 0.0..1.0,
+        };
+
+        self.device.wait_idle().unwrap();
+
+        unsafe {
+            self.surface
+                .configure_swapchain(&self.device, config)
+                .expect("Could not configure the swapchain")
         };
 
         let mut framebuffer = ManuallyDrop::new(unsafe {
@@ -377,6 +434,9 @@ impl<B: Backend> Drop for GearsRenderer<B> {
                 self.device.destroy_semaphore(submit_semaphore);
             }
 
+            let vertex_buffer = ManuallyDrop::into_inner(ptr::read(&self.vertex_buffer));
+            vertex_buffer.destroy(&self.device);
+
             let pipeline = ManuallyDrop::into_inner(ptr::read(&self.pipeline));
             self.device.destroy_graphics_pipeline(pipeline);
 
@@ -385,6 +445,8 @@ impl<B: Backend> Drop for GearsRenderer<B> {
 
             let render_pass = ManuallyDrop::into_inner(ptr::read(&self.render_pass));
             self.device.destroy_render_pass(render_pass);
+
+            self.surface.unconfigure_swapchain(&self.device);
 
             let surface = ManuallyDrop::into_inner(ptr::read(&self.surface));
             self.instance.destroy_surface(surface);
