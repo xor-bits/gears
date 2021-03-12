@@ -27,6 +27,9 @@ gfx-hal = "0.7.0"
 gfx-auxil = "0.8.0"
 gfx-backend-empty = "0.7.0"
 
+[build-dependencies]
+shaderc = "0.7.1"
+
 [dependencies.gfx-backend-vulkan]
 package = "gfx-backend-vulkan"
 version = "0.7.0"
