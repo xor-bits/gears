@@ -27,7 +27,7 @@ use gfx_hal::{
     pool::{CommandPool, CommandPoolCreateFlags},
     prelude::{CommandQueue, PhysicalDevice},
     pso::{Rect, Viewport},
-    window::{AcquireError, Extent2D, PresentationSurface, Surface, SwapchainConfig},
+    window::{AcquireError, Extent2D, PresentMode, PresentationSurface, Surface, SwapchainConfig},
     Backend, Features, Instance,
 };
 
@@ -105,8 +105,6 @@ impl<B: Backend> GearsRenderer<B> {
         let device = gpu.device;
 
         // swapchain
-
-        let caps = surface.capabilities(&adapter.physical_device);
         let format =
             surface
                 .supported_formats(physical_device)
@@ -125,7 +123,7 @@ impl<B: Backend> GearsRenderer<B> {
             format,
             surface.supported_formats(physical_device)
         );
-        let config = SwapchainConfig::from_caps(&caps, format, extent);
+        let config = swap_config::<B>(&surface, &physical_device, format, extent);
         let framebuffer_attachment = config.framebuffer_attachment();
         let extent = extent;
         unsafe {
@@ -377,8 +375,13 @@ impl<B: Backend> GearsRenderer<B> {
     }
 
     pub fn recreate_swapchain(&mut self) {
-        let caps = self.surface.capabilities(&self.adapter.physical_device);
-        let config = SwapchainConfig::from_caps(&caps, self.format, self.dimensions);
+        let config = swap_config::<B>(
+            &self.surface,
+            &self.adapter.physical_device,
+            self.format,
+            self.dimensions,
+        );
+
         let framebuffer_attachment = config.framebuffer_attachment();
         self.dimensions = config.extent;
         self.viewport = Viewport {
@@ -452,4 +455,22 @@ impl<B: Backend> Drop for GearsRenderer<B> {
             self.instance.destroy_surface(surface);
         }
     }
+}
+
+fn swap_config<B: Backend>(
+    surface: &B::Surface,
+    physical_device: &B::PhysicalDevice,
+    format: Format,
+    extent: Extent2D,
+) -> SwapchainConfig {
+    let caps = surface.capabilities(physical_device);
+    let present_mode = if caps.present_modes.contains(PresentMode::MAILBOX) {
+        PresentMode::MAILBOX
+    } else if caps.present_modes.contains(PresentMode::FIFO) {
+        PresentMode::FIFO
+    } else {
+        panic!("FIFO PresentMode is not supported")
+    };
+
+    SwapchainConfig::from_caps(&caps, format, extent).with_present_mode(present_mode)
 }
