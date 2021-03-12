@@ -5,7 +5,7 @@ macro_rules! log {
     ($formatter:ident: $severity:expr, $($arg:tt)*) => {
         $formatter!(
             "[{}] {}: {}",
-            /* chrono::Local::now().format("%H:%M:%S") */0,
+            chrono::Local::now().format("%H:%M:%S"),
             $severity,
 			format!($($arg)*)
         )
@@ -136,47 +136,47 @@ macro_rules! log_info_write {
 // debug
 
 #[macro_export]
-macro_rules! log_debug {
+macro_rules! debug {
 	($($arg:tt)*) => {
 		log!(println: sev!(d), $($arg)*)
 	}
 }
 
 #[macro_export]
-macro_rules! log_debug_string {
+macro_rules! debug_string {
 	($($arg:tt)*) => {
 		log!(format: sev!(d), $($arg)*)
 	}
 }
 
 #[macro_export]
-macro_rules! log_debug_write {
+macro_rules! debug_write {
 	($writter:expr, $($arg:tt)*) => {
 		log!(write:sev!(d), $($arg)*)
 	}
 }
 
 pub trait LogWrap<T> {
-    fn expect_log(self, message: &str) -> T;
-    fn unwrap_log(self) -> T;
+    fn expect(self, message: &str) -> T;
+    fn unwrap(self) -> T;
 }
 
 impl<T> LogWrap<T> for Option<T> {
-    fn expect_log(self, message: &str) -> T {
+    fn expect(self, message: &str) -> T {
         self.unwrap_or_else(|| log_error!("{}", message))
     }
 
-    fn unwrap_log(self) -> T {
+    fn unwrap(self) -> T {
         self.unwrap_or_else(|| log_error!("Failed to unwrap"))
     }
 }
 
 impl<T, E: Debug> LogWrap<T> for Result<T, E> {
-    fn expect_log(self, message: &str) -> T {
+    fn expect(self, message: &str) -> T {
         self.unwrap_or_else(|err| log_error!("{}: {:?}", message, err))
     }
 
-    fn unwrap_log(self) -> T {
+    fn unwrap(self) -> T {
         self.unwrap_or_else(|err| log_error!("Failed to unwrap: {:?}", err))
     }
 }

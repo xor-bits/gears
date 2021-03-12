@@ -10,17 +10,15 @@ use gfx_hal::{
     Backend,
 };
 
-use crate::log::LogWrap;
-
 pub fn create_pipeline<B: Backend>(
     device: &B::Device,
     render_pass: &B::RenderPass,
 ) -> B::GraphicsPipeline {
     let vert_module = {
         let spirv =
-            gfx_auxil::read_spirv(Cursor::new(include_bytes!("shader/vert.glsl.spv"))).unwrap_log();
+            gfx_auxil::read_spirv(Cursor::new(include_bytes!("shader/vert.glsl.spv"))).unwrap();
         unsafe { device.create_shader_module(&spirv) }
-            .expect_log("Could not create a vertex shader module")
+            .expect("Could not create a vertex shader module")
     };
     let vert_entry = EntryPoint {
         entry: "main",
@@ -29,9 +27,9 @@ pub fn create_pipeline<B: Backend>(
     };
     let frag_module = {
         let spirv =
-            gfx_auxil::read_spirv(Cursor::new(include_bytes!("shader/frag.glsl.spv"))).unwrap_log();
+            gfx_auxil::read_spirv(Cursor::new(include_bytes!("shader/frag.glsl.spv"))).unwrap();
         unsafe { device.create_shader_module(&spirv) }
-            .expect_log("Could not create a fragment shader module")
+            .expect("Could not create a fragment shader module")
     };
     let frag_entry = EntryPoint {
         entry: "main",
@@ -40,7 +38,7 @@ pub fn create_pipeline<B: Backend>(
     };
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(iter::empty(), iter::empty()) }
-        .expect_log("Could not create a pipeline layout");
+        .expect("Could not create a pipeline layout");
 
     let subpass = Subpass {
         index: 0,
@@ -79,5 +77,5 @@ pub fn create_pipeline<B: Backend>(
         device.destroy_shader_module(vert_module);
     }
 
-    pipeline.expect_log("Could not create a graphics pipeline")
+    pipeline.expect("Could not create a graphics pipeline")
 }

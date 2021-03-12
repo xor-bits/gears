@@ -11,10 +11,13 @@ deps:
 npm install http-server -g
 cargo install wasm-bindgen-cli
 ```
-run:
+build:
 ```
 cargo build --target=wasm32-unknown-unknown --features=gl --bin=main
-wasm-bindgen target/wasm32-unknown-unknown/debug/main.wasm --out-dir pkg --web
+wasm-bindgen target/wasm32-unknown-unknown/debug/examples/main.wasm --out-dir pkg --web
+``
+run:
+```
 cd pkg
 http-server
 ```

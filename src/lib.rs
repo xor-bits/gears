@@ -18,12 +18,9 @@ use gfx_backend_metal as gfx_back;
 use gfx_backend_vulkan as gfx_back;
 
 //
-#[macro_use]
-mod log;
 mod renderer;
 
-use log::LogWrap;
-
+use log::*;
 use renderer::{queue::QueueFamilies, GearsRenderer};
 
 use colored::Colorize;
@@ -53,7 +50,7 @@ impl Gears {
             feature = "metal",
             feature = "gl",
         )))]
-        log_warn!("Empty backend will have no graphical output");
+        warn!("Empty backend will have no graphical output");
 
         let title = "Gears";
         let name = "gears";
@@ -80,13 +77,12 @@ impl Gears {
             .append_child(&winit::platform::web::WindowExtWebSys::canvas(&_window))
             .unwrap();
 
-        let instance =
-            gfx_back::Instance::create(name, 1).expect_log("Failed to create an instance");
+        let instance = gfx_back::Instance::create(name, 1).expect("Failed to create an instance");
 
         let surface = unsafe {
             instance
                 .create_surface(&_window)
-                .expect_log("Failed to create a surface")
+                .expect("Failed to create a surface")
         };
 
         let mut adapter_names = Vec::new();
@@ -123,8 +119,8 @@ impl Gears {
                 Some(suitable_adapters.remove(0))
             }
         };
-        let (adapter, queue_families, _) = adapter.expect_log("No suitable GPUs");
-        log_info!("Selected GPU: {}", adapter_to_string(&adapter));
+        let (adapter, queue_families, _) = adapter.expect("No suitable GPUs");
+        info!("Selected GPU: {}", adapter_to_string(&adapter));
 
         let renderer = GearsRenderer::new(
             instance,
@@ -162,7 +158,7 @@ impl Gears {
                         ..
                     } => *control_flow = winit::event_loop::ControlFlow::Exit,
                     winit::event::WindowEvent::Resized(dims) => {
-                        log_info!("resized to {:?}", dims);
+                        debug!("resized to {:?}", dims);
                         renderer.dimensions = Extent2D {
                             width: dims.width,
                             height: dims.height,

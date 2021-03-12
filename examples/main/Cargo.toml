@@ -1,0 +1,10 @@
+[package]
+name = "main"
+version = "0.1.0"
+
+[[bin]]
+name = "main"
+path = "main.rs"
+
+[dependencies]
+gears = { path = "../../" }

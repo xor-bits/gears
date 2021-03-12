@@ -1,6 +1,8 @@
 mod pipeline;
 pub mod queue;
 
+use log::*;
+
 use std::{
     borrow::Borrow,
     iter,
@@ -16,7 +18,7 @@ use gfx_hal::{
         SubpassContents,
     },
     device::Device,
-    format::{ChannelType, Format},
+    format::{ChannelType, Format, SurfaceType},
     image::Layout,
     pass::{Attachment, AttachmentLoadOp, AttachmentOps, AttachmentStoreOp, SubpassDesc},
     pool::{CommandPool, CommandPoolCreateFlags},
@@ -25,9 +27,8 @@ use gfx_hal::{
     window::{AcquireError, Extent2D, PresentationSurface, Surface, SwapchainConfig},
     Backend, Features, Instance,
 };
-use pipeline::create_pipeline;
 
-use crate::log::LogWrap;
+use pipeline::create_pipeline;
 
 use self::queue::{QueueFamilies, Queues};
 
@@ -70,7 +71,7 @@ impl<B: Backend> GearsRenderer<B> {
         queue_families: QueueFamilies,
         extent: Extent2D,
     ) -> Self {
-        log_debug!("Renderer created");
+        debug!("Renderer created");
 
         // device
 
@@ -80,7 +81,7 @@ impl<B: Backend> GearsRenderer<B> {
             .contains(Features::SPARSE_BINDING | Features::SPARSE_RESIDENCY_IMAGE_2D);
         let gpu = unsafe {
             physical_device.open(
-                &queue_families.get_vec(&adapter).unwrap_log()[..],
+                &queue_families.get_vec(&adapter).unwrap()[..],
                 if sparsely_bound {
                     Features::SPARSE_BINDING | Features::SPARSE_RESIDENCY_IMAGE_2D
                 } else {
@@ -90,7 +91,7 @@ impl<B: Backend> GearsRenderer<B> {
         }
         .unwrap();
 
-        let queues = queue_families.get_queues(gpu.queue_groups).unwrap_log();
+        let queues = queue_families.get_queues(gpu.queue_groups).unwrap();
         let device = gpu.device;
 
         // swapchain
@@ -99,20 +100,28 @@ impl<B: Backend> GearsRenderer<B> {
         let format =
             surface
                 .supported_formats(physical_device)
-                .map_or(Format::Rgba8Srgb, |formats| {
+                .map_or(Format::Rgba8Unorm, |formats| {
                     formats
                         .iter()
-                        .find(|format| format.base_format().1 == ChannelType::Srgb)
+                        .find(|format| {
+                            format.base_format().1 == ChannelType::Unorm
+                                && format.base_format().0 == SurfaceType::B8_G8_R8_A8
+                        })
                         .cloned()
-                        .unwrap_or(Format::Rgba8Srgb)
+                        .unwrap_or(formats[0])
                 });
+        debug!(
+            "format chosen: {:?} from {:?}",
+            format,
+            surface.supported_formats(physical_device)
+        );
         let config = SwapchainConfig::from_caps(&caps, format, extent);
         let framebuffer_attachment = config.framebuffer_attachment();
         let extent = extent;
         unsafe {
             surface
                 .configure_swapchain(&device, config)
-                .expect_log("Could not configure the swapchain")
+                .expect("Could not configure the swapchain")
         };
 
         let viewport = Viewport {
@@ -150,7 +159,7 @@ impl<B: Backend> GearsRenderer<B> {
                         std::iter::empty(),
                     )
                 }
-                .expect_log("Could not create a render pass"),
+                .expect("Could not create a render pass"),
             )
         };
 
@@ -161,7 +170,7 @@ impl<B: Backend> GearsRenderer<B> {
                     iter::once(framebuffer_attachment),
                     extent.to_extent(),
                 )
-                .expect_log("Could not create a framebuffer")
+                .expect("Could not create a framebuffer")
         });
 
         // graphics pipeline
@@ -173,15 +182,11 @@ impl<B: Backend> GearsRenderer<B> {
             .map(|_| {
                 device
                     .create_semaphore()
-                    .expect_log("Could not create a semaphore")
+                    .expect("Could not create a semaphore")
             })
             .collect::<Vec<_>>();
         let submit_fences = (0..frames_in_flight)
-            .map(|_| {
-                device
-                    .create_fence(true)
-                    .expect_log("Could not create a fence")
-            })
+            .map(|_| device.create_fence(true).expect("Could not create a fence"))
             .collect::<Vec<_>>();
         let mut command_pools = (0..frames_in_flight)
             .map(|_| unsafe {
@@ -190,7 +195,7 @@ impl<B: Backend> GearsRenderer<B> {
                         queues.graphics.as_ref().family,
                         CommandPoolCreateFlags::empty(),
                     )
-                    .expect_log("Could not create a command pool")
+                    .expect("Could not create a command pool")
             })
             .collect::<Vec<_>>();
         let command_buffers = (0..frames_in_flight)
@@ -228,14 +233,16 @@ impl<B: Backend> GearsRenderer<B> {
             match self.surface.acquire_image(1_000_000) {
                 Ok((image, _)) => image,
                 Err(AcquireError::NotReady { .. }) => {
-                    // log_debug!("Frame timeout");
+                    // debug!("Frame timeout");
                     return;
                 }
                 Err(AcquireError::SurfaceLost(_)) => {
-                    log_error!("Swapchain surface was lost (display disconnected?)");
+                    error!("Swapchain surface was lost (display disconnected?)");
+                    panic!();
                 }
                 Err(AcquireError::DeviceLost(_)) => {
-                    log_error!("Device was lost (GPU disconnected?)");
+                    error!("Device was lost (GPU disconnected?)");
+                    panic!();
                 }
                 Err(_) => {
                     self.recreate_swapchain();
@@ -248,7 +255,7 @@ impl<B: Backend> GearsRenderer<B> {
         // and number of frames in flight. Pay close attention to where this index is needed
         // versus when the swapchain image index we got from acquire_image is needed.
         let frame_idx = self.frame as usize % self.frames_in_flight;
-        // log_debug!("Render frame: {}", self.frame);
+        // debug!("Render frame: {}", self.frame);
         self.frame += 1;
 
         // Wait for the fence of the previous submission of this frame and reset it; ensures we are
@@ -260,10 +267,10 @@ impl<B: Backend> GearsRenderer<B> {
             let fence = &mut self.submit_fences[frame_idx];
             self.device
                 .wait_for_fence(fence, !0)
-                .expect_log("Failed to wait for fence");
+                .expect("Failed to wait for fence");
             self.device
                 .reset_fence(fence)
-                .expect_log("Failed to reset fence");
+                .expect("Failed to reset fence");
             self.command_pools[frame_idx].reset(false);
         }
 
@@ -323,7 +330,7 @@ impl<B: Backend> GearsRenderer<B> {
         unsafe {
             self.surface
                 .configure_swapchain(&self.device, config)
-                .expect_log("Could not configure the swapchain")
+                .expect("Could not configure the swapchain")
         };
         self.viewport = Viewport {
             rect: Rect {
@@ -342,7 +349,7 @@ impl<B: Backend> GearsRenderer<B> {
                     iter::once(framebuffer_attachment),
                     self.dimensions.to_extent(),
                 )
-                .expect_log("Could not create a framebuffer")
+                .expect("Could not create a framebuffer")
         });
         swap(&mut self.framebuffer, &mut framebuffer);
 
@@ -355,7 +362,7 @@ impl<B: Backend> GearsRenderer<B> {
 
 impl<B: Backend> Drop for GearsRenderer<B> {
     fn drop(&mut self) {
-        log_debug!("Renderer dropped");
+        debug!("Renderer dropped");
         self.device.wait_idle().unwrap();
         unsafe {
             for command_pool in self.command_pools.drain(..) {
