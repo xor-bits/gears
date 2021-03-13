@@ -1,0 +1,21 @@
+[package]
+name = "main"
+version = "0.1.0"
+
+[[bin]]
+name = "main"
+path = "main/main.rs"
+
+[features]
+gl = ["gears/gl"]
+vulkan = ["gears/vulkan"]
+
+[dependencies]
+gears = { path = "../gears" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1.6"
+console_log = { version = "0.2.0", features = ["color"]}
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+env_logger = "0.8"

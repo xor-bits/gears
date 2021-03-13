@@ -1,5 +1,6 @@
-use gears::Gears;
+extern crate gears;
 
+use gears::Gears;
 #[cfg(target_arch = "wasm32")]
 use log::*;
 #[cfg(target_arch = "wasm32")]
