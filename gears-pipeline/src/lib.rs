@@ -162,7 +162,6 @@ impl parse_macro_input::ParseMacroInput for PipelineInput
 
 impl syn::parse::Parse for ModuleInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let start_span = input.span();
         let mut end_span = input.span();
         let mut source = None;
         let mut include_path = None;
@@ -200,7 +199,7 @@ impl syn::parse::Parse for ModuleInput {
                                 .parent()
                                 .ok_or(Error::new(path.span(), "File does not have a directory"))?
                                 .to_str()
-                                .unwrap()
+                                .unwrap_or_else(|| panic!("Path unwrap failed"))
                                 .into(),
                         );
                     }
@@ -258,7 +257,7 @@ impl syn::parse::Parse for ModuleInput {
         }
 
         let source = source.ok_or(Error::new(
-            start_span.join(end_span).unwrap(),
+            end_span,
             "Missing shader source add either 'source' or 'path' field",
         ))?;
 
@@ -269,7 +268,7 @@ impl syn::parse::Parse for ModuleInput {
             default_defines,
             entry,
             debug,
-            span: start_span.join(end_span).unwrap(),
+            span: end_span,
         })
     }
 }
@@ -363,26 +362,32 @@ fn compile_shader_module(
     default_defines: bool,
     debug: bool,
 ) -> shaderc::Result<shaderc::CompilationArtifact> {
-    let mut compiler = shaderc::Compiler::new().unwrap();
-    let mut options = shaderc::CompileOptions::new().unwrap();
+    let mut compiler =
+        shaderc::Compiler::new().unwrap_or_else(|| panic!("Could not create a shaderc Compiler"));
+    let mut options = shaderc::CompileOptions::new()
+        .unwrap_or_else(|| panic!("Could not create a shaderc CompileOptions"));
     options.set_optimization_level(shaderc::OptimizationLevel::Performance);
     options.set_include_callback(
         |name: &str, _include_type: shaderc::IncludeType, _source: &str, _depth: usize| {
             let full_path = include_path.ok_or("No include path")?.join(name);
             let mut file = File::open(&full_path).or(Err(format!(
                 "Could not open file '{}'",
-                full_path.to_str().unwrap()
+                full_path.to_str().ok_or("Path unwrap failed")?
             )))?;
 
             let mut content = String::new();
             file.read_to_string(&mut content).or(Err(format!(
                 "Could not read from file '{}'",
-                full_path.to_str().unwrap()
+                full_path.to_str().ok_or("Path unwrap failed")?
             )))?;
 
             Ok(shaderc::ResolvedInclude {
                 content,
-                resolved_name: String::from(full_path.to_str().unwrap()),
+                resolved_name: String::from(
+                    full_path
+                        .to_str()
+                        .unwrap_or_else(|| panic!("Path unwrap failed")),
+                ),
             })
         },
     );
@@ -424,7 +429,7 @@ fn compile_shader_module(
     if debug {
         let text = compiler
             .preprocess(source, name, entry, Some(&options))
-            .unwrap()
+            .unwrap_or_else(|err| panic!("GLSL preprocessing failed: {}", err))
             .as_text();
         panic!("GLSL: {}", text);
     };
