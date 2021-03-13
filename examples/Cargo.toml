@@ -1,13 +1,19 @@
 [package]
-name = "main"
+name = "gears-examples"
 version = "0.1.0"
+authors = ["Overpeek <overpeek.fin@gmail.com>"]
+edition = "2018"
 
 [[bin]]
 name = "main"
 path = "main/main.rs"
 
 [features]
+default = []
+metal = ["gears/metal"]
 gl = ["gears/gl"]
+dx11 = ["gears/dx11"]
+dx12 = ["gears/dx12"]
 vulkan = ["gears/vulkan"]
 
 [dependencies]

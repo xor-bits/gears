@@ -59,9 +59,20 @@ pub fn create_pipeline<B: Backend, V: Vertex>(
     device: &B::Device,
     render_pass: &B::RenderPass,
 ) -> B::GraphicsPipeline {
+    mod default_pipeline {
+        gears_pipeline::pipeline! {
+            vs: {
+                path: "src/renderer/shader/default.glsl"
+                entry: "vert"
+            }
+            fs: {
+                path: "src/renderer/shader/default.glsl"
+            }
+        }
+    }
+
     let vert_module = {
-        let spirv =
-            gfx_auxil::read_spirv(Cursor::new(include_bytes!("shader/default.v.spv"))).unwrap();
+        let spirv = gfx_auxil::read_spirv(Cursor::new(default_pipeline::VERTEX_SPIRV)).unwrap();
         unsafe { device.create_shader_module(&spirv) }
             .expect("Could not create a vertex shader module")
     };
@@ -71,8 +82,7 @@ pub fn create_pipeline<B: Backend, V: Vertex>(
         specialization: Specialization::default(),
     };
     let frag_module = {
-        let spirv =
-            gfx_auxil::read_spirv(Cursor::new(include_bytes!("shader/default.f.spv"))).unwrap();
+        let spirv = gfx_auxil::read_spirv(Cursor::new(default_pipeline::FRAGMENT_SPIRV)).unwrap();
         unsafe { device.create_shader_module(&spirv) }
             .expect("Could not create a fragment shader module")
     };

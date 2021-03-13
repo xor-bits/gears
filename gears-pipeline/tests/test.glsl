@@ -1,4 +1,5 @@
 #version 460
+#if VALUE == 2
 
 layout(location = 0) out vec3 frag_color;
 
@@ -12,3 +13,4 @@ void main() {
 
 	frag_color = vec3(x, 1.0, 0.5);
 }
+#endif
