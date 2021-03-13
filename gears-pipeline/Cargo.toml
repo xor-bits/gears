@@ -3,6 +3,8 @@ name = "gears-pipeline"
 version = "0.1.0"
 authors = ["Overpeek <overpeek.fin@gmail.com>"]
 edition = "2018"
+description = "Macro to generate SPIRV from GLSL at compiletime"
+license = "MIT/Apache-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
