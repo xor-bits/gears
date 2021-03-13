@@ -185,6 +185,7 @@ impl<B: Backend> GearsRenderer<B> {
         let pipeline = ManuallyDrop::new(create_pipeline::<B, VertexData>(&device, &render_pass));
 
         let memory_types = adapter.physical_device.memory_properties().memory_types;
+        debug!("memory_types: {:?}", memory_types);
         let mut buffer_manager = BufferManager::new();
         let vertex_buffer = ManuallyDrop::new(VertexBuffer::new::<VertexData>(
             &device,
@@ -271,7 +272,7 @@ impl<B: Backend> GearsRenderer<B> {
         });
 
         let rotation_matrix_time = Matrix2::<f32>::from_angle(Rad {
-            0: (self.frame as f32) / 50.0,
+            0: (self.frame as f32) / 50.0 / self.frames_in_flight as f32,
         });
 
         let vert_a = rotation_matrix_time * rotation_matrix_trig * Vector2::new(0.0, -0.8);
@@ -314,6 +315,7 @@ impl<B: Backend> GearsRenderer<B> {
         // print average fps every 3 seconds
         let avg_fps_interval = instant::Duration::from_secs_f32(3.0);
         if self.frame_counter_tp.elapsed() > avg_fps_interval {
+            self.frame_counter /= self.frames_in_flight;
             let time_per_frame = avg_fps_interval.div(self.frame_counter as u32);
             debug!(
                 "Average frametime: {:?} ms ({} fps)",
@@ -464,12 +466,15 @@ fn swap_config<B: Backend>(
     extent: Extent2D,
 ) -> SwapchainConfig {
     let caps = surface.capabilities(physical_device);
+    debug!("Present modes available: {:?}", caps.present_modes);
     let present_mode = if caps.present_modes.contains(PresentMode::MAILBOX) {
         PresentMode::MAILBOX
     } else if caps.present_modes.contains(PresentMode::FIFO) {
         PresentMode::FIFO
+    } else if caps.present_modes.contains(PresentMode::IMMEDIATE) {
+        PresentMode::IMMEDIATE
     } else {
-        panic!("FIFO PresentMode is not supported")
+        panic!("MAILBOX, FIFO nor IMMEDIATE PresentMode is not supported")
     };
 
     SwapchainConfig::from_caps(&caps, format, extent).with_present_mode(present_mode)

@@ -352,6 +352,8 @@ impl Pipeline {
     }
 }
 
+static mut STATIC_COMPILER: Option<shaderc::Compiler> = None;
+
 fn compile_shader_module(
     kind: shaderc::ShaderKind,
     source: &str,
@@ -362,11 +364,21 @@ fn compile_shader_module(
     default_defines: bool,
     debug: bool,
 ) -> shaderc::Result<shaderc::CompilationArtifact> {
-    let mut compiler =
-        shaderc::Compiler::new().unwrap_or_else(|| panic!("Could not create a shaderc Compiler"));
+    let compiler = unsafe {
+        if STATIC_COMPILER.is_none() {
+            STATIC_COMPILER = Some(
+                shaderc::Compiler::new()
+                    .unwrap_or_else(|| panic!("Could not create a shaderc Compiler")),
+            );
+            STATIC_COMPILER.as_mut().unwrap()
+        } else {
+            STATIC_COMPILER.as_mut().unwrap()
+        }
+    };
+
     let mut options = shaderc::CompileOptions::new()
         .unwrap_or_else(|| panic!("Could not create a shaderc CompileOptions"));
-    options.set_optimization_level(shaderc::OptimizationLevel::Performance);
+    options.set_optimization_level(shaderc::OptimizationLevel::Zero);
     options.set_include_callback(
         |name: &str, _include_type: shaderc::IncludeType, _source: &str, _depth: usize| {
             let full_path = include_path.ok_or("No include path")?.join(name);
@@ -395,12 +407,11 @@ fn compile_shader_module(
     match (kind, default_defines) {
         (shaderc::ShaderKind::Vertex, true) => {
             options.add_macro_definition("GEARS_VERTEX", None);
-            options.add_macro_definition("GEARS_FRAG(_code)", None);
             options.add_macro_definition(
                 "GEARS_IN(_location, _data)",
                 Some("layout(location = _location) in _data;"),
             );
-            options.add_macro_definition("GEARS_OUT(_location, _data)", Some("_data;"));
+            options.add_macro_definition("GEARS_OUT(_location, _data)", None);
             options.add_macro_definition(
                 "GEARS_INOUT(_location, _data)",
                 Some("layout(location = _location) out _data;"),
@@ -408,7 +419,7 @@ fn compile_shader_module(
         }
         (shaderc::ShaderKind::Fragment, true) => {
             options.add_macro_definition("GEARS_FRAGMENT", None);
-            options.add_macro_definition("GEARS_IN(_location, _data)", Some("_data;"));
+            options.add_macro_definition("GEARS_IN(_location, _data)", None);
             options.add_macro_definition(
                 "GEARS_OUT(_location, _data)",
                 Some("layout(location = _location) out _data;"),

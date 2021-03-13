@@ -20,8 +20,10 @@ vulkan = ["gears/vulkan"]
 gears = { path = "../gears" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+log = "0.4"
+wasm-bindgen = "0.2.71"
 console_error_panic_hook = "0.1.6"
-console_log = { version = "0.2.0", features = ["color"]}
+wasm-logger = "0.2.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = "0.8"

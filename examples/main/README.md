@@ -10,11 +10,12 @@ deps:
 ```
 npm install light-server -g
 cargo install wasm-bindgen-cli
+rustup target add wasm32-unknown-unknown
 ```
 build:
 ```
 cargo build --target=wasm32-unknown-unknown --features=gl --bin=main
-wasm-bindgen target/wasm32-unknown-unknown/debug/examples/main.wasm --out-dir pkg --web
+wasm-bindgen ../../target/wasm32-unknown-unknown/debug/main.wasm --out-dir pkg --web
 ```
 run:
 ```

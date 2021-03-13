@@ -121,7 +121,7 @@ impl<B: Backend> Buffer<B> for VertexBuffer<B> {
                 upload_type(
                     available_memory_types,
                     &vertex_buffer_req,
-                    Properties::CPU_VISIBLE | Properties::COHERENT,
+                    Properties::CPU_VISIBLE, /* | Properties::COHERENT */
                 ),
                 vertex_buffer_req.size,
             )
