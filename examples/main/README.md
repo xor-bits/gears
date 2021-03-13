@@ -20,7 +20,7 @@ wasm-bindgen ../../target/wasm32-unknown-unknown/debug/main.wasm --out-dir pkg -
 run:
 ```
 cd pkg
-light-server
+light-server --serve . --open
 ```
 lazy:
 ```
