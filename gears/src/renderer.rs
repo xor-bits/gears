@@ -316,7 +316,9 @@ impl<B: Backend> GearsRenderer<B> {
         let avg_fps_interval = instant::Duration::from_secs_f32(3.0);
         if self.frame_counter_tp.elapsed() > avg_fps_interval {
             self.frame_counter /= self.frames_in_flight;
-            let time_per_frame = avg_fps_interval.div(self.frame_counter as u32);
+            let time_per_frame = avg_fps_interval
+                .checked_div(self.frame_counter as u32)
+                .unwrap_or(instant::Duration::from_secs_f64(0.0));
             debug!(
                 "Average frametime: {:?} ms ({} fps)",
                 time_per_frame.as_millis(),
