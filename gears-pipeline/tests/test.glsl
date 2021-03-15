@@ -2,6 +2,7 @@
 #if VALUE == 2
 
 layout(location = 0) out vec3 frag_color;
+layout(binding = 0) #!ubo: UniformBufferObject { time: f32 } #!;
 
 void main() {
 	float x = sin(4.0);

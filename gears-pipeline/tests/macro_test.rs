@@ -16,15 +16,11 @@ mod tests {
             }
         }
 
-        assert_eq!(
-            140,
-            pl::VERTEX_SPIRV.len(),
-            "Vertex spirv not what expected"
-        );
-        assert_eq!(
-            484,
-            pl::FRAGMENT_SPIRV.len(),
-            "Fragment spirv not what expected"
-        );
+        // check SPIRV generation
+        assert_eq!(240, pl::VERT_SPIRV.len(), "Vert spirv not what expected");
+        assert_eq!(888, pl::FRAG_SPIRV.len(), "Frag spirv not what expected");
+
+        // check UBO struct generation
+        pl::UniformBufferObject { time: 0.0 };
     }
 }

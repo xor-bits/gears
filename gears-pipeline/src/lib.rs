@@ -1,9 +1,13 @@
 use proc_macro::TokenStream;
-use proc_macro2::{Group, Punct, Span};
-use quote::quote;
+use proc_macro2::{Delimiter, Group, Literal, Punct, Spacing, Span};
+use quote::{quote, ToTokens, TokenStreamExt};
+use regex::{Captures, Regex};
 use shaderc::CompilationArtifact;
 use std::{env, fs::File, io::Read, path::Path};
 use syn::{parse::ParseStream, parse_macro_input, Error, Ident, LitStr, Token};
+use ubo::UBOStruct;
+
+mod ubo;
 
 // input
 
@@ -19,6 +23,8 @@ struct ModuleInput {
     entry: Option<String>,
     debug: bool,
     span: Span,
+
+    ubos: Vec<UBOStruct>,
 }
 
 struct GraphicsPipelineInput {
@@ -41,8 +47,15 @@ enum PipelineInput {
 
 // processed
 
+enum ModuleType {
+    Vertex,
+    Fragment,
+}
+
 struct CompiledModule {
     spirv: CompilationArtifact,
+    module_type: ModuleType,
+    ubos: Vec<UBOStruct>,
 }
 
 struct GraphicsPipeline {
@@ -256,10 +269,25 @@ impl syn::parse::Parse for ModuleInput {
             }
         }
 
-        let source = source.ok_or(Error::new(
+        let mut source = source.ok_or(Error::new(
             end_span,
             "Missing shader source add either 'source' or 'path' field",
         ))?;
+
+        let mut ubos = Vec::new();
+        let regex = Regex::new(r#"#!.+#!"#).unwrap();
+        source = regex
+            .replace_all(source.as_str(), |caps: &Captures| {
+                let capture = &caps[0];
+                let capture = &capture[2..capture.len() - 2];
+
+                let ubo_struct = syn::parse_str::<UBOStruct>(capture).unwrap();
+                let replace = format!("{}", ubo_struct.to_glsl());
+                ubos.push(ubo_struct);
+
+                replace
+            })
+            .to_string();
 
         Ok(Self {
             source,
@@ -269,6 +297,8 @@ impl syn::parse::Parse for ModuleInput {
             entry,
             debug,
             span: end_span,
+
+            ubos,
         })
     }
 }
@@ -341,14 +371,77 @@ impl Pipeline {
                     // name: p.name.clone(),
                     vert: CompiledModule {
                         spirv: vertex_artifact,
+                        module_type: ModuleType::Vertex,
+                        ubos: p.vert_source.ubos,
                     },
                     frag: CompiledModule {
                         spirv: fragment_artifact,
+                        module_type: ModuleType::Fragment,
+                        ubos: p.frag_source.ubos,
                     },
                 })
             }
             PipelineInput::Compute(_) => Pipeline::Compute(ComputePipeline { /* name: p.name */ }),
         })
+    }
+
+    fn to_vec<'a>(&'a self) -> Vec<&'a CompiledModule> {
+        match self {
+            Pipeline::Graphics(p) => {
+                vec![&p.vert, &p.frag]
+            }
+            Pipeline::Compute(_) => todo!(),
+        }
+    }
+}
+
+impl ModuleType {
+    pub fn name(&self) -> &'static str {
+        match self {
+            ModuleType::Fragment => "FRAG",
+            ModuleType::Vertex => "VERT",
+        }
+    }
+}
+
+impl ToTokens for Pipeline {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        for module in self.to_vec().iter() {
+            module.to_tokens(tokens);
+        }
+    }
+}
+
+impl ToTokens for CompiledModule {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        tokens.append(Ident::new("pub", Span::call_site()));
+        tokens.append(Ident::new("const", Span::call_site()));
+        tokens.append(Ident::new(
+            format!("{}_SPIRV", self.module_type.name()).as_str(),
+            Span::call_site(),
+        ));
+
+        tokens.append(Punct::new(':', Spacing::Alone));
+
+        tokens.append(Punct::new('&', Spacing::Joint));
+        let mut u8_token = proc_macro2::TokenStream::new();
+        u8_token.append(Ident::new("u8", Span::call_site()));
+        tokens.append(Group::new(Delimiter::Bracket, u8_token));
+
+        tokens.append(Punct::new('=', Spacing::Joint));
+
+        tokens.append(Punct::new('&', Spacing::Joint));
+        let mut u8_list = proc_macro2::TokenStream::new();
+        for &byte in self.spirv.as_binary_u8() {
+            u8_list.append(Literal::u8_unsuffixed(byte));
+            u8_list.append(Punct::new(',', Spacing::Alone));
+        }
+        tokens.append(Group::new(Delimiter::Bracket, u8_list));
+        tokens.append(Punct::new(';', Spacing::Alone));
+
+        for ubo in self.ubos.iter() {
+            ubo.to_tokens(tokens);
+        }
     }
 }
 
@@ -416,6 +509,10 @@ fn compile_shader_module(
                 "GEARS_INOUT(_location, _data)",
                 Some("layout(location = _location) out _data;"),
             );
+            options.add_macro_definition(
+                "GEARS_VERT_UBO(_location, _data)",
+                Some("layout(binding = _location) _data;"),
+            );
         }
         (shaderc::ShaderKind::Fragment, true) => {
             options.add_macro_definition("GEARS_FRAGMENT", None);
@@ -428,6 +525,7 @@ fn compile_shader_module(
                 "GEARS_INOUT(_location, _data)",
                 Some("layout(location = _location) in _data;"),
             );
+            options.add_macro_definition("GEARS_VERT_UBO(_location, _data)", None);
         }
         _ => (),
     };
@@ -539,18 +637,16 @@ pub fn pipeline(input: TokenStream) -> TokenStream {
         Ok(p) => p,
     };
 
-    let expr = match pipeline {
-        Pipeline::Graphics(p) => {
-            let bin_vs = p.vert.spirv.as_binary_u8();
-            let bin_fs = p.frag.spirv.as_binary_u8();
-            quote! {
-                pub const VERTEX_SPIRV: &[u8] = &[ #(#bin_vs),* ];
-                pub const FRAGMENT_SPIRV: &[u8] = &[ #(#bin_fs),* ];
-            }
-        }
-        Pipeline::Compute(_) => {
-            quote! {}
-        }
+    let mut tokens = proc_macro2::TokenStream::new();
+    pipeline.to_tokens(&mut tokens);
+
+    tokens.into()
+}
+
+#[proc_macro_derive(UBO)]
+pub fn derive_ubo(_: TokenStream) -> TokenStream {
+    let expr = quote! {
+        pub const UBOData_C_STRUCT: &str = "UBOData { float time; }";
     };
 
     expr.into()
