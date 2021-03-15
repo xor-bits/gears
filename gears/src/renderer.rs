@@ -9,7 +9,6 @@ use std::{
     borrow::Borrow,
     iter,
     mem::{swap, ManuallyDrop},
-    ops::Div,
     pin::Pin,
     ptr,
 };
@@ -31,7 +30,7 @@ use gfx_hal::{
     Backend, Features, Instance,
 };
 
-use pipeline::{create_pipeline, VertexData};
+use pipeline::{Pipeline, VertexData};
 
 use self::{
     buffer::{Buffer, BufferManager, VertexBuffer},
@@ -52,7 +51,7 @@ pub struct GearsRenderer<B: Backend> {
     submit_semaphores: Vec<B::Semaphore>,
 
     vertex_buffer: ManuallyDrop<VertexBuffer<B>>,
-    pipeline: ManuallyDrop<B::GraphicsPipeline>,
+    pipeline: ManuallyDrop<Pipeline<B>>,
 
     render_pass: ManuallyDrop<B::RenderPass>,
     framebuffer: ManuallyDrop<B::Framebuffer>,
@@ -182,9 +181,13 @@ impl<B: Backend> GearsRenderer<B> {
         });
 
         // graphics pipeline
-        let pipeline = ManuallyDrop::new(create_pipeline::<B, VertexData>(&device, &render_pass));
-
         let memory_types = adapter.physical_device.memory_properties().memory_types;
+        let pipeline = ManuallyDrop::new(Pipeline::<B>::new::<VertexData>(
+            &device,
+            &render_pass,
+            &memory_types,
+        ));
+
         debug!("memory_types: {:?}", memory_types);
         let mut buffer_manager = BufferManager::new();
         let vertex_buffer = ManuallyDrop::new(VertexBuffer::new::<VertexData>(
@@ -330,15 +333,13 @@ impl<B: Backend> GearsRenderer<B> {
 
         // Rendering
         unsafe {
+            // begin recording
             let command_buffer = &mut self.command_buffers[frame];
             command_buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
 
+            // begin render pass
             command_buffer.set_viewports(0, iter::once(self.viewport.clone()));
             command_buffer.set_scissors(0, iter::once(self.viewport.rect));
-            command_buffer.bind_graphics_pipeline(&self.pipeline);
-
-            self.vertex_buffer.bind(command_buffer);
-
             command_buffer.begin_render_pass(
                 &self.render_pass,
                 &self.framebuffer,
@@ -353,12 +354,20 @@ impl<B: Backend> GearsRenderer<B> {
                 }),
                 SubpassContents::Inline,
             );
+
+            // main draw
+            self.pipeline.bind(command_buffer);
+            self.vertex_buffer.bind(command_buffer);
             command_buffer.draw(0..3, 0..1);
+
+            // stop render pass
             command_buffer.end_render_pass();
+
+            // stop recording
             command_buffer.finish();
 
+            // submit
             let queues = Pin::get_unchecked_mut(self.queues.as_mut());
-
             queues.graphics.as_mut().queues[0].submit(
                 iter::once(&*command_buffer),
                 iter::empty(),
@@ -366,12 +375,14 @@ impl<B: Backend> GearsRenderer<B> {
                 Some(fence),
             );
 
+            // present
             let result = queues.present.as_mut().queues[0].present(
                 &mut self.surface,
                 surface_image,
                 Some(&mut self.submit_semaphores[frame]),
             );
 
+            // recreate swapchain if needed
             if result.is_err() {
                 self.recreate_swapchain();
             }
@@ -445,7 +456,7 @@ impl<B: Backend> Drop for GearsRenderer<B> {
             vertex_buffer.destroy(&self.device);
 
             let pipeline = ManuallyDrop::into_inner(ptr::read(&self.pipeline));
-            self.device.destroy_graphics_pipeline(pipeline);
+            pipeline.destroy(&self.device);
 
             let framebuffer = ManuallyDrop::into_inner(ptr::read(&self.framebuffer));
             self.device.destroy_framebuffer(framebuffer);

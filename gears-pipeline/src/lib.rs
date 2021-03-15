@@ -3,13 +3,19 @@ use proc_macro2::{Delimiter, Group, Literal, Punct, Spacing, Span};
 use quote::{quote, ToTokens, TokenStreamExt};
 use regex::{Captures, Regex};
 use shaderc::CompilationArtifact;
-use std::{env, fs::File, io::Read, path::Path};
+use std::{collections::HashMap, env, fs::File, io::Read, path::Path};
 use syn::{parse::ParseStream, parse_macro_input, Error, Ident, LitStr, Token};
 use ubo::UBOStruct;
 
 mod ubo;
 
 // input
+
+#[derive(PartialEq, Eq, Hash, Clone, Copy)]
+enum ModuleType {
+    Vertex,
+    Fragment,
+}
 
 struct DefinesInput {
     defines: Vec<(String, Option<String>)>,
@@ -27,53 +33,22 @@ struct ModuleInput {
     ubos: Vec<UBOStruct>,
 }
 
-struct GraphicsPipelineInput {
+struct PipelineInput {
     // name: String,
-    vert_source: ModuleInput,
-    frag_source: ModuleInput,
-    // geom_source: Option<ModuleInput>,
-    /* ... */
-}
-
-struct ComputePipelineInput {
-    // name: String,
-// comp_source: ModuleInput,
-}
-
-enum PipelineInput {
-    Graphics(GraphicsPipelineInput),
-    Compute(ComputePipelineInput),
+    modules: HashMap<ModuleType, ModuleInput>,
 }
 
 // processed
 
-enum ModuleType {
-    Vertex,
-    Fragment,
-}
-
 struct CompiledModule {
     spirv: CompilationArtifact,
-    module_type: ModuleType,
     ubos: Vec<UBOStruct>,
+    module_type: ModuleType,
 }
 
-struct GraphicsPipeline {
+struct Pipeline {
     // name: String,
-    vert: CompiledModule,
-    frag: CompiledModule,
-    // geom: Option<CompiledModule>,
-    /* ... */
-}
-
-struct ComputePipeline {
-    // name: String,
-// comp: CompiledModule,
-}
-
-enum Pipeline {
-    Graphics(GraphicsPipeline),
-    Compute(ComputePipeline),
+    modules: HashMap<ModuleType, CompiledModule>,
 }
 
 // imp input
@@ -129,8 +104,7 @@ impl parse_macro_input::ParseMacroInput for PipelineInput
 // impl syn::parse::Parse for PipelineInput
 {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut vert_source = None;
-        let mut frag_source = None;
+        let mut modules = HashMap::<ModuleType, ModuleInput>::new();
 
         while !input.is_empty() {
             let shader: Ident = input.parse()?;
@@ -138,9 +112,11 @@ impl parse_macro_input::ParseMacroInput for PipelineInput
 
             input.parse::<Token![:]>()?;
 
-            let module = match shader_type_string.as_str() {
-                "vs" | "vertex" | "vert" => &mut vert_source,
-                "fs" | "fragment" | "frag" => &mut frag_source,
+            let group: Group = input.parse()?;
+            let group_tokens: TokenStream = group.stream().into();
+            let module_type = match shader_type_string.as_str() {
+                "vs" | "vertex" | "vert" => ModuleType::Vertex,
+                "fs" | "fragment" | "frag" => ModuleType::Fragment,
                 _ => {
                     return Err(Error::new(
                         shader.span(),
@@ -149,27 +125,14 @@ impl parse_macro_input::ParseMacroInput for PipelineInput
                 }
             };
 
-            let group: Group = input.parse()?;
-            let group_tokens: TokenStream = group.stream().into();
-            module.replace(syn::parse::<ModuleInput>(group_tokens)?);
+            if modules.contains_key(&module_type) {
+                return Err(Error::new(shader.span(), "Duplicate shader module"));
+            } else {
+                modules.insert(module_type, syn::parse::<ModuleInput>(group_tokens)?);
+            }
         }
 
-        if vert_source.is_some() && frag_source.is_none() {
-            panic!("GraphicsPipeline missing a fragment shader");
-        } else if vert_source.is_none() && frag_source.is_some() {
-            panic!("GraphicsPipeline missing a vertex shader");
-        } else if let (Some(vert_source), Some(frag_source)) = (vert_source, frag_source) {
-            Ok(PipelineInput::Graphics(GraphicsPipelineInput {
-                // name: pipeline_name.to_string(),
-                vert_source,
-                frag_source,
-            }))
-        } else {
-            Ok(PipelineInput::Compute(ComputePipelineInput {
-                // name: pipeline_name.to_string(),
-                // comp_source: ModuleInput::new(),
-            }))
-        }
+        Ok(PipelineInput { modules })
     }
 }
 
@@ -269,25 +232,12 @@ impl syn::parse::Parse for ModuleInput {
             }
         }
 
-        let mut source = source.ok_or(Error::new(
+        let source = source.ok_or(Error::new(
             end_span,
             "Missing shader source add either 'source' or 'path' field",
         ))?;
 
-        let mut ubos = Vec::new();
-        let regex = Regex::new(r#"#!.+#!"#).unwrap();
-        source = regex
-            .replace_all(source.as_str(), |caps: &Captures| {
-                let capture = &caps[0];
-                let capture = &capture[2..capture.len() - 2];
-
-                let ubo_struct = syn::parse_str::<UBOStruct>(capture).unwrap();
-                let replace = format!("{}", ubo_struct.to_glsl());
-                ubos.push(ubo_struct);
-
-                replace
-            })
-            .to_string();
+        let ubos = Vec::new();
 
         Ok(Self {
             source,
@@ -326,72 +276,69 @@ fn read_shader_source(path: String, span: Span) -> syn::Result<String> {
 
 impl Pipeline {
     fn new(input: PipelineInput) -> syn::Result<Self> {
-        Ok(match input {
-            PipelineInput::Graphics(p) => {
-                let vertex_artifact = compile_shader_module(
-                    shaderc::ShaderKind::Vertex,
-                    p.vert_source.source.as_str(),
-                    "vert",
-                    p.vert_source.entry.as_ref().map_or("main", |e| e.as_str()),
-                    p.vert_source
+        let modules = input
+            .modules
+            .into_iter()
+            .map(|(module_type, input)| {
+                let mut ubos = input.ubos;
+                let span = input.span;
+
+                let mut source = input.source;
+                let remover_regex = match module_type {
+                    ModuleType::Vertex => Regex::new(r#"GEARS_OUT\(.+\)"#).unwrap(),
+                    ModuleType::Fragment => Regex::new(r#"GEARS_((VERT_UBO)|(IN))\(.+\)"#).unwrap(),
+                };
+                source = remover_regex.replace_all(source.as_str(), " ").to_string();
+
+                let ubo_regex = Regex::new(r#"#!.+#!"#).unwrap(); // TODO: Store these Regex objs
+                source = ubo_regex
+                    .replace_all(source.as_str(), |caps: &Captures| {
+                        let capture = &caps[0];
+                        let capture = &capture[2..capture.len() - 2];
+
+                        let ubo_struct =
+                            syn::parse_str::<UBOStruct>(capture).expect("Invalid UBO struct");
+                        let replace = format!("{}", ubo_struct.to_glsl());
+                        ubos.push(ubo_struct);
+
+                        replace
+                    })
+                    .to_string();
+
+                // GEARS_IN.+
+
+                let spirv = compile_shader_module(
+                    module_type.kind(),
+                    source.as_str(),
+                    module_type.name(),
+                    input.entry.as_ref().map_or("main", |e| e.as_str()),
+                    input
                         .include_path
                         .as_ref()
                         .map_or(None, |s| Some(Path::new(s))),
-                    &p.vert_source.defines,
-                    p.vert_source.default_defines,
-                    p.vert_source.debug,
+                    &input.defines,
+                    input.default_defines,
+                    input.debug,
                 )
                 .or_else(|err| {
                     Err(Error::new(
-                        p.vert_source.span,
-                        format!("Module source compilation failed: {}", err),
-                    ))
-                })?;
-                let fragment_artifact = compile_shader_module(
-                    shaderc::ShaderKind::Fragment,
-                    p.frag_source.source.as_str(),
-                    "frag",
-                    p.frag_source.entry.as_ref().map_or("main", |e| e.as_str()),
-                    p.frag_source
-                        .include_path
-                        .as_ref()
-                        .map_or(None, |s| Some(Path::new(s))),
-                    &p.frag_source.defines,
-                    p.frag_source.default_defines,
-                    p.frag_source.debug,
-                )
-                .or_else(|err| {
-                    Err(Error::new(
-                        p.frag_source.span,
+                        span,
                         format!("Module source compilation failed: {}", err),
                     ))
                 })?;
 
-                Pipeline::Graphics(GraphicsPipeline {
-                    // name: p.name.clone(),
-                    vert: CompiledModule {
-                        spirv: vertex_artifact,
-                        module_type: ModuleType::Vertex,
-                        ubos: p.vert_source.ubos,
+                Ok((
+                    module_type.clone(),
+                    CompiledModule {
+                        spirv,
+                        ubos: ubos,
+                        module_type,
                     },
-                    frag: CompiledModule {
-                        spirv: fragment_artifact,
-                        module_type: ModuleType::Fragment,
-                        ubos: p.frag_source.ubos,
-                    },
-                })
-            }
-            PipelineInput::Compute(_) => Pipeline::Compute(ComputePipeline { /* name: p.name */ }),
-        })
-    }
+                ))
+            })
+            .collect::<Result<HashMap<_, _>, Error>>()?;
 
-    fn to_vec<'a>(&'a self) -> Vec<&'a CompiledModule> {
-        match self {
-            Pipeline::Graphics(p) => {
-                vec![&p.vert, &p.frag]
-            }
-            Pipeline::Compute(_) => todo!(),
-        }
+        Ok(Pipeline { modules })
     }
 }
 
@@ -402,11 +349,18 @@ impl ModuleType {
             ModuleType::Vertex => "VERT",
         }
     }
+
+    pub fn kind(&self) -> shaderc::ShaderKind {
+        match self {
+            ModuleType::Fragment => shaderc::ShaderKind::Fragment,
+            ModuleType::Vertex => shaderc::ShaderKind::Vertex,
+        }
+    }
 }
 
 impl ToTokens for Pipeline {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-        for module in self.to_vec().iter() {
+        for (_, module) in self.modules.iter() {
             module.to_tokens(tokens);
         }
     }
@@ -504,7 +458,6 @@ fn compile_shader_module(
                 "GEARS_IN(_location, _data)",
                 Some("layout(location = _location) in _data;"),
             );
-            options.add_macro_definition("GEARS_OUT(_location, _data)", None);
             options.add_macro_definition(
                 "GEARS_INOUT(_location, _data)",
                 Some("layout(location = _location) out _data;"),
@@ -516,7 +469,6 @@ fn compile_shader_module(
         }
         (shaderc::ShaderKind::Fragment, true) => {
             options.add_macro_definition("GEARS_FRAGMENT", None);
-            options.add_macro_definition("GEARS_IN(_location, _data)", None);
             options.add_macro_definition(
                 "GEARS_OUT(_location, _data)",
                 Some("layout(location = _location) out _data;"),
@@ -525,7 +477,6 @@ fn compile_shader_module(
                 "GEARS_INOUT(_location, _data)",
                 Some("layout(location = _location) in _data;"),
             );
-            options.add_macro_definition("GEARS_VERT_UBO(_location, _data)", None);
         }
         _ => (),
     };
@@ -540,7 +491,7 @@ fn compile_shader_module(
             .preprocess(source, name, entry, Some(&options))
             .unwrap_or_else(|err| panic!("GLSL preprocessing failed: {}", err))
             .as_text();
-        panic!("GLSL: {}", text);
+        panic!("GLSL:\n{}\n\nSource:\n{}", text, source);
     };
 
     // output spirv
