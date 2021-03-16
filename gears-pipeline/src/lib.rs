@@ -3,9 +3,9 @@ use proc_macro2::{Delimiter, Group, Literal, Punct, Spacing, Span};
 use quote::{quote, ToTokens, TokenStreamExt};
 use regex::{Captures, Regex};
 use shaderc::CompilationArtifact;
-use std::{collections::HashMap, env, fs::File, io::Read, path::Path};
+use std::{borrow::Cow, collections::HashMap, env, fs::File, io::Read, path::Path};
 use syn::{parse::ParseStream, parse_macro_input, Error, Ident, LitStr, Token};
-use ubo::UBOStruct;
+use ubo::BindgenStruct;
 
 mod ubo;
 
@@ -29,8 +29,6 @@ struct ModuleInput {
     entry: Option<String>,
     debug: bool,
     span: Span,
-
-    ubos: Vec<UBOStruct>,
 }
 
 struct PipelineInput {
@@ -42,13 +40,13 @@ struct PipelineInput {
 
 struct CompiledModule {
     spirv: CompilationArtifact,
-    ubos: Vec<UBOStruct>,
     module_type: ModuleType,
 }
 
 struct Pipeline {
     // name: String,
     modules: HashMap<ModuleType, CompiledModule>,
+    bindgen_structs: Vec<BindgenStruct>,
 }
 
 // imp input
@@ -237,8 +235,6 @@ impl syn::parse::Parse for ModuleInput {
             "Missing shader source add either 'source' or 'path' field",
         ))?;
 
-        let ubos = Vec::new();
-
         Ok(Self {
             source,
             include_path,
@@ -247,8 +243,6 @@ impl syn::parse::Parse for ModuleInput {
             entry,
             debug,
             span: end_span,
-
-            ubos,
         })
     }
 }
@@ -274,42 +268,50 @@ fn read_shader_source(path: String, span: Span) -> syn::Result<String> {
 
 // impl processed
 
+fn glsl_attrib_macros<'a>(source: &'a str) -> syn::Result<(Cow<'a, str>, Vec<BindgenStruct>)> {
+    let attrib_matcher =
+        Regex::new(r#"(\n|^)#\[gears_(bind)?(gen)\(.+\)\](\n?.+)\{([^}]+)*\n?\}.+;"#).unwrap();
+
+    let mut errors = Vec::new();
+    let mut bindgen_structs = Vec::new();
+    let output = attrib_matcher.replace_all(source, |caps: &Captures| {
+        let cap = &caps[0];
+        match syn::parse_str::<BindgenStruct>(cap) {
+            Ok(s) => {
+                let glsl = format!("\n{}", s.to_glsl());
+                if s.bound() {
+                    bindgen_structs.push(s);
+                }
+                glsl
+            }
+            Err(e) => {
+                errors.push(e);
+                "\n".into()
+            }
+        }
+    });
+
+    if let Some(first) = errors.into_iter().next() {
+        Err(first)
+    } else {
+        Ok((output, bindgen_structs))
+    }
+}
+
 impl Pipeline {
     fn new(input: PipelineInput) -> syn::Result<Self> {
+        let mut bindgen_structs = Vec::new();
         let modules = input
             .modules
             .into_iter()
             .map(|(module_type, input)| {
-                let mut ubos = input.ubos;
                 let span = input.span;
-
-                let mut source = input.source;
-                let remover_regex = match module_type {
-                    ModuleType::Vertex => Regex::new(r#"GEARS_OUT\(.+\)"#).unwrap(),
-                    ModuleType::Fragment => Regex::new(r#"GEARS_((VERT_UBO)|(IN))\(.+\)"#).unwrap(),
-                };
-                source = remover_regex.replace_all(source.as_str(), " ").to_string();
-
-                let ubo_regex = Regex::new(r#"#!.+#!"#).unwrap(); // TODO: Store these Regex objs
-                source = ubo_regex
-                    .replace_all(source.as_str(), |caps: &Captures| {
-                        let capture = &caps[0];
-                        let capture = &capture[2..capture.len() - 2];
-
-                        let ubo_struct =
-                            syn::parse_str::<UBOStruct>(capture).expect("Invalid UBO struct");
-                        let replace = format!("{}", ubo_struct.to_glsl());
-                        ubos.push(ubo_struct);
-
-                        replace
-                    })
-                    .to_string();
-
-                // GEARS_IN.+
+                let (source, mut new_bindgen_structs) = glsl_attrib_macros(input.source.as_str())?;
+                bindgen_structs.append(&mut new_bindgen_structs);
 
                 let spirv = compile_shader_module(
                     module_type.kind(),
-                    source.as_str(),
+                    source.as_ref(),
                     module_type.name(),
                     input.entry.as_ref().map_or("main", |e| e.as_str()),
                     input
@@ -327,18 +329,14 @@ impl Pipeline {
                     ))
                 })?;
 
-                Ok((
-                    module_type.clone(),
-                    CompiledModule {
-                        spirv,
-                        ubos: ubos,
-                        module_type,
-                    },
-                ))
+                Ok((module_type.clone(), CompiledModule { spirv, module_type }))
             })
             .collect::<Result<HashMap<_, _>, Error>>()?;
 
-        Ok(Pipeline { modules })
+        Ok(Pipeline {
+            modules,
+            bindgen_structs,
+        })
     }
 }
 
@@ -362,6 +360,10 @@ impl ToTokens for Pipeline {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         for (_, module) in self.modules.iter() {
             module.to_tokens(tokens);
+        }
+
+        for bindgen_struct in self.bindgen_structs.iter() {
+            bindgen_struct.to_tokens(tokens);
         }
     }
 }
@@ -392,10 +394,6 @@ impl ToTokens for CompiledModule {
         }
         tokens.append(Group::new(Delimiter::Bracket, u8_list));
         tokens.append(Punct::new(';', Spacing::Alone));
-
-        for ubo in self.ubos.iter() {
-            ubo.to_tokens(tokens);
-        }
     }
 }
 
@@ -489,7 +487,9 @@ fn compile_shader_module(
     if debug {
         let text = compiler
             .preprocess(source, name, entry, Some(&options))
-            .unwrap_or_else(|err| panic!("GLSL preprocessing failed: {}", err))
+            .unwrap_or_else(|err| {
+                panic!("GLSL preprocessing failed: {}with source:\n{}", err, source)
+            })
             .as_text();
         panic!("GLSL:\n{}\n\nSource:\n{}", text, source);
     };

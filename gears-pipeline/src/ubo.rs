@@ -1,10 +1,9 @@
-use proc_macro::TokenStream;
-use proc_macro2::{Delimiter, Group, Ident, Punct, Spacing, Span};
+use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span};
 use quote::{ToTokens, TokenStreamExt};
-use syn::{parse::ParseStream, Token};
+use syn::{ext::IdentExt, parse::ParseStream, Error, Token};
 
 #[derive(Debug)]
-pub enum UBOFieldType {
+pub enum StructFieldType {
     Float(),
     Float2(),
     Float3(),
@@ -15,78 +14,159 @@ pub enum UBOFieldType {
     Mat4x4(),
 }
 
-pub struct UBOField {
+pub struct StructField {
     field_name: String,
-    field_type: UBOFieldType,
+    field_type: StructFieldType,
 }
 
-pub struct UBOFields {
-    fields: Vec<UBOField>,
+pub struct StructFields {
+    fields: Vec<StructField>,
 }
 
-pub struct UBOStruct {
+pub struct BindgenStruct {
     field_name: String,
     struct_name: String,
-    fields: UBOFields,
+    fields: StructFields,
+
+    meta: BindgenFields,
 }
+
+pub struct BindgenFields {
+    bind: bool,
+    bind_type: BindgenFieldType,
+}
+
+pub enum BindgenFieldType {
+    Uniform(Binding),
+    In,
+    Out,
+}
+
+pub struct Binding(u32);
 
 // impl parse
 
-impl syn::parse::Parse for UBOStruct {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let field_name = input.parse::<Ident>()?;
-        let field_name = field_name.to_string();
-
-        input.parse::<Token![:]>()?;
-
-        let struct_name = input.parse::<Ident>()?;
-        let struct_name = struct_name.to_string();
-
-        let group = input.parse::<Group>()?;
-        let group_tokens: TokenStream = group.stream().into();
-        let fields = syn::parse::<UBOFields>(group_tokens)?;
-
-        Ok(UBOStruct {
-            field_name,
-            struct_name,
-            fields,
-        })
-    }
-}
-
-impl syn::parse::Parse for UBOFields {
+impl syn::parse::Parse for StructFields {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut fields = Vec::new();
         while !input.is_empty() {
+            let field_type = input.parse::<StructFieldType>()?;
             let field_name = input.parse::<Ident>()?.to_string();
 
-            input.parse::<Token![:]>()?;
+            input.parse::<Token![;]>()?;
 
-            let field_type = input.parse::<UBOFieldType>()?;
-
-            fields.push(UBOField {
+            fields.push(StructField {
                 field_name,
                 field_type,
             });
         }
 
-        Ok(UBOFields { fields })
+        Ok(StructFields { fields })
     }
 }
 
-impl syn::parse::Parse for UBOFieldType {
+impl syn::parse::Parse for BindgenStruct {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        input.parse::<Token![#]>()?;
+        let group: Group = input.parse()?;
+        let meta = syn::parse::<BindgenFields>(group.stream().into())?;
+
+        /* let ident = input // this one fails for some really odd reason even if the next token is ident
+        .parse::<Ident>()?; */
+        let ident = input.call(Ident::parse_any)?; // this one doesnt do that
+        let span = ident.span();
+        let string = ident.to_string();
+
+        if string != "struct" {
+            Err(Error::new(
+                span,
+                format!("expected identifier 'struct', found '{}'", string),
+            ))
+        } else {
+            let struct_name = input.parse::<Ident>()?.to_string();
+            let group: Group = input.parse()?;
+            let fields = syn::parse::<StructFields>(group.stream().into())?;
+            let field_name = input.parse::<Ident>()?.to_string();
+
+            input.parse::<Token![;]>()?;
+
+            Ok(BindgenStruct {
+                struct_name,
+                field_name,
+                fields,
+                meta,
+            })
+        }
+    }
+}
+
+impl syn::parse::Parse for BindgenFields {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let ident = input.parse::<Ident>()?.to_string();
+        let group: Group = input.parse()?;
+        let bind_type = syn::parse::<BindgenFieldType>(group.stream().into())?;
+
+        Ok(Self {
+            bind: match ident.as_str() {
+                "gears_bindgen" => true,
+                "gears_gen" => true,
+                _ => panic!("Unknown BindgenFields: {}", ident),
+            },
+            bind_type,
+        })
+    }
+}
+
+impl syn::parse::Parse for BindgenFieldType {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let ident = input.call(Ident::parse_any)?.to_string();
+        Ok(match ident.as_str() {
+            "in" => Self::In,
+            "out" => Self::Out,
+            "uniform" => Self::Uniform(syn::parse::<Binding>(
+                input.parse::<Group>()?.stream().into(),
+            )?),
+            _ => panic!("Unknown BindgenFieldType: {}", ident),
+        })
+    }
+}
+
+impl syn::parse::Parse for Binding {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let ident = input.parse::<Ident>()?;
+        let string = ident.to_string();
+        if string != "binding" {
+            Err(Error::new(
+                ident.span(),
+                format!("expected identifier 'binding', found '{}'", string),
+            ))
+        } else {
+            input.parse::<Token![=]>()?;
+
+            let index_lit = input.parse::<Literal>()?;
+            let index = index_lit.to_string().parse::<u32>().or(Err(Error::new(
+                index_lit.span(),
+                format!("Could not parse '{}' as u32", index_lit.to_string()),
+            )))?;
+
+            Ok(Binding(index))
+        }
+    }
+}
+
+impl syn::parse::Parse for StructFieldType {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let field_type = input.parse::<Ident>()?.to_string();
 
         Ok(match field_type.as_str() {
-            "float" | "f32" => UBOFieldType::Float(),
-            "vec2" | "Vector2" => UBOFieldType::Float2(),
-            "vec3" | "Vector3" => UBOFieldType::Float3(),
-            "vec4" | "Vector4" => UBOFieldType::Float4(),
+            "float" => StructFieldType::Float(),
+            "vec2" => StructFieldType::Float2(),
+            "vec3" => StructFieldType::Float3(),
+            "vec4" => StructFieldType::Float4(),
 
-            "mat2" | "Matrix2x2" => UBOFieldType::Mat2x2(),
-            "mat3" | "Matrix3x3" => UBOFieldType::Mat3x3(),
-            "mat4" | "Matrix4x4" => UBOFieldType::Mat4x4(),
+            "mat2" => StructFieldType::Mat2x2(),
+            "mat3" => StructFieldType::Mat3x3(),
+            "mat4" => StructFieldType::Mat4x4(),
 
             _ => panic!("Currently unsupported field type: {}", field_type),
         })
@@ -95,11 +175,11 @@ impl syn::parse::Parse for UBOFieldType {
 
 // impl process
 
-impl UBOStruct {
+impl BindgenStruct {
     pub fn to_glsl(&self) -> String {
         let mut fields = String::new();
 
-        for UBOField {
+        for StructField {
             field_name,
             field_type,
         } in self.fields.fields.iter()
@@ -108,27 +188,38 @@ impl UBOStruct {
                 "{}{} {};",
                 fields,
                 match field_type {
-                    UBOFieldType::Float() => "float",
-                    UBOFieldType::Float2() => "vec2",
-                    UBOFieldType::Float3() => "vec3",
-                    UBOFieldType::Float4() => "vec4",
+                    StructFieldType::Float() => "float",
+                    StructFieldType::Float2() => "vec2",
+                    StructFieldType::Float3() => "vec3",
+                    StructFieldType::Float4() => "vec4",
 
-                    UBOFieldType::Mat2x2() => "mat2",
-                    UBOFieldType::Mat3x3() => "mat3",
-                    UBOFieldType::Mat4x4() => "mat4",
+                    StructFieldType::Mat2x2() => "mat2",
+                    StructFieldType::Mat3x3() => "mat3",
+                    StructFieldType::Mat4x4() => "mat4",
                 },
                 field_name,
             );
         }
 
         format!(
-            "uniform {} {{{}}} {}",
-            self.struct_name, fields, self.field_name
+            "layout(binding = {}) {} {} {{{}}} {};",
+            match &self.meta.bind_type {
+                BindgenFieldType::Uniform(i) => i.0,
+                _ => 0,
+            },
+            if self.meta.bind { "uniform" } else { "struct" },
+            self.struct_name,
+            fields,
+            self.field_name
         )
+    }
+
+    pub fn bound(&self) -> bool {
+        self.meta.bind
     }
 }
 
-impl ToTokens for UBOStruct {
+impl ToTokens for BindgenStruct {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         tokens.append(Ident::new("pub", Span::call_site()));
         tokens.append(Ident::new("struct", Span::call_site()));
@@ -143,24 +234,58 @@ impl ToTokens for UBOStruct {
     }
 }
 
-impl ToTokens for UBOField {
+impl ToTokens for StructField {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         tokens.append(Ident::new("pub", Span::call_site()));
         tokens.append(Ident::new(self.field_name.as_str(), Span::call_site()));
         tokens.append(Punct::new(':', Spacing::Alone));
-        tokens.append(Ident::new(
-            match self.field_type {
-                UBOFieldType::Float() => "f32",
-                UBOFieldType::Float2() => "Vector2",
-                UBOFieldType::Float3() => "Vector3",
-                UBOFieldType::Float4() => "Vector4",
 
-                UBOFieldType::Mat2x2() => "Matrix2x2",
-                UBOFieldType::Mat3x3() => "Matrix3x3",
-                UBOFieldType::Mat4x4() => "Matrix4x4",
-            },
-            Span::call_site(),
-        ));
+        let append_cgmath = |tokens: &mut proc_macro2::TokenStream| {
+            tokens.append(Ident::new("cgmath", Span::call_site()));
+            tokens.append(Punct::new(':', Spacing::Joint));
+            tokens.append(Punct::new(':', Spacing::Joint));
+        };
+        let append_f32 = |tokens: &mut proc_macro2::TokenStream| {
+            tokens.append(Punct::new('<', Spacing::Joint));
+            tokens.append(Ident::new("f32", Span::call_site()));
+            tokens.append(Punct::new('>', Spacing::Joint));
+        };
+
+        match self.field_type {
+            StructFieldType::Float() => tokens.append(Ident::new("f32", Span::call_site())),
+            StructFieldType::Float2() => {
+                append_cgmath(tokens);
+                tokens.append(Ident::new("Vector2", Span::call_site()));
+                append_f32(tokens);
+            }
+            StructFieldType::Float3() => {
+                append_cgmath(tokens);
+                tokens.append(Ident::new("Vector3", Span::call_site()));
+                append_f32(tokens);
+            }
+            StructFieldType::Float4() => {
+                append_cgmath(tokens);
+                tokens.append(Ident::new("Vector4", Span::call_site()));
+                append_f32(tokens);
+            }
+
+            StructFieldType::Mat2x2() => {
+                append_cgmath(tokens);
+                tokens.append(Ident::new("Matrix2x2", Span::call_site()));
+                append_f32(tokens);
+            }
+            StructFieldType::Mat3x3() => {
+                append_cgmath(tokens);
+                tokens.append(Ident::new("Matrix3x3", Span::call_site()));
+                append_f32(tokens);
+            }
+            StructFieldType::Mat4x4() => {
+                append_cgmath(tokens);
+                tokens.append(Ident::new("Matrix4x4", Span::call_site()));
+                append_f32(tokens);
+            }
+        };
+
         tokens.append(Punct::new(',', Spacing::Alone));
     }
 }
