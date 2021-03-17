@@ -20,9 +20,9 @@ pub enum StructFieldType {
     Float3(),
     Float4(),
 
-    Mat2x2(),
-    Mat3x3(),
-    Mat4x4(),
+    Mat2(),
+    Mat3(),
+    Mat4(),
 }
 
 pub struct StructField {
@@ -69,9 +69,9 @@ impl StructFieldType {
             StructFieldType::Float3() => std::mem::size_of::<f32>() * 3,
             StructFieldType::Float4() => std::mem::size_of::<f32>() * 4,
 
-            StructFieldType::Mat2x2() => std::mem::size_of::<f32>() * 2 * 2,
-            StructFieldType::Mat3x3() => std::mem::size_of::<f32>() * 3 * 3,
-            StructFieldType::Mat4x4() => std::mem::size_of::<f32>() * 4 * 4,
+            StructFieldType::Mat2() => std::mem::size_of::<f32>() * 2 * 2,
+            StructFieldType::Mat3() => std::mem::size_of::<f32>() * 3 * 3,
+            StructFieldType::Mat4() => std::mem::size_of::<f32>() * 4 * 4,
         }
     }
 
@@ -83,9 +83,9 @@ impl StructFieldType {
                 StructFieldType::Float3() => "Rgb32Sfloat",
                 StructFieldType::Float4() => "Rgba32Sfloat",
 
-                StructFieldType::Mat2x2() => "Rg32Sfloat",
-                StructFieldType::Mat3x3() => "Rgb32Sfloat",
-                StructFieldType::Mat4x4() => "Rgba32Sfloat",
+                StructFieldType::Mat2() => "Rg32Sfloat",
+                StructFieldType::Mat3() => "Rgb32Sfloat",
+                StructFieldType::Mat4() => "Rgba32Sfloat",
             },
             Span::call_site(),
         )
@@ -98,9 +98,9 @@ impl StructFieldType {
             StructFieldType::Float3() => 1,
             StructFieldType::Float4() => 1,
 
-            StructFieldType::Mat2x2() => 2,
-            StructFieldType::Mat3x3() => 3,
-            StructFieldType::Mat4x4() => 4,
+            StructFieldType::Mat2() => 2,
+            StructFieldType::Mat3() => 3,
+            StructFieldType::Mat4() => 4,
         }
     }
 
@@ -111,9 +111,9 @@ impl StructFieldType {
             StructFieldType::Float3() => std::mem::size_of::<f32>() * 3,
             StructFieldType::Float4() => std::mem::size_of::<f32>() * 4,
 
-            StructFieldType::Mat2x2() => std::mem::size_of::<f32>() * 2,
-            StructFieldType::Mat3x3() => std::mem::size_of::<f32>() * 3,
-            StructFieldType::Mat4x4() => std::mem::size_of::<f32>() * 4,
+            StructFieldType::Mat2() => std::mem::size_of::<f32>() * 2,
+            StructFieldType::Mat3() => std::mem::size_of::<f32>() * 3,
+            StructFieldType::Mat4() => std::mem::size_of::<f32>() * 4,
         }
     }
 }
@@ -255,9 +255,9 @@ impl syn::parse::Parse for StructFieldType {
             "vec3" => StructFieldType::Float3(),
             "vec4" => StructFieldType::Float4(),
 
-            "mat2" => StructFieldType::Mat2x2(),
-            "mat3" => StructFieldType::Mat3x3(),
-            "mat4" => StructFieldType::Mat4x4(),
+            "mat2" => StructFieldType::Mat2(),
+            "mat3" => StructFieldType::Mat3(),
+            "mat4" => StructFieldType::Mat4(),
 
             _ => panic!("Currently unsupported field type: {}", field_type),
         })
@@ -452,6 +452,7 @@ impl BindgenStruct {
     }
 
     fn uniform_to_tokens(&self, tokens: &mut TokenStream) {
+        // impl UBO
         tokens.append(Ident::new("impl", Span::call_site()));
         namespacer("gears_traits", tokens);
         tokens.append(Ident::new("UBO", Span::call_site()));
@@ -484,6 +485,117 @@ impl BindgenStruct {
             impl_tokens
         };
         tokens.append(Group::new(Delimiter::Brace, impl_tokens));
+
+        // impl Default
+        tokens.append(Ident::new("impl", Span::call_site()));
+        tokens.append(Ident::new("Default", Span::call_site()));
+        tokens.append(Ident::new("for", Span::call_site()));
+        tokens.append(Ident::new(self.struct_name.as_str(), Span::call_site()));
+
+        let impl_tokens = {
+            /*
+            fn default() -> Self {
+                todo!()
+            } */
+
+            let empty_tokens = TokenStream::new();
+            let mut impl_tokens = TokenStream::new();
+
+            impl_tokens.append(Ident::new("fn", Span::call_site()));
+            impl_tokens.append(Ident::new("default", Span::call_site()));
+            impl_tokens.append(Group::new(Delimiter::Parenthesis, empty_tokens));
+
+            impl_tokens.append(Punct::new('-', Spacing::Joint));
+            impl_tokens.append(Punct::new('>', Spacing::Alone));
+
+            let fn_tokens = {
+                let self_tokens = {
+                    let mut self_tokens = TokenStream::new();
+
+                    for field in self.fields.fields.iter() {
+                        self_tokens
+                            .append(Ident::new(field.field_name.as_str(), Span::call_site()));
+                        self_tokens.append(Punct::new(':', Spacing::Alone));
+                        match &field.field_type {
+                            StructFieldType::Float() => {
+                                self_tokens.append(Literal::f32_suffixed(0.0))
+                            }
+                            StructFieldType::Float2() => {
+                                namespacer("cgmath", &mut self_tokens);
+                                namespacer("Float2", &mut self_tokens);
+                                self_tokens.append(Ident::new("new", Span::call_site()));
+                                let mut value_tokens = TokenStream::new();
+                                value_tokens.append(Literal::f32_suffixed(0.0));
+                                self_tokens
+                                    .append(Group::new(Delimiter::Parenthesis, value_tokens));
+                            }
+                            StructFieldType::Float3() => {
+                                namespacer("cgmath", &mut self_tokens);
+                                namespacer("Float3", &mut self_tokens);
+                                self_tokens.append(Ident::new("new", Span::call_site()));
+                                let mut value_tokens = TokenStream::new();
+                                value_tokens.append(Literal::f32_suffixed(0.0));
+                                value_tokens.append(Literal::f32_suffixed(0.0));
+                                self_tokens
+                                    .append(Group::new(Delimiter::Parenthesis, value_tokens));
+                            }
+                            StructFieldType::Float4() => {
+                                namespacer("cgmath", &mut self_tokens);
+                                namespacer("Float4", &mut self_tokens);
+                                self_tokens.append(Ident::new("new", Span::call_site()));
+                                let mut value_tokens = TokenStream::new();
+                                value_tokens.append(Literal::f32_suffixed(0.0));
+                                value_tokens.append(Literal::f32_suffixed(0.0));
+                                value_tokens.append(Literal::f32_suffixed(0.0));
+                                self_tokens
+                                    .append(Group::new(Delimiter::Parenthesis, value_tokens));
+                            }
+
+                            StructFieldType::Mat2() => {
+                                namespacer("cgmath", &mut self_tokens);
+                                namespacer("Matrix2", &mut self_tokens);
+                                self_tokens.append(Ident::new("from_scale", Span::call_site()));
+                                let mut value_tokens = TokenStream::new();
+                                value_tokens.append(Literal::f32_suffixed(1.0));
+                                self_tokens
+                                    .append(Group::new(Delimiter::Parenthesis, value_tokens));
+                            }
+                            StructFieldType::Mat3() => {
+                                namespacer("cgmath", &mut self_tokens);
+                                namespacer("Matrix3", &mut self_tokens);
+                                self_tokens.append(Ident::new("from_scale", Span::call_site()));
+                                let mut value_tokens = TokenStream::new();
+                                value_tokens.append(Literal::f32_suffixed(1.0));
+                                self_tokens
+                                    .append(Group::new(Delimiter::Parenthesis, value_tokens));
+                            }
+                            StructFieldType::Mat4() => {
+                                namespacer("cgmath", &mut self_tokens);
+                                namespacer("Matrix4", &mut self_tokens);
+                                self_tokens.append(Ident::new("from_scale", Span::call_site()));
+                                let mut value_tokens = TokenStream::new();
+                                value_tokens.append(Literal::f32_suffixed(1.0));
+                                self_tokens
+                                    .append(Group::new(Delimiter::Parenthesis, value_tokens));
+                            }
+                        };
+                        self_tokens.append(Punct::new(',', Spacing::Alone));
+                    }
+
+                    self_tokens
+                };
+
+                let mut fn_tokens = TokenStream::new();
+                fn_tokens.append(Ident::new("Self", Span::call_site()));
+                fn_tokens.append(Group::new(Delimiter::Brace, self_tokens));
+                fn_tokens
+            };
+            impl_tokens.append(Ident::new("Self", Span::call_site()));
+            impl_tokens.append(Group::new(Delimiter::Brace, fn_tokens));
+
+            impl_tokens
+        };
+        tokens.append(Group::new(Delimiter::Brace, impl_tokens));
     }
 }
 
@@ -495,9 +607,9 @@ impl StructFieldType {
             StructFieldType::Float3() => "vec3",
             StructFieldType::Float4() => "vec4",
 
-            StructFieldType::Mat2x2() => "mat2",
-            StructFieldType::Mat3x3() => "mat3",
-            StructFieldType::Mat4x4() => "mat4",
+            StructFieldType::Mat2() => "mat2",
+            StructFieldType::Mat3() => "mat3",
+            StructFieldType::Mat4() => "mat4",
         }
     }
 }
@@ -565,17 +677,17 @@ impl ToTokens for StructField {
                 append_f32(tokens);
             }
 
-            StructFieldType::Mat2x2() => {
+            StructFieldType::Mat2() => {
                 append_cgmath(tokens);
                 tokens.append(Ident::new("Matrix2", Span::call_site()));
                 append_f32(tokens);
             }
-            StructFieldType::Mat3x3() => {
+            StructFieldType::Mat3() => {
                 append_cgmath(tokens);
                 tokens.append(Ident::new("Matrix3", Span::call_site()));
                 append_f32(tokens);
             }
-            StructFieldType::Mat4x4() => {
+            StructFieldType::Mat4() => {
                 append_cgmath(tokens);
                 tokens.append(Ident::new("Matrix4", Span::call_site()));
                 append_f32(tokens);

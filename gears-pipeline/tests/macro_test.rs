@@ -21,6 +21,6 @@ mod tests {
         assert_eq!(252, pl::FRAG_SPIRV.len(), "Frag spirv not what expected");
 
         // check UBO struct generation
-        pl::UBO { time: 0.0 };
+        pl::UBO { time: 0f32 };
     }
 }

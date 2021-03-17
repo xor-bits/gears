@@ -9,7 +9,7 @@ mod buffer;
 mod pipeline;
 pub mod queue;
 
-use cgmath::{Matrix2, Matrix4, Rad, Vector2, Vector3};
+use cgmath::*;
 use log::*;
 
 use std::{
@@ -72,6 +72,7 @@ pub struct GearsRenderer<B: Backend> {
     format: Format,
     pub dimensions: Extent2D,
     viewport: Viewport,
+    vsync: bool,
     frame: usize,
     frames_in_flight: usize,
     frame_counter: usize,
@@ -86,6 +87,7 @@ impl<B: Backend> GearsRenderer<B> {
         adapter: Adapter<B>,
         queue_families: QueueFamilies,
         extent: Extent2D,
+        vsync: bool,
     ) -> Self {
         debug!("Renderer created");
 
@@ -129,7 +131,7 @@ impl<B: Backend> GearsRenderer<B> {
             format,
             surface.supported_formats(physical_device)
         );
-        let config = swap_config::<B>(&surface, &physical_device, format, extent);
+        let config = swap_config::<B>(&surface, &physical_device, format, extent, vsync);
         let framebuffer_attachment = config.framebuffer_attachment();
         let extent = extent;
         unsafe {
@@ -190,12 +192,13 @@ impl<B: Backend> GearsRenderer<B> {
         // graphics pipeline
         let frames_in_flight = 3;
         let memory_types = adapter.physical_device.memory_properties().memory_types;
-        let pipeline = PipelineBuilder::new(&device, &*render_pass, &memory_types)
-            .with_input::<shader::VertexData>()
-            .with_module_vert(shader::VERT_SPIRV)
-            .with_module_frag(shader::FRAG_SPIRV)
-            .with_ubo::<shader::UBO>()
-            .build(frames_in_flight);
+        let pipeline =
+            PipelineBuilder::new(&device, &*render_pass, &memory_types, frames_in_flight)
+                .with_input::<shader::VertexData>()
+                .with_module_vert(shader::VERT_SPIRV)
+                .with_module_frag(shader::FRAG_SPIRV)
+                .with_ubo::<shader::UBO>()
+                .build();
         let pipeline = ManuallyDrop::new(pipeline);
 
         // create vertex buffer
@@ -277,6 +280,7 @@ impl<B: Backend> GearsRenderer<B> {
             format,
             dimensions: extent,
             viewport,
+            vsync,
             frame: 0,
             frames_in_flight,
             frame_counter: 0,
@@ -321,7 +325,7 @@ impl<B: Backend> GearsRenderer<B> {
 
         let ubo = shader::UBO {
             model_matrix: Matrix4::from_angle_z(Rad {
-                0: self.start_tp.elapsed().as_secs_f32(),
+                0: self.start_tp.elapsed().as_secs_f32() * 3.0,
             }),
         };
         self.pipeline.write_ubo(&self.device, ubo, frame);
@@ -406,6 +410,7 @@ impl<B: Backend> GearsRenderer<B> {
             &self.adapter.physical_device,
             self.format,
             self.dimensions,
+            self.vsync,
         );
 
         let framebuffer_attachment = config.framebuffer_attachment();
@@ -488,17 +493,30 @@ fn swap_config<B: Backend>(
     physical_device: &B::PhysicalDevice,
     format: Format,
     extent: Extent2D,
+    vsync: bool,
 ) -> SwapchainConfig {
     let caps = surface.capabilities(physical_device);
     debug!("Present modes available: {:?}", caps.present_modes);
-    let present_mode = if caps.present_modes.contains(PresentMode::MAILBOX) {
-        PresentMode::MAILBOX
-    } else if caps.present_modes.contains(PresentMode::FIFO) {
-        PresentMode::FIFO
-    } else if caps.present_modes.contains(PresentMode::IMMEDIATE) {
-        PresentMode::IMMEDIATE
+    let present_mode = if !vsync {
+        if caps.present_modes.contains(PresentMode::IMMEDIATE) {
+            PresentMode::IMMEDIATE
+        } else if caps.present_modes.contains(PresentMode::MAILBOX) {
+            PresentMode::MAILBOX
+        } else if caps.present_modes.contains(PresentMode::FIFO) {
+            PresentMode::FIFO
+        } else {
+            panic!("MAILBOX, FIFO nor IMMEDIATE PresentMode is not supported")
+        }
     } else {
-        panic!("MAILBOX, FIFO nor IMMEDIATE PresentMode is not supported")
+        if caps.present_modes.contains(PresentMode::MAILBOX) {
+            PresentMode::MAILBOX
+        } else if caps.present_modes.contains(PresentMode::FIFO) {
+            PresentMode::FIFO
+        } else if caps.present_modes.contains(PresentMode::IMMEDIATE) {
+            PresentMode::IMMEDIATE
+        } else {
+            panic!("MAILBOX, FIFO nor IMMEDIATE PresentMode is not supported")
+        }
     };
 
     SwapchainConfig::from_caps(&caps, format, extent).with_present_mode(present_mode)

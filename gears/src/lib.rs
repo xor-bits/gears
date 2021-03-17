@@ -42,7 +42,7 @@ fn adapter_to_string<B: gfx_hal::Backend>(adapter: &Adapter<B>) -> String {
 }
 
 impl Gears {
-    pub fn new(width: u32, height: u32) -> Self {
+    pub fn new(width: u32, height: u32, vsync: bool) -> Self {
         #[cfg(not(any(
             feature = "vulkan",
             feature = "dx11",
@@ -128,6 +128,7 @@ impl Gears {
             adapter,
             queue_families,
             Extent2D { width, height },
+            vsync,
         );
 
         Self {

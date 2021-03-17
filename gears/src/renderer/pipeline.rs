@@ -28,6 +28,7 @@ pub struct PipelineBuilder<'a, B: Backend> {
     device: &'a B::Device,
     render_pass: &'a B::RenderPass,
     available_memory_types: &'a Vec<MemoryType>,
+    set_count: usize,
 
     vert_spirv: Option<&'a [u8]>,
     frag_spirv: Option<&'a [u8]>,
@@ -35,19 +36,17 @@ pub struct PipelineBuilder<'a, B: Backend> {
     vert_input_binding: Vec<VertexBufferDesc>,
     vert_input_attribute: Vec<AttributeDesc>,
 
-    ubos: HashMap<TypeId, (ShaderStageFlags, usize)>,
+    ubos: HashMap<TypeId, (ShaderStageFlags, Vec<UniformBuffer<B>>)>,
 }
 
 pub struct Pipeline<B: Backend> {
     desc_pool: Option<B::DescriptorPool>,
 
     desc_set_layout: B::DescriptorSetLayout,
-    desc_sets: Vec<B::DescriptorSet>,
+    desc_sets: Vec<(B::DescriptorSet, HashMap<TypeId, UniformBuffer<B>>)>,
 
     pipeline_layout: B::PipelineLayout,
     pipeline: B::GraphicsPipeline,
-
-    ubos: HashMap<TypeId, Vec<UniformBuffer<B>>>,
 }
 
 impl<'a, B: Backend> PipelineBuilder<'a, B> {
@@ -55,11 +54,13 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
         device: &'a B::Device,
         render_pass: &'a B::RenderPass,
         available_memory_types: &'a Vec<MemoryType>,
+        set_count: usize,
     ) -> Self {
         Self {
             device,
             render_pass,
             available_memory_types,
+            set_count,
 
             vert_spirv: None,
             frag_spirv: None,
@@ -87,13 +88,24 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
         self
     }
 
-    pub fn with_ubo<U: 'static + UBO>(mut self) -> Self {
-        self.ubos
-            .insert(TypeId::of::<U>(), (U::STAGE, mem::size_of::<U>()));
+    pub fn with_ubo<U: 'static + UBO + Default>(mut self) -> Self {
+        let size = mem::size_of::<U>();
+
+        let buffers = (0..self.set_count)
+            .map(|_| {
+                let mut ubo =
+                    UniformBuffer::<B>::new(self.device, self.available_memory_types, size);
+                ubo.write(self.device, 0, &[U::default()]);
+                ubo
+            })
+            .collect();
+
+        self.ubos.insert(TypeId::of::<U>(), (U::STAGE, buffers));
+
         self
     }
 
-    pub fn build(self, set_count: usize) -> Pipeline<B> {
+    pub fn build(mut self) -> Pipeline<B> {
         let vert_module = {
             let spirv = gfx_auxil::read_spirv(Cursor::new(&self.vert_spirv.unwrap()[..])).unwrap();
             unsafe { self.device.create_shader_module(&spirv) }
@@ -118,7 +130,7 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
         let bindings = self
             .ubos
             .iter()
-            .map(|ubo| DescriptorSetLayoutBinding {
+            .map(|(_, (stage, _))| DescriptorSetLayoutBinding {
                 binding: 0,
                 ty: DescriptorType::Buffer {
                     format: BufferDescriptorFormat::Structured {
@@ -127,7 +139,7 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
                     ty: BufferDescriptorType::Uniform,
                 },
                 count: 1,
-                stage_flags: ubo.1 .0,
+                stage_flags: stage.clone(),
                 immutable_samplers: false,
             })
             .collect::<Vec<_>>();
@@ -151,40 +163,42 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
         let (desc_pool, desc_sets) = if descriptor_ranges.len() > 0 {
             let mut desc_pool = unsafe {
                 self.device.create_descriptor_pool(
-                    set_count,
+                    self.set_count,
                     descriptor_ranges.into_iter(),
                     DescriptorPoolCreateFlags::empty(),
                 )
             }
             .expect("Could not create a descriptor pool");
 
-            let desc_sets = (0..set_count)
+            let desc_sets = (0..self.set_count)
                 .into_iter()
-                .map(|_| unsafe { desc_pool.allocate_one(&desc_set_layout) }.unwrap())
+                .map(|_| {
+                    let mut desc_set = unsafe { desc_pool.allocate_one(&desc_set_layout) }.unwrap();
+                    let ubos = self
+                        .ubos
+                        .iter_mut()
+                        .map(|(id, (_, ubos))| (id.clone(), ubos.remove(0)))
+                        .collect::<HashMap<_, _>>();
+
+                    unsafe {
+                        self.device.write_descriptor_set(DescriptorSetWrite {
+                            set: &mut desc_set,
+                            descriptors: iter::once(Descriptor::Buffer(
+                                ubos.iter().next().unwrap().1.get(),
+                                SubRange::WHOLE,
+                            )),
+                            array_offset: 0,
+                            binding: 0,
+                        });
+                    }
+
+                    (desc_set, ubos)
+                })
                 .collect();
 
             (Some(desc_pool), desc_sets)
         } else {
             (None, Vec::new())
-        };
-
-        let ubos = {
-            let device = self.device;
-            let available_memory_types = self.available_memory_types;
-            self.ubos
-                .into_iter()
-                .map(|ubo| {
-                    (
-                        ubo.0.clone(),
-                        (0..set_count)
-                            .into_iter()
-                            .map(|_| {
-                                UniformBuffer::<B>::new(device, available_memory_types, ubo.1 .1)
-                            })
-                            .collect(),
-                    )
-                })
-                .collect::<HashMap<_, _>>()
         };
 
         let pipeline_layout = unsafe {
@@ -239,8 +253,6 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
 
             pipeline_layout,
             pipeline,
-
-            ubos,
         }
     }
 }
@@ -250,7 +262,7 @@ impl<B: Backend> Pipeline<B> {
         unsafe {
             command_buffer.bind_graphics_pipeline(&self.pipeline);
 
-            if let Some(desc_set) = self.desc_sets.get(set_index) {
+            if let Some((desc_set, _)) = self.desc_sets.get(set_index) {
                 command_buffer.bind_graphics_descriptor_sets(
                     &self.pipeline_layout,
                     0,
@@ -267,9 +279,8 @@ impl<B: Backend> Pipeline<B> {
         new_data: U,
         set_index: usize,
     ) {
-        if let Some(ubo_set) = self.ubos.get_mut(&TypeId::of::<U>()) {
-            let ubo = &mut ubo_set[set_index];
-            let set = &mut self.desc_sets[set_index];
+        if let Some((set, ubo_set)) = self.desc_sets.get_mut(set_index) {
+            let ubo = ubo_set.get_mut(&TypeId::of::<U>()).unwrap();
             ubo.write(device, 0, &[new_data]);
 
             unsafe {
@@ -290,8 +301,8 @@ impl<B: Backend> Pipeline<B> {
 
     pub fn destroy(self, device: &B::Device) {
         unsafe {
-            for (_, ubo_set) in self.ubos {
-                for ubo in ubo_set {
+            for (_, ubos) in self.desc_sets {
+                for (_, ubo) in ubos {
                     ubo.destroy(device);
                 }
             }
