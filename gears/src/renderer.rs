@@ -206,30 +206,34 @@ impl<B: Backend> GearsRenderer<B> {
         let mut vertex_buffer = ManuallyDrop::new(VertexBuffer::new::<shader::VertexData>(
             &device,
             &memory_types,
-            3,
+            6,
         ));
 
         // fill vertex buffer
-        let rotation_matrix_trig = Matrix2::<f32>::from_angle(Rad {
-            0: std::f32::consts::PI * 2.0 / 3.0,
-        });
-
-        let vert_a = rotation_matrix_trig * Vector2::new(0.0, -0.8);
-        let vert_b = rotation_matrix_trig * vert_a;
-        let vert_c = rotation_matrix_trig * vert_b;
-
         let vertices = [
             shader::VertexData {
-                pos: vert_a,
+                pos: Vector2::new(-1.0, -1.0),
                 col: Vector3::new(1.0, 0.0, 0.0),
             },
             shader::VertexData {
-                pos: vert_b,
+                pos: Vector2::new(1.0, 1.0),
                 col: Vector3::new(0.0, 1.0, 0.0),
             },
             shader::VertexData {
-                pos: vert_c,
+                pos: Vector2::new(-1.0, 1.0),
                 col: Vector3::new(0.0, 0.0, 1.0),
+            },
+            shader::VertexData {
+                pos: Vector2::new(-1.0, -1.0),
+                col: Vector3::new(1.0, 0.0, 0.0),
+            },
+            shader::VertexData {
+                pos: Vector2::new(1.0, -1.0),
+                col: Vector3::new(1.0, 1.0, 1.0),
+            },
+            shader::VertexData {
+                pos: Vector2::new(1.0, 1.0),
+                col: Vector3::new(0.0, 1.0, 0.0),
             },
         ];
         vertex_buffer.write(&device, 0, &vertices);
@@ -325,8 +329,8 @@ impl<B: Backend> GearsRenderer<B> {
 
         let ubo = shader::UBO {
             model_matrix: Matrix4::from_angle_z(Rad {
-                0: self.start_tp.elapsed().as_secs_f32() * 3.0,
-            }),
+                0: self.start_tp.elapsed().as_secs_f32() * 1.5,
+            }) * Matrix4::from_scale(0.5),
         };
         self.pipeline.write_ubo(&self.device, ubo, frame);
 
@@ -373,7 +377,7 @@ impl<B: Backend> GearsRenderer<B> {
             // main draw
             self.pipeline.bind(command_buffer, frame);
             self.vertex_buffer.bind(command_buffer);
-            command_buffer.draw(0..3, 0..1);
+            command_buffer.draw(0..6, 0..1);
 
             // stop render pass
             command_buffer.end_render_pass();
