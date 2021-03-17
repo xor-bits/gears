@@ -1,5 +1,3 @@
-use std::mem;
-
 use gfx_hal::{buffer::Usage, device::Device, memory::Properties, Backend};
 
 use super::{upload_type, Buffer};
@@ -10,13 +8,13 @@ pub struct UniformBuffer<B: Backend> {
 }
 
 impl<B: Backend> UniformBuffer<B> {
-    pub fn new<T>(
+    // size is the UBO size in bytes
+    pub fn new(
         device: &B::Device,
         available_memory_types: &Vec<gfx_hal::adapter::MemoryType>,
         size: usize,
     ) -> Self {
-        let len = size * mem::size_of::<T>();
-        let buffer = unsafe { device.create_buffer(len as u64, Usage::UNIFORM) }.unwrap();
+        let buffer = unsafe { device.create_buffer(size as u64, Usage::UNIFORM) }.unwrap();
         let vertex_buffer_req = unsafe { device.get_buffer_requirements(&buffer) };
 
         let memory = unsafe {

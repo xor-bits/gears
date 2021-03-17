@@ -1,8 +1,8 @@
 pub mod uniform;
 pub mod vertex;
 
-pub use uniform::UniformBuffer;
-pub use vertex::VertexBuffer;
+pub use uniform::*;
+pub use vertex::*;
 
 use gfx_hal::{
     adapter::MemoryType,

@@ -1,4 +1,9 @@
-use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span};
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
+
+use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream};
 use quote::{ToTokens, TokenStreamExt};
 use syn::{ext::IdentExt, parse::ParseStream, Error, Token};
 
@@ -15,25 +20,30 @@ pub enum StructFieldType {
 }
 
 pub struct StructField {
-    field_name: String,
-    field_type: StructFieldType,
+    pub field_name: String,
+    pub field_type: StructFieldType,
+
+    pub size: usize,
+    pub offset: usize,
 }
 
 pub struct StructFields {
-    fields: Vec<StructField>,
+    pub fields: Vec<StructField>,
+    pub size: usize,
 }
 
 pub struct BindgenStruct {
-    field_name: String,
-    struct_name: String,
-    fields: StructFields,
+    pub field_name: String,
+    pub struct_name: String,
 
-    meta: BindgenFields,
+    pub fields: StructFields,
+
+    pub meta: BindgenFields,
 }
 
 pub struct BindgenFields {
-    bind: bool,
-    bind_type: BindgenFieldType,
+    pub bind: bool,
+    pub bind_type: BindgenFieldType,
 }
 
 pub enum BindgenFieldType {
@@ -44,29 +54,100 @@ pub enum BindgenFieldType {
 
 pub struct Binding(u32);
 
+impl StructFieldType {
+    pub fn size(&self) -> usize {
+        match self {
+            StructFieldType::Float() => std::mem::size_of::<f32>() * 1,
+            StructFieldType::Float2() => std::mem::size_of::<f32>() * 2,
+            StructFieldType::Float3() => std::mem::size_of::<f32>() * 3,
+            StructFieldType::Float4() => std::mem::size_of::<f32>() * 4,
+
+            StructFieldType::Mat2x2() => std::mem::size_of::<f32>() * 2 * 2,
+            StructFieldType::Mat3x3() => std::mem::size_of::<f32>() * 3 * 3,
+            StructFieldType::Mat4x4() => std::mem::size_of::<f32>() * 4 * 4,
+        }
+    }
+
+    pub fn format(&self) -> Ident {
+        Ident::new(
+            match self {
+                StructFieldType::Float() => "R32Sfloat",
+                StructFieldType::Float2() => "Rg32Sfloat",
+                StructFieldType::Float3() => "Rgb32Sfloat",
+                StructFieldType::Float4() => "Rgba32Sfloat",
+
+                StructFieldType::Mat2x2() => "Rg32Sfloat",
+                StructFieldType::Mat3x3() => "Rgb32Sfloat",
+                StructFieldType::Mat4x4() => "Rgba32Sfloat",
+            },
+            Span::call_site(),
+        )
+    }
+
+    pub fn format_count(&self) -> usize {
+        match self {
+            StructFieldType::Float() => 1,
+            StructFieldType::Float2() => 1,
+            StructFieldType::Float3() => 1,
+            StructFieldType::Float4() => 1,
+
+            StructFieldType::Mat2x2() => 2,
+            StructFieldType::Mat3x3() => 3,
+            StructFieldType::Mat4x4() => 4,
+        }
+    }
+
+    pub fn format_offset(&self) -> usize {
+        match self {
+            StructFieldType::Float() => std::mem::size_of::<f32>() * 1,
+            StructFieldType::Float2() => std::mem::size_of::<f32>() * 2,
+            StructFieldType::Float3() => std::mem::size_of::<f32>() * 3,
+            StructFieldType::Float4() => std::mem::size_of::<f32>() * 4,
+
+            StructFieldType::Mat2x2() => std::mem::size_of::<f32>() * 2,
+            StructFieldType::Mat3x3() => std::mem::size_of::<f32>() * 3,
+            StructFieldType::Mat4x4() => std::mem::size_of::<f32>() * 4,
+        }
+    }
+}
+
 // impl parse
 
 impl syn::parse::Parse for StructFields {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut fields = Vec::new();
+        let mut next_offset = 0;
         while !input.is_empty() {
             let field_type = input.parse::<StructFieldType>()?;
             let field_name = input.parse::<Ident>()?.to_string();
 
             input.parse::<Token![;]>()?;
 
+            let size = field_type.size();
+            let offset = next_offset;
+            next_offset += size;
+
             fields.push(StructField {
                 field_name,
                 field_type,
+
+                size,
+                offset,
             });
         }
 
-        Ok(StructFields { fields })
+        Ok(StructFields {
+            fields,
+            size: next_offset,
+        })
     }
 }
-
 impl syn::parse::Parse for BindgenStruct {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut hasher = DefaultHasher::new();
+        input.to_string().hash(&mut hasher);
+        let hash = hasher.finish();
+
         input.parse::<Token![#]>()?;
         let group: Group = input.parse()?;
         let meta = syn::parse::<BindgenFields>(group.stream().into())?;
@@ -83,7 +164,9 @@ impl syn::parse::Parse for BindgenStruct {
                 format!("expected identifier 'struct', found '{}'", string),
             ))
         } else {
-            let struct_name = input.parse::<Ident>()?.to_string();
+            let struct_name = input
+                .parse::<Ident>()
+                .map_or_else(|_| format!("STRUCT_{}", hash), |i| i.to_string());
             let group: Group = input.parse()?;
             let fields = syn::parse::<StructFields>(group.stream().into())?;
             let field_name = input.parse::<Ident>()?.to_string();
@@ -109,7 +192,7 @@ impl syn::parse::Parse for BindgenFields {
         Ok(Self {
             bind: match ident.as_str() {
                 "gears_bindgen" => true,
-                "gears_gen" => true,
+                "gears_gen" => false,
                 _ => panic!("Unknown BindgenFields: {}", ident),
             },
             bind_type,
@@ -177,78 +260,273 @@ impl syn::parse::Parse for StructFieldType {
 
 impl BindgenStruct {
     pub fn to_glsl(&self) -> String {
-        let mut fields = String::new();
+        match &self.meta.bind_type {
+            BindgenFieldType::Uniform(i) => {
+                let mut fields = String::new();
+                for field in self.fields.fields.iter() {
+                    fields = format!(
+                        "{}{} {};",
+                        fields,
+                        field.field_type.to_glsl(),
+                        field.field_name
+                    );
+                }
 
-        for StructField {
-            field_name,
-            field_type,
-        } in self.fields.fields.iter()
-        {
-            fields = format!(
-                "{}{} {};",
-                fields,
-                match field_type {
-                    StructFieldType::Float() => "float",
-                    StructFieldType::Float2() => "vec2",
-                    StructFieldType::Float3() => "vec3",
-                    StructFieldType::Float4() => "vec4",
+                format!(
+                    "layout(binding = {}) uniform {} {{{}}} {};",
+                    i.0, self.struct_name, fields, self.field_name
+                )
+            }
+            BindgenFieldType::In | BindgenFieldType::Out => {
+                let mut first_i = 0;
+                let mut layouts = String::new();
+                let is_in = match self.meta.bind_type {
+                    BindgenFieldType::In => true,
+                    _ => false,
+                };
 
-                    StructFieldType::Mat2x2() => "mat2",
-                    StructFieldType::Mat3x3() => "mat3",
-                    StructFieldType::Mat4x4() => "mat4",
-                },
-                field_name,
-            );
+                for field in self.fields.fields.iter() {
+                    layouts += format!(
+                        "layout(location = {}) {} {} _{}_{};",
+                        first_i,
+                        if is_in { "in" } else { "out" },
+                        field.field_type.to_glsl(),
+                        self.field_name,
+                        field.field_name
+                    )
+                    .as_str();
+                    first_i += 1;
+                }
+
+                layouts
+            }
         }
-
-        format!(
-            "layout(binding = {}) {} {} {{{}}} {};",
-            match &self.meta.bind_type {
-                BindgenFieldType::Uniform(i) => i.0,
-                _ => 0,
-            },
-            if self.meta.bind { "uniform" } else { "struct" },
-            self.struct_name,
-            fields,
-            self.field_name
-        )
     }
+}
 
-    pub fn bound(&self) -> bool {
-        self.meta.bind
+impl StructFieldType {
+    pub fn to_glsl(&self) -> &'static str {
+        match self {
+            StructFieldType::Float() => "float",
+            StructFieldType::Float2() => "vec2",
+            StructFieldType::Float3() => "vec3",
+            StructFieldType::Float4() => "vec4",
+
+            StructFieldType::Mat2x2() => "mat2",
+            StructFieldType::Mat3x3() => "mat3",
+            StructFieldType::Mat4x4() => "mat4",
+        }
     }
 }
 
 impl ToTokens for BindgenStruct {
-    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
         tokens.append(Ident::new("pub", Span::call_site()));
         tokens.append(Ident::new("struct", Span::call_site()));
 
         tokens.append(Ident::new(self.struct_name.as_str(), Span::call_site()));
 
-        let mut struct_tokens = proc_macro2::TokenStream::new();
+        let mut struct_tokens = TokenStream::new();
         for field in self.fields.fields.iter() {
             field.to_tokens(&mut struct_tokens);
         }
         tokens.append(Group::new(Delimiter::Brace, struct_tokens));
+
+        let namespacer = |namespace: &'static str, tokens: &mut TokenStream| {
+            tokens.append(Ident::new(namespace, Span::call_site()));
+            tokens.append(Punct::new(':', Spacing::Joint));
+            tokens.append(Punct::new(':', Spacing::Joint));
+        };
+
+        // impls
+        tokens.append(Ident::new("impl", Span::call_site()));
+        namespacer("gears_traits", tokens);
+        tokens.append(Ident::new("Vertex", Span::call_site()));
+        tokens.append(Ident::new("for", Span::call_site()));
+        tokens.append(Ident::new(self.struct_name.as_str(), Span::call_site()));
+
+        let empty_tokens = TokenStream::new();
+
+        let impl_tokens = {
+            // fn binding_desc()
+            let mut impl_tokens = TokenStream::new();
+            impl_tokens.append(Ident::new("fn", Span::call_site()));
+            impl_tokens.append(Ident::new("binding_desc", Span::call_site()));
+            impl_tokens.append(Group::new(Delimiter::Parenthesis, empty_tokens.clone()));
+
+            impl_tokens.append(Punct::new('-', Spacing::Joint));
+            impl_tokens.append(Punct::new('>', Spacing::Alone));
+
+            impl_tokens.append(Ident::new("Vec", Span::call_site()));
+            impl_tokens.append(Punct::new('<', Spacing::Joint));
+            namespacer("gears_traits", &mut impl_tokens);
+            impl_tokens.append(Ident::new("VertexBufferDesc", Span::call_site()));
+            impl_tokens.append(Punct::new('>', Spacing::Alone));
+
+            let binding_desc = {
+                // vec!
+                let mut binding_desc = TokenStream::new();
+                binding_desc.append(Ident::new("vec", Span::call_site()));
+                binding_desc.append(Punct::new('!', Spacing::Alone));
+                let contents = {
+                    // ...
+                    let mut fields = TokenStream::new();
+                    fields.append(Ident::new("binding", Span::call_site()));
+                    fields.append(Punct::new(':', Spacing::Alone));
+                    fields.append(Literal::u32_unsuffixed(0));
+                    fields.append(Punct::new(',', Spacing::Alone));
+
+                    fields.append(Ident::new("rate", Span::call_site()));
+                    fields.append(Punct::new(':', Spacing::Alone));
+                    namespacer("gears_traits", &mut fields);
+                    namespacer("VertexInputRate", &mut fields);
+                    fields.append(Ident::new("Vertex", Span::call_site()));
+                    fields.append(Punct::new(',', Spacing::Alone));
+
+                    fields.append(Ident::new("stride", Span::call_site()));
+                    fields.append(Punct::new(':', Spacing::Alone));
+                    fields.append(Literal::u32_unsuffixed(self.fields.size as u32));
+                    fields.append(Punct::new(',', Spacing::Alone));
+
+                    // VertexBufferDesc { ... }
+                    let mut contents = TokenStream::new();
+                    namespacer("gears_traits", &mut contents);
+                    contents.append(Ident::new("VertexBufferDesc", Span::call_site()));
+                    contents.append(Group::new(Delimiter::Brace, fields));
+                    contents.append(Punct::new(',', Spacing::Alone));
+                    contents
+                };
+                binding_desc.append(Group::new(Delimiter::Bracket, contents));
+                binding_desc
+            };
+            impl_tokens.append(Group::new(Delimiter::Brace, binding_desc));
+
+            // fn attribute_desc()
+            impl_tokens.append(Ident::new("fn", Span::call_site()));
+            impl_tokens.append(Ident::new("attribute_desc", Span::call_site()));
+            impl_tokens.append(Group::new(Delimiter::Parenthesis, empty_tokens.clone()));
+
+            impl_tokens.append(Punct::new('-', Spacing::Joint));
+            impl_tokens.append(Punct::new('>', Spacing::Alone));
+
+            impl_tokens.append(Ident::new("Vec", Span::call_site()));
+            impl_tokens.append(Punct::new('<', Spacing::Joint));
+            namespacer("gears_traits", &mut impl_tokens);
+            impl_tokens.append(Ident::new("AttributeDesc", Span::call_site()));
+            impl_tokens.append(Punct::new('>', Spacing::Alone));
+
+            let attribute_desc = {
+                // vec!
+                let mut attribute_desc = TokenStream::new();
+                attribute_desc.append(Ident::new("vec", Span::call_site()));
+                attribute_desc.append(Punct::new('!', Spacing::Alone));
+                let contents = {
+                    let mut contents = TokenStream::new();
+                    for (index, field) in self.fields.fields.iter().enumerate() {
+                        for i in 0..field.field_type.format_count() {
+                            // ...
+                            let mut fields = TokenStream::new();
+                            fields.append(Ident::new("binding", Span::call_site()));
+                            fields.append(Punct::new(':', Spacing::Alone));
+                            fields.append(Literal::u32_unsuffixed(0));
+                            fields.append(Punct::new(',', Spacing::Alone));
+
+                            fields.append(Ident::new("location", Span::call_site()));
+                            fields.append(Punct::new(':', Spacing::Alone));
+                            fields.append(Literal::u32_unsuffixed(index as u32));
+                            fields.append(Punct::new(',', Spacing::Alone));
+
+                            fields.append(Ident::new("element", Span::call_site()));
+                            fields.append(Punct::new(':', Spacing::Alone));
+                            namespacer("gears_traits", &mut fields);
+                            fields.append(Ident::new("Element", Span::call_site()));
+                            let element = {
+                                let mut element = TokenStream::new();
+                                element.append(Ident::new("format", Span::call_site()));
+                                element.append(Punct::new(':', Spacing::Alone));
+                                namespacer("gears_traits", &mut element);
+                                namespacer("Format", &mut element);
+                                element.append(field.field_type.format());
+                                element.append(Punct::new(',', Spacing::Alone));
+
+                                element.append(Ident::new("offset", Span::call_site()));
+                                element.append(Punct::new(':', Spacing::Alone));
+                                element.append(Literal::u32_unsuffixed(
+                                    (i * field.field_type.format_offset()) as u32,
+                                ));
+                                element
+                            };
+                            fields.append(Group::new(Delimiter::Brace, element));
+
+                            // AttributeDesc { ..., ... }
+                            namespacer("gears_traits", &mut contents);
+                            contents.append(Ident::new("AttributeDesc", Span::call_site()));
+                            contents.append(Group::new(Delimiter::Brace, fields));
+                            contents.append(Punct::new(',', Spacing::Alone));
+                        }
+                    }
+                    contents
+                };
+                attribute_desc.append(Group::new(Delimiter::Bracket, contents));
+                attribute_desc
+            };
+            impl_tokens.append(Group::new(Delimiter::Brace, attribute_desc));
+
+            impl_tokens
+        };
+
+        tokens.append(Group::new(Delimiter::Brace, impl_tokens));
+
+        /*
+
+        fn binding_desc() -> Vec<VertexBufferDesc> {
+            vec![VertexBufferDesc {
+                binding: 0,
+                rate: VertexInputRate::Vertex,
+                stride: std::mem::size_of::<VertexData>() as u32,
+            }]
+        }
+
+        fn attribute_desc() -> Vec<AttributeDesc> {
+            vec![
+                AttributeDesc {
+                    binding: 0,
+                    location: 0,
+                    element: Element {
+                        format: Format::Rg32Sfloat,
+                        offset: 0,
+                    },
+                },
+                AttributeDesc {
+                    binding: 0,
+                    location: 1,
+                    element: Element {
+                        format: Format::Rgb32Sfloat,
+                        offset: 4 * 2,
+                    },
+                },
+            ]
+        }
+
+        */
     }
 }
 
 impl ToTokens for StructField {
-    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
         tokens.append(Ident::new("pub", Span::call_site()));
         tokens.append(Ident::new(self.field_name.as_str(), Span::call_site()));
         tokens.append(Punct::new(':', Spacing::Alone));
 
-        let append_cgmath = |tokens: &mut proc_macro2::TokenStream| {
+        let append_cgmath = |tokens: &mut TokenStream| {
             tokens.append(Ident::new("cgmath", Span::call_site()));
             tokens.append(Punct::new(':', Spacing::Joint));
             tokens.append(Punct::new(':', Spacing::Joint));
         };
-        let append_f32 = |tokens: &mut proc_macro2::TokenStream| {
+        let append_f32 = |tokens: &mut TokenStream| {
             tokens.append(Punct::new('<', Spacing::Joint));
             tokens.append(Ident::new("f32", Span::call_site()));
-            tokens.append(Punct::new('>', Spacing::Joint));
+            tokens.append(Punct::new('>', Spacing::Alone));
         };
 
         match self.field_type {

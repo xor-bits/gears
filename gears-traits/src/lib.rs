@@ -1,7 +1,8 @@
-use cgmath::{Vector2, Vector3};
-use gfx_hal::{
+pub use cgmath::{Vector2, Vector3};
+pub use gfx_hal::{
     format::Format,
-    pso::{AttributeDesc, Element, ShaderStageFlags, VertexBufferDesc, VertexInputRate},
+    pso::Element,
+    pso::{AttributeDesc, ShaderStageFlags, VertexBufferDesc, VertexInputRate},
 };
 
 pub trait UBO {

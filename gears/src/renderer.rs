@@ -30,12 +30,19 @@ use gfx_hal::{
     Backend, Features, Instance,
 };
 
-use pipeline::{Pipeline, VertexData};
+use pipeline::{Pipeline, PipelineBuilder};
 
 use self::{
     buffer::{Buffer, BufferManager, VertexBuffer},
     queue::{QueueFamilies, Queues},
 };
+
+mod shader {
+    gears_pipeline::pipeline! {
+        vs: { path: "res/default.vert.glsl" }
+        fs: { path: "res/default.frag.glsl" }
+    }
+}
 
 #[derive(Debug)]
 pub enum RendererError {
@@ -182,15 +189,16 @@ impl<B: Backend> GearsRenderer<B> {
 
         // graphics pipeline
         let memory_types = adapter.physical_device.memory_properties().memory_types;
-        let pipeline = ManuallyDrop::new(Pipeline::<B>::new::<VertexData>(
-            &device,
-            &render_pass,
-            &memory_types,
-        ));
+        let pipeline = PipelineBuilder::new(&device, &*render_pass, &memory_types)
+            .with_input::<shader::VertexData>()
+            .with_module_vert(shader::VERT_SPIRV)
+            .with_module_frag(shader::FRAG_SPIRV)
+            .build();
+        let pipeline = ManuallyDrop::new(pipeline);
 
         debug!("memory_types: {:?}", memory_types);
         let mut buffer_manager = BufferManager::new();
-        let vertex_buffer = ManuallyDrop::new(VertexBuffer::new::<VertexData>(
+        let vertex_buffer = ManuallyDrop::new(VertexBuffer::new::<shader::VertexData>(
             &device,
             &mut buffer_manager,
             &memory_types,
@@ -283,17 +291,17 @@ impl<B: Backend> GearsRenderer<B> {
         let vert_c = rotation_matrix_trig * vert_b;
 
         let vertices = [
-            VertexData {
-                position: vert_a,
-                color: Vector3::new(1.0, 0.0, 0.0),
+            shader::VertexData {
+                pos: vert_a,
+                col: Vector3::new(1.0, 0.0, 0.0),
             },
-            VertexData {
-                position: vert_b,
-                color: Vector3::new(0.0, 1.0, 0.0),
+            shader::VertexData {
+                pos: vert_b,
+                col: Vector3::new(0.0, 1.0, 0.0),
             },
-            VertexData {
-                position: vert_c,
-                color: Vector3::new(0.0, 0.0, 1.0),
+            shader::VertexData {
+                pos: vert_c,
+                col: Vector3::new(0.0, 0.0, 1.0),
             },
         ];
         self.vertex_buffer

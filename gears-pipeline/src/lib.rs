@@ -3,9 +3,9 @@ use proc_macro2::{Delimiter, Group, Literal, Punct, Spacing, Span};
 use quote::{quote, ToTokens, TokenStreamExt};
 use regex::{Captures, Regex};
 use shaderc::CompilationArtifact;
-use std::{borrow::Cow, collections::HashMap, env, fs::File, io::Read, path::Path};
+use std::{collections::HashMap, env, fs::File, io::Read, path::Path};
 use syn::{parse::ParseStream, parse_macro_input, Error, Ident, LitStr, Token};
-use ubo::BindgenStruct;
+use ubo::{BindgenFieldType, BindgenStruct};
 
 mod ubo;
 
@@ -268,34 +268,54 @@ fn read_shader_source(path: String, span: Span) -> syn::Result<String> {
 
 // impl processed
 
-fn glsl_attrib_macros<'a>(source: &'a str) -> syn::Result<(Cow<'a, str>, Vec<BindgenStruct>)> {
+fn glsl_attrib_macros<'a>(source: &'a str) -> (String, Vec<BindgenStruct>) {
     let attrib_matcher =
         Regex::new(r#"(\n|^)#\[gears_(bind)?(gen)\(.+\)\](\n?.+)\{([^}]+)*\n?\}.+;"#).unwrap();
 
-    let mut errors = Vec::new();
     let mut bindgen_structs = Vec::new();
-    let output = attrib_matcher.replace_all(source, |caps: &Captures| {
-        let cap = &caps[0];
-        match syn::parse_str::<BindgenStruct>(cap) {
-            Ok(s) => {
-                let glsl = format!("\n{}", s.to_glsl());
-                if s.bound() {
-                    bindgen_structs.push(s);
-                }
-                glsl
-            }
-            Err(e) => {
-                errors.push(e);
-                "\n".into()
-            }
-        }
-    });
+    let mut ident_renameres = Vec::new();
 
-    if let Some(first) = errors.into_iter().next() {
-        Err(first)
-    } else {
-        Ok((output, bindgen_structs))
+    let mut output = attrib_matcher
+        .replace_all(source, |caps: &Captures| {
+            let cap = &caps[0];
+            match syn::parse_str::<BindgenStruct>(cap) {
+                Ok(s) => {
+                    let glsl = format!("\n{}", s.to_glsl());
+
+                    // uniforms do not have to be renamed
+                    match &s.meta.bind_type {
+                        BindgenFieldType::Uniform(_) => (),
+                        BindgenFieldType::In | BindgenFieldType::Out => {
+                            ident_renameres.push(
+                                Regex::new(format!("\\b{}\\.\\b", s.field_name).as_str()).unwrap(),
+                            );
+                        }
+                    };
+
+                    // bind only gears_bindgen not gears_gen for ex.
+                    if s.meta.bind {
+                        bindgen_structs.push(s);
+                    }
+                    glsl
+                }
+                Err(e) => {
+                    panic!("attrib failed: {:?}, {}", e.to_string(), cap);
+                }
+            }
+        })
+        .to_string();
+
+    for ident_renamer in ident_renameres {
+        output = ident_renamer
+            .replace_all(&output[..], |caps: &Captures| {
+                let cap = &caps[0];
+                let cap = &cap[..cap.len() - 1];
+                format!("_{}_", cap)
+            })
+            .to_string();
     }
+
+    (output, bindgen_structs)
 }
 
 impl Pipeline {
@@ -306,7 +326,7 @@ impl Pipeline {
             .into_iter()
             .map(|(module_type, input)| {
                 let span = input.span;
-                let (source, mut new_bindgen_structs) = glsl_attrib_macros(input.source.as_str())?;
+                let (source, mut new_bindgen_structs) = glsl_attrib_macros(input.source.as_str());
                 bindgen_structs.append(&mut new_bindgen_structs);
 
                 let spirv = compile_shader_module(
@@ -322,12 +342,7 @@ impl Pipeline {
                     input.default_defines,
                     input.debug,
                 )
-                .or_else(|err| {
-                    Err(Error::new(
-                        span,
-                        format!("Module source compilation failed: {}", err),
-                    ))
-                })?;
+                .or_else(|err| Err(Error::new(span, err)))?;
 
                 Ok((module_type.clone(), CompiledModule { spirv, module_type }))
             })
@@ -408,7 +423,7 @@ fn compile_shader_module(
     defines: &DefinesInput,
     default_defines: bool,
     debug: bool,
-) -> shaderc::Result<shaderc::CompilationArtifact> {
+) -> Result<shaderc::CompilationArtifact, String> {
     let compiler = unsafe {
         if STATIC_COMPILER.is_none() {
             STATIC_COMPILER = Some(
@@ -483,19 +498,29 @@ fn compile_shader_module(
         options.add_macro_definition(define, val.as_ref().map_or(None, |s| Some(s.as_str())));
     }
 
-    // debug
-    if debug {
-        let text = compiler
+    let result = if debug {
+        compiler
             .preprocess(source, name, entry, Some(&options))
-            .unwrap_or_else(|err| {
-                panic!("GLSL preprocessing failed: {}with source:\n{}", err, source)
-            })
-            .as_text();
-        panic!("GLSL:\n{}\n\nSource:\n{}", text, source);
+            .map_or_else(|err| Err(format!("{}", err)), |res| Err(res.as_text()))
+    } else {
+        compiler
+            .compile_into_spirv(source, kind, name, entry, Some(&options))
+            .or_else(|err| Err(format!("{}", err)))
     };
 
-    // output spirv
-    compiler.compile_into_spirv(source, kind, name, entry, Some(&options))
+    result.or_else(|err| {
+        let source_with_lines: String = source
+            .lines()
+            .enumerate()
+            .map(|(i, line)| format!("{:-4}: {}\n", i + 1, line))
+            .collect();
+
+        Err(format!(
+            "Error:\n{}\nSource:\n{}",
+            err,
+            source_with_lines.trim_end()
+        ))
+    })
 }
 
 /// # gears-pipeline main macro
@@ -579,19 +604,15 @@ fn compile_shader_module(
 /// - fragment shader: ```frag```
 #[proc_macro]
 pub fn pipeline(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as PipelineInput);
+    match Pipeline::new(parse_macro_input!(input as PipelineInput)) {
+        Err(err) => err.to_compile_error().into(),
+        Ok(pipeline) => {
+            let mut tokens = proc_macro2::TokenStream::new();
+            pipeline.to_tokens(&mut tokens);
 
-    let pipeline = match Pipeline::new(input) {
-        Err(e) => {
-            return e.to_compile_error().into();
+            tokens.into()
         }
-        Ok(p) => p,
-    };
-
-    let mut tokens = proc_macro2::TokenStream::new();
-    pipeline.to_tokens(&mut tokens);
-
-    tokens.into()
+    }
 }
 
 #[proc_macro_derive(UBO)]
