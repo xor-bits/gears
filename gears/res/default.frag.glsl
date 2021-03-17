@@ -4,7 +4,7 @@
 #[gears_gen(in)]
 struct {
 	vec3 col;
-} frag_in;
+} vert_out;
 
 #[gears_gen(out)]
 struct {
@@ -14,5 +14,5 @@ struct {
 
 
 void main() {
-	frag_out.col = vec4(frag_in.col, 1.0);
+	frag_out.col = vec4(vert_out.col, 1.0);
 }

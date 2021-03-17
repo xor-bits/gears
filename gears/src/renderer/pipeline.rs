@@ -226,8 +226,8 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
                 geometry: None,
                 tessellation: None,
             },
-            // Rasterizer::FILL,
-            Rasterizer {
+            Rasterizer::FILL,
+            /* Rasterizer {
                 polygon_mode: PolygonMode::Fill,
                 cull_face: Face::BACK,
                 front_face: FrontFace::Clockwise,
@@ -235,7 +235,7 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
                 depth_bias: None,
                 conservative: false,
                 line_width: State::Static(1.0),
-            },
+            }, */
             Some(frag_entry),
             &pipeline_layout,
             subpass,

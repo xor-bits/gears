@@ -40,7 +40,7 @@ use gfx_hal::{
 use pipeline::{Pipeline, PipelineBuilder};
 
 use self::{
-    buffer::{Buffer, VertexBuffer},
+    buffer::{Buffer, IndexBuffer, VertexBuffer},
     queue::{QueueFamilies, Queues},
 };
 
@@ -57,6 +57,7 @@ pub struct GearsRenderer<B: Backend> {
     submit_fences: Vec<B::Fence>,
     submit_semaphores: Vec<B::Semaphore>,
 
+    index_buffer: ManuallyDrop<IndexBuffer<B>>,
     vertex_buffer: ManuallyDrop<VertexBuffer<B>>,
     pipeline: ManuallyDrop<Pipeline<B>>,
 
@@ -201,39 +202,34 @@ impl<B: Backend> GearsRenderer<B> {
                 .build();
         let pipeline = ManuallyDrop::new(pipeline);
 
-        // create vertex buffer
+        // create vertex&index buffer
         debug!("memory_types: {:?}", memory_types);
+        let mut index_buffer = ManuallyDrop::new(IndexBuffer::new(&device, &memory_types, 6));
         let mut vertex_buffer = ManuallyDrop::new(VertexBuffer::new::<shader::VertexData>(
             &device,
             &memory_types,
             6,
         ));
 
-        // fill vertex buffer
+        // fill vertex&index buffer
+        let indices = [0, 1, 2, 0, 2, 3];
+        index_buffer.write(&device, 0, &indices);
         let vertices = [
-            shader::VertexData {
-                pos: Vector2::new(-1.0, -1.0),
-                col: Vector3::new(1.0, 0.0, 0.0),
-            },
-            shader::VertexData {
-                pos: Vector2::new(1.0, 1.0),
-                col: Vector3::new(0.0, 1.0, 0.0),
-            },
             shader::VertexData {
                 pos: Vector2::new(-1.0, 1.0),
                 col: Vector3::new(0.0, 0.0, 1.0),
             },
             shader::VertexData {
-                pos: Vector2::new(-1.0, -1.0),
-                col: Vector3::new(1.0, 0.0, 0.0),
+                pos: Vector2::new(1.0, 1.0),
+                col: Vector3::new(0.0, 1.0, 0.0),
             },
             shader::VertexData {
                 pos: Vector2::new(1.0, -1.0),
                 col: Vector3::new(1.0, 1.0, 1.0),
             },
             shader::VertexData {
-                pos: Vector2::new(1.0, 1.0),
-                col: Vector3::new(0.0, 1.0, 0.0),
+                pos: Vector2::new(-1.0, -1.0),
+                col: Vector3::new(1.0, 0.0, 0.0),
             },
         ];
         vertex_buffer.write(&device, 0, &vertices);
@@ -269,6 +265,7 @@ impl<B: Backend> GearsRenderer<B> {
             submit_fences,
             submit_semaphores,
 
+            index_buffer,
             vertex_buffer,
             pipeline,
 
@@ -376,8 +373,9 @@ impl<B: Backend> GearsRenderer<B> {
 
             // main draw
             self.pipeline.bind(command_buffer, frame);
+            self.index_buffer.bind(command_buffer);
             self.vertex_buffer.bind(command_buffer);
-            command_buffer.draw(0..6, 0..1);
+            command_buffer.draw_indexed(0..6, 0, 0..1);
 
             // stop render pass
             command_buffer.end_render_pass();
@@ -472,6 +470,8 @@ impl<B: Backend> Drop for GearsRenderer<B> {
                 self.device.destroy_semaphore(submit_semaphore);
             }
 
+            let index_buffer = ManuallyDrop::into_inner(ptr::read(&self.index_buffer));
+            index_buffer.destroy(&self.device);
             let vertex_buffer = ManuallyDrop::into_inner(ptr::read(&self.vertex_buffer));
             vertex_buffer.destroy(&self.device);
 
