@@ -1,10 +1,18 @@
-use gfx_hal::{buffer::Usage, device::Device, memory::Properties, Backend};
+use gfx_hal::{
+    buffer::Usage,
+    device::Device,
+    memory::{Properties, Segment},
+    Backend,
+};
+use std::{iter, mem, ptr};
 
 use super::{upload_type, Buffer};
 
 pub struct UniformBuffer<B: Backend> {
     buffer: B::Buffer,
     memory: B::Memory,
+
+    len: usize,
 }
 
 impl<B: Backend> UniformBuffer<B> {
@@ -14,7 +22,7 @@ impl<B: Backend> UniformBuffer<B> {
         available_memory_types: &Vec<gfx_hal::adapter::MemoryType>,
         size: usize,
     ) -> Self {
-        let buffer = unsafe { device.create_buffer(size as u64, Usage::UNIFORM) }.unwrap();
+        let mut buffer = unsafe { device.create_buffer(size as u64, Usage::UNIFORM) }.unwrap();
         let vertex_buffer_req = unsafe { device.get_buffer_requirements(&buffer) };
 
         let memory = unsafe {
@@ -29,8 +37,39 @@ impl<B: Backend> UniformBuffer<B> {
             )
         }
         .unwrap();
+        unsafe { device.bind_buffer_memory(&memory, 0, &mut buffer) }.unwrap();
 
-        Self { buffer, memory }
+        Self {
+            buffer,
+            memory,
+            len: size,
+        }
+    }
+
+    pub fn write<T>(&mut self, device: &B::Device, offset: usize, data: &[T]) {
+        unsafe {
+            // map
+            let mapping = device.map_memory(&mut self.memory, Segment::ALL).unwrap();
+
+            let written_len = mem::size_of::<T>() * data.len();
+            assert!(
+                offset + written_len <= self.len,
+                "Tried to overflow the buffer"
+            );
+
+            // write
+            ptr::copy_nonoverlapping(
+                data.as_ptr() as *const u8,
+                mapping,
+                mem::size_of::<T>() * data.len(),
+            );
+            device
+                .flush_mapped_memory_ranges(iter::once((&self.memory, Segment::ALL)))
+                .unwrap();
+
+            // unmap
+            device.unmap_memory(&mut self.memory);
+        }
     }
 
     pub fn get<'a>(&'a self) -> &'a B::Buffer {

@@ -5,17 +5,11 @@ use regex::{Captures, Regex};
 use shaderc::CompilationArtifact;
 use std::{collections::HashMap, env, fs::File, io::Read, path::Path};
 use syn::{parse::ParseStream, parse_macro_input, Error, Ident, LitStr, Token};
-use ubo::{BindgenFieldType, BindgenStruct};
+use ubo::{BindgenFieldType, BindgenStruct, ModuleType};
 
 mod ubo;
 
 // input
-
-#[derive(PartialEq, Eq, Hash, Clone, Copy)]
-enum ModuleType {
-    Vertex,
-    Fragment,
-}
 
 struct DefinesInput {
     defines: Vec<(String, Option<String>)>,
@@ -268,7 +262,7 @@ fn read_shader_source(path: String, span: Span) -> syn::Result<String> {
 
 // impl processed
 
-fn glsl_attrib_macros<'a>(source: &'a str) -> (String, Vec<BindgenStruct>) {
+fn glsl_attrib_macros<'a>(source: &'a str, module: ModuleType) -> (String, Vec<BindgenStruct>) {
     let attrib_matcher =
         Regex::new(r#"(\n|^)#\[gears_(bind)?(gen)\(.+\)\](\n?.+)\{([^}]+)*\n?\}.+;"#).unwrap();
 
@@ -279,7 +273,8 @@ fn glsl_attrib_macros<'a>(source: &'a str) -> (String, Vec<BindgenStruct>) {
         .replace_all(source, |caps: &Captures| {
             let cap = &caps[0];
             match syn::parse_str::<BindgenStruct>(cap) {
-                Ok(s) => {
+                Ok(mut s) => {
+                    s.meta.in_module = module;
                     let glsl = format!("\n{}", s.to_glsl());
 
                     // uniforms do not have to be renamed
@@ -326,7 +321,8 @@ impl Pipeline {
             .into_iter()
             .map(|(module_type, input)| {
                 let span = input.span;
-                let (source, mut new_bindgen_structs) = glsl_attrib_macros(input.source.as_str());
+                let (source, mut new_bindgen_structs) =
+                    glsl_attrib_macros(input.source.as_str(), module_type.clone());
                 bindgen_structs.append(&mut new_bindgen_structs);
 
                 let spirv = compile_shader_module(

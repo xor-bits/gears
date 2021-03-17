@@ -3,7 +3,7 @@
 
 #[gears_bindgen(uniform(binding = 0))]
 struct UBO {
-	float time;
+	mat4 model_matrix;
 } ubo;
 
 #[gears_bindgen(in)]
@@ -20,6 +20,6 @@ struct {
 
 
 void main() {
-	gl_Position = vec4(vert_in.pos, 0.0, 1.0);
+	gl_Position = ubo.model_matrix * vec4(vert_in.pos, 0.0, 1.0);
 	vert_out.col = vert_in.col;
 }

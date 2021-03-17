@@ -9,25 +9,24 @@ use gfx_hal::{
     Backend,
 };
 
-use super::{upload_type, Buffer, BufferID, BufferManager};
+use super::{upload_type, Buffer};
 
 pub struct VertexBuffer<B: Backend> {
     buffer: B::Buffer,
     memory: B::Memory,
+
     len: usize,
-    id: BufferID,
 }
 
 impl<B: Backend> VertexBuffer<B> {
     // size = vertex count NOT byte count
     pub fn new<T>(
         device: &B::Device,
-        buffer_manager: &mut BufferManager,
         available_memory_types: &Vec<MemoryType>,
         size: usize,
     ) -> Self {
         let len = size * mem::size_of::<T>();
-        let buffer = unsafe { device.create_buffer(len as u64, Usage::VERTEX) }.unwrap();
+        let mut buffer = unsafe { device.create_buffer(len as u64, Usage::VERTEX) }.unwrap();
         let vertex_buffer_req = unsafe { device.get_buffer_requirements(&buffer) };
 
         let memory = unsafe {
@@ -42,27 +41,18 @@ impl<B: Backend> VertexBuffer<B> {
             )
         }
         .unwrap();
+        unsafe { device.bind_buffer_memory(&memory, 0, &mut buffer) }.unwrap();
 
         Self {
             buffer,
             memory,
             len,
-            id: buffer_manager.next(),
         }
     }
 
-    pub fn write<T>(
-        &mut self,
-        device: &B::Device,
-        buffer_manager: &mut BufferManager,
-        offset: usize,
-        data: &[T],
-    ) {
+    pub fn write<T>(&mut self, device: &B::Device, offset: usize, data: &[T]) {
         unsafe {
             // map
-            buffer_manager
-                .bind_memory::<B>(device, &self.memory, 0, &mut self.buffer, self.id)
-                .unwrap();
             let mapping = device.map_memory(&mut self.memory, Segment::ALL).unwrap();
 
             let written_len = mem::size_of::<T>() * data.len();

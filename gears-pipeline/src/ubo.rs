@@ -7,6 +7,12 @@ use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenS
 use quote::{ToTokens, TokenStreamExt};
 use syn::{ext::IdentExt, parse::ParseStream, Error, Token};
 
+#[derive(PartialEq, Eq, Hash, Clone, Copy)]
+pub enum ModuleType {
+    Vertex,
+    Fragment,
+}
+
 #[derive(Debug)]
 pub enum StructFieldType {
     Float(),
@@ -44,6 +50,7 @@ pub struct BindgenStruct {
 pub struct BindgenFields {
     pub bind: bool,
     pub bind_type: BindgenFieldType,
+    pub in_module: ModuleType,
 }
 
 pub enum BindgenFieldType {
@@ -196,6 +203,7 @@ impl syn::parse::Parse for BindgenFields {
                 _ => panic!("Unknown BindgenFields: {}", ident),
             },
             bind_type,
+            in_module: ModuleType::Vertex,
         })
     }
 }
@@ -302,43 +310,8 @@ impl BindgenStruct {
             }
         }
     }
-}
 
-impl StructFieldType {
-    pub fn to_glsl(&self) -> &'static str {
-        match self {
-            StructFieldType::Float() => "float",
-            StructFieldType::Float2() => "vec2",
-            StructFieldType::Float3() => "vec3",
-            StructFieldType::Float4() => "vec4",
-
-            StructFieldType::Mat2x2() => "mat2",
-            StructFieldType::Mat3x3() => "mat3",
-            StructFieldType::Mat4x4() => "mat4",
-        }
-    }
-}
-
-impl ToTokens for BindgenStruct {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        tokens.append(Ident::new("pub", Span::call_site()));
-        tokens.append(Ident::new("struct", Span::call_site()));
-
-        tokens.append(Ident::new(self.struct_name.as_str(), Span::call_site()));
-
-        let mut struct_tokens = TokenStream::new();
-        for field in self.fields.fields.iter() {
-            field.to_tokens(&mut struct_tokens);
-        }
-        tokens.append(Group::new(Delimiter::Brace, struct_tokens));
-
-        let namespacer = |namespace: &'static str, tokens: &mut TokenStream| {
-            tokens.append(Ident::new(namespace, Span::call_site()));
-            tokens.append(Punct::new(':', Spacing::Joint));
-            tokens.append(Punct::new(':', Spacing::Joint));
-        };
-
-        // impls
+    fn in_out_to_tokens(&self, tokens: &mut TokenStream) {
         tokens.append(Ident::new("impl", Span::call_site()));
         namespacer("gears_traits", tokens);
         tokens.append(Ident::new("Vertex", Span::call_site()));
@@ -452,7 +425,7 @@ impl ToTokens for BindgenStruct {
                                 element.append(Ident::new("offset", Span::call_site()));
                                 element.append(Punct::new(':', Spacing::Alone));
                                 element.append(Literal::u32_unsuffixed(
-                                    (i * field.field_type.format_offset()) as u32,
+                                    (field.offset + i * field.field_type.format_offset()) as u32,
                                 ));
                                 element
                             };
@@ -476,40 +449,85 @@ impl ToTokens for BindgenStruct {
         };
 
         tokens.append(Group::new(Delimiter::Brace, impl_tokens));
-
-        /*
-
-        fn binding_desc() -> Vec<VertexBufferDesc> {
-            vec![VertexBufferDesc {
-                binding: 0,
-                rate: VertexInputRate::Vertex,
-                stride: std::mem::size_of::<VertexData>() as u32,
-            }]
-        }
-
-        fn attribute_desc() -> Vec<AttributeDesc> {
-            vec![
-                AttributeDesc {
-                    binding: 0,
-                    location: 0,
-                    element: Element {
-                        format: Format::Rg32Sfloat,
-                        offset: 0,
-                    },
-                },
-                AttributeDesc {
-                    binding: 0,
-                    location: 1,
-                    element: Element {
-                        format: Format::Rgb32Sfloat,
-                        offset: 4 * 2,
-                    },
-                },
-            ]
-        }
-
-        */
     }
+
+    fn uniform_to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.append(Ident::new("impl", Span::call_site()));
+        namespacer("gears_traits", tokens);
+        tokens.append(Ident::new("UBO", Span::call_site()));
+        tokens.append(Ident::new("for", Span::call_site()));
+        tokens.append(Ident::new(self.struct_name.as_str(), Span::call_site()));
+
+        let impl_tokens = {
+            let mut impl_tokens = TokenStream::new();
+            impl_tokens.append(Ident::new("const", Span::call_site()));
+            impl_tokens.append(Ident::new("STAGE", Span::call_site()));
+            impl_tokens.append(Punct::new(':', Spacing::Alone));
+
+            namespacer("gears_traits", &mut impl_tokens);
+            impl_tokens.append(Ident::new("ShaderStageFlags", Span::call_site()));
+
+            impl_tokens.append(Punct::new('=', Spacing::Alone));
+
+            namespacer("gears_traits", &mut impl_tokens);
+            namespacer("ShaderStageFlags", &mut impl_tokens);
+            impl_tokens.append(Ident::new(
+                match self.meta.in_module {
+                    ModuleType::Vertex => "VERTEX",
+                    ModuleType::Fragment => "FRAGMENT",
+                },
+                Span::call_site(),
+            ));
+
+            impl_tokens.append(Punct::new(';', Spacing::Alone));
+
+            impl_tokens
+        };
+        tokens.append(Group::new(Delimiter::Brace, impl_tokens));
+    }
+}
+
+impl StructFieldType {
+    pub fn to_glsl(&self) -> &'static str {
+        match self {
+            StructFieldType::Float() => "float",
+            StructFieldType::Float2() => "vec2",
+            StructFieldType::Float3() => "vec3",
+            StructFieldType::Float4() => "vec4",
+
+            StructFieldType::Mat2x2() => "mat2",
+            StructFieldType::Mat3x3() => "mat3",
+            StructFieldType::Mat4x4() => "mat4",
+        }
+    }
+}
+
+impl ToTokens for BindgenStruct {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.append(Ident::new("pub", Span::call_site()));
+        tokens.append(Ident::new("struct", Span::call_site()));
+
+        tokens.append(Ident::new(self.struct_name.as_str(), Span::call_site()));
+
+        let mut struct_tokens = TokenStream::new();
+        for field in self.fields.fields.iter() {
+            field.to_tokens(&mut struct_tokens);
+        }
+        tokens.append(Group::new(Delimiter::Brace, struct_tokens));
+
+        // impls
+
+        match &self.meta.bind_type {
+            BindgenFieldType::Uniform(_) => self.uniform_to_tokens(tokens),
+            BindgenFieldType::In | BindgenFieldType::Out => self.in_out_to_tokens(tokens),
+        }
+    }
+}
+
+fn namespacer(namespace: &'static str, tokens: &mut TokenStream) {
+    tokens.append(Ident::new(namespace, Span::call_site()));
+    tokens.append(Punct::new(':', Spacing::Joint));
+    tokens.append(Punct::new(':', Spacing::Joint));
 }
 
 impl ToTokens for StructField {
@@ -549,17 +567,17 @@ impl ToTokens for StructField {
 
             StructFieldType::Mat2x2() => {
                 append_cgmath(tokens);
-                tokens.append(Ident::new("Matrix2x2", Span::call_site()));
+                tokens.append(Ident::new("Matrix2", Span::call_site()));
                 append_f32(tokens);
             }
             StructFieldType::Mat3x3() => {
                 append_cgmath(tokens);
-                tokens.append(Ident::new("Matrix3x3", Span::call_site()));
+                tokens.append(Ident::new("Matrix3", Span::call_site()));
                 append_f32(tokens);
             }
             StructFieldType::Mat4x4() => {
                 append_cgmath(tokens);
-                tokens.append(Ident::new("Matrix4x4", Span::call_site()));
+                tokens.append(Ident::new("Matrix4", Span::call_site()));
                 append_f32(tokens);
             }
         };

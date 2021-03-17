@@ -1,9 +1,10 @@
-pub mod vertex;
-
-pub use vertex::*;
-
-use gears_traits::Vertex;
-use std::{any::TypeId, collections::HashMap, io::Cursor, iter, mem};
+use gears_traits::{Vertex, UBO};
+use std::{
+    any::{type_name, TypeId},
+    collections::HashMap,
+    io::Cursor,
+    iter, mem,
+};
 
 use gfx_hal::{
     adapter::MemoryType,
@@ -21,7 +22,7 @@ use gfx_hal::{
     Backend,
 };
 
-use super::buffer::UniformBuffer;
+use super::buffer::{Buffer, UniformBuffer};
 
 pub struct PipelineBuilder<'a, B: Backend> {
     device: &'a B::Device,
@@ -39,7 +40,14 @@ pub struct PipelineBuilder<'a, B: Backend> {
 
 pub struct Pipeline<B: Backend> {
     desc_pool: Option<B::DescriptorPool>,
+
+    desc_set_layout: B::DescriptorSetLayout,
+    desc_sets: Vec<B::DescriptorSet>,
+
+    pipeline_layout: B::PipelineLayout,
     pipeline: B::GraphicsPipeline,
+
+    ubos: HashMap<TypeId, Vec<UniformBuffer<B>>>,
 }
 
 impl<'a, B: Backend> PipelineBuilder<'a, B> {
@@ -85,7 +93,7 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
         self
     }
 
-    pub fn build(self) -> Pipeline<B> {
+    pub fn build(self, set_count: usize) -> Pipeline<B> {
         let vert_module = {
             let spirv = gfx_auxil::read_spirv(Cursor::new(&self.vert_spirv.unwrap()[..])).unwrap();
             unsafe { self.device.create_shader_module(&spirv) }
@@ -124,7 +132,7 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
             })
             .collect::<Vec<_>>();
 
-        let descriptor_ranges = self.ubos.iter().map(|ubo| DescriptorRangeDesc {
+        let descriptor_ranges = self.ubos.iter().map(|_| DescriptorRangeDesc {
             ty: DescriptorType::Buffer {
                 format: BufferDescriptorFormat::Structured {
                     dynamic_offset: false,
@@ -134,44 +142,54 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
             count: 1,
         });
 
-        let set_layout = unsafe {
+        let desc_set_layout = unsafe {
             self.device
                 .create_descriptor_set_layout(bindings.into_iter(), iter::empty())
         }
         .expect("Could not create a descriptor set layout");
 
-        let desc_pool = if descriptor_ranges.len() > 0 {
+        let (desc_pool, desc_sets) = if descriptor_ranges.len() > 0 {
             let mut desc_pool = unsafe {
                 self.device.create_descriptor_pool(
-                    1,
+                    set_count,
                     descriptor_ranges.into_iter(),
                     DescriptorPoolCreateFlags::empty(),
                 )
             }
             .expect("Could not create a descriptor pool");
-            let mut desc_set = unsafe { desc_pool.allocate_one(&set_layout) }.unwrap();
 
-            Some(desc_pool)
+            let desc_sets = (0..set_count)
+                .into_iter()
+                .map(|_| unsafe { desc_pool.allocate_one(&desc_set_layout) }.unwrap())
+                .collect();
+
+            (Some(desc_pool), desc_sets)
         } else {
-            None
+            (None, Vec::new())
         };
 
-        /* let uniform_buffer = UniformBuffer::<B>::new(self.device, self.available_memory_types, 1);
-
-        unsafe {
-            self.device.write_descriptor_set(DescriptorSetWrite {
-                set: &mut desc_set,
-                descriptors: iter::once(Descriptor::Buffer(uniform_buffer.get(), SubRange::WHOLE)),
-                array_offset: 0,
-                binding: 0,
-            });
-        } */
-
-        /* gears::renderer::pipeline::UBO; */
+        let ubos = {
+            let device = self.device;
+            let available_memory_types = self.available_memory_types;
+            self.ubos
+                .into_iter()
+                .map(|ubo| {
+                    (
+                        ubo.0.clone(),
+                        (0..set_count)
+                            .into_iter()
+                            .map(|_| {
+                                UniformBuffer::<B>::new(device, available_memory_types, ubo.1 .1)
+                            })
+                            .collect(),
+                    )
+                })
+                .collect::<HashMap<_, _>>()
+        };
 
         let pipeline_layout = unsafe {
             self.device
-                .create_pipeline_layout(iter::once(&set_layout), iter::empty())
+                .create_pipeline_layout(iter::once(&desc_set_layout), iter::empty())
         }
         .expect("Could not create a pipeline layout");
 
@@ -207,8 +225,6 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
         let pipeline = unsafe { self.device.create_graphics_pipeline(&pipeline_desc, None) };
 
         unsafe {
-            self.device.destroy_pipeline_layout(pipeline_layout);
-            self.device.destroy_descriptor_set_layout(set_layout);
             self.device.destroy_shader_module(frag_module);
             self.device.destroy_shader_module(vert_module);
         }
@@ -217,22 +233,75 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
 
         Pipeline::<B> {
             desc_pool,
+
+            desc_sets,
+            desc_set_layout,
+
+            pipeline_layout,
             pipeline,
+
+            ubos,
         }
     }
 }
 
 impl<B: Backend> Pipeline<B> {
-    pub fn bind(&self, command_buffer: &mut B::CommandBuffer) {
-        unsafe { command_buffer.bind_graphics_pipeline(&self.pipeline) };
+    pub fn bind(&self, command_buffer: &mut B::CommandBuffer, set_index: usize) {
+        unsafe {
+            command_buffer.bind_graphics_pipeline(&self.pipeline);
+
+            if let Some(desc_set) = self.desc_sets.get(set_index) {
+                command_buffer.bind_graphics_descriptor_sets(
+                    &self.pipeline_layout,
+                    0,
+                    iter::once(desc_set),
+                    iter::empty(),
+                );
+            }
+        }
+    }
+
+    pub fn write_ubo<U: 'static + UBO>(
+        &mut self,
+        device: &B::Device,
+        new_data: U,
+        set_index: usize,
+    ) {
+        if let Some(ubo_set) = self.ubos.get_mut(&TypeId::of::<U>()) {
+            let ubo = &mut ubo_set[set_index];
+            let set = &mut self.desc_sets[set_index];
+            ubo.write(device, 0, &[new_data]);
+
+            unsafe {
+                device.write_descriptor_set(DescriptorSetWrite {
+                    set,
+                    descriptors: iter::once(Descriptor::Buffer(ubo.get(), SubRange::WHOLE)),
+                    array_offset: 0,
+                    binding: 0,
+                });
+            }
+        } else {
+            panic!(
+                "Type {:?} is not an UBO for tihs pipeline",
+                type_name::<U>()
+            );
+        }
     }
 
     pub fn destroy(self, device: &B::Device) {
         unsafe {
+            for (_, ubo_set) in self.ubos {
+                for ubo in ubo_set {
+                    ubo.destroy(device);
+                }
+            }
+
+            device.destroy_pipeline_layout(self.pipeline_layout);
+            device.destroy_graphics_pipeline(self.pipeline);
+            device.destroy_descriptor_set_layout(self.desc_set_layout);
             if let Some(desc_pool) = self.desc_pool {
                 device.destroy_descriptor_pool(desc_pool);
             }
-            device.destroy_graphics_pipeline(self.pipeline);
         }
     }
 }

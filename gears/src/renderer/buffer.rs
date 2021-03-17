@@ -6,18 +6,10 @@ pub use vertex::*;
 
 use gfx_hal::{
     adapter::MemoryType,
-    device::{BindError, Device},
     memory::{Properties, Requirements},
     Backend, MemoryTypeId,
 };
-use log::{debug, warn};
-
-type BufferID = usize;
-
-pub struct BufferManager {
-    next_id: BufferID,
-    bound_id: BufferID,
-}
+use log::warn;
 
 pub trait Buffer<B: Backend> {
     /* fn new<T>(
@@ -27,38 +19,6 @@ pub trait Buffer<B: Backend> {
         size: usize,
     ) -> Self; */
     fn destroy(self, device: &B::Device);
-}
-
-impl BufferManager {
-    pub fn new() -> Self {
-        Self {
-            next_id: 1,
-            bound_id: 0,
-        }
-    }
-
-    fn next(&mut self) -> BufferID {
-        let result = self.next_id;
-        self.next_id += 1;
-        result
-    }
-
-    fn bind_memory<B: Backend>(
-        &mut self,
-        device: &B::Device,
-        memory: &B::Memory,
-        offset: u64,
-        buffer: &mut B::Buffer,
-        id: BufferID,
-    ) -> Result<(), BindError> {
-        if self.bound_id != id {
-            self.bound_id = id;
-            debug!("Binding memory: {}", id);
-            unsafe { device.bind_buffer_memory(memory, offset, buffer) }
-        } else {
-            Ok(())
-        }
-    }
 }
 
 fn find_mem_type(

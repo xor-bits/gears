@@ -1,8 +1,15 @@
+mod shader {
+    gears_pipeline::pipeline! {
+        vs: { path: "res/default.vert.glsl" }
+        fs: { path: "res/default.frag.glsl" }
+    }
+}
+
 mod buffer;
 mod pipeline;
 pub mod queue;
 
-use cgmath::{Matrix2, Rad, Vector2, Vector3};
+use cgmath::{Matrix2, Matrix4, Rad, Vector2, Vector3};
 use log::*;
 
 use std::{
@@ -33,16 +40,9 @@ use gfx_hal::{
 use pipeline::{Pipeline, PipelineBuilder};
 
 use self::{
-    buffer::{Buffer, BufferManager, VertexBuffer},
+    buffer::{Buffer, VertexBuffer},
     queue::{QueueFamilies, Queues},
 };
-
-mod shader {
-    gears_pipeline::pipeline! {
-        vs: { path: "res/default.vert.glsl" }
-        fs: { path: "res/default.frag.glsl" }
-    }
-}
 
 #[derive(Debug)]
 pub enum RendererError {
@@ -64,7 +64,6 @@ pub struct GearsRenderer<B: Backend> {
     framebuffer: ManuallyDrop<B::Framebuffer>,
     surface: ManuallyDrop<B::Surface>,
 
-    buffer_manager: BufferManager,
     queues: Pin<Box<Queues<B>>>,
     device: B::Device,
     adapter: Adapter<B>,
@@ -77,6 +76,7 @@ pub struct GearsRenderer<B: Backend> {
     frames_in_flight: usize,
     frame_counter: usize,
     frame_counter_tp: instant::Instant,
+    start_tp: instant::Instant,
 }
 
 impl<B: Backend> GearsRenderer<B> {
@@ -188,25 +188,50 @@ impl<B: Backend> GearsRenderer<B> {
         });
 
         // graphics pipeline
+        let frames_in_flight = 3;
         let memory_types = adapter.physical_device.memory_properties().memory_types;
         let pipeline = PipelineBuilder::new(&device, &*render_pass, &memory_types)
             .with_input::<shader::VertexData>()
             .with_module_vert(shader::VERT_SPIRV)
             .with_module_frag(shader::FRAG_SPIRV)
-            .build();
+            .with_ubo::<shader::UBO>()
+            .build(frames_in_flight);
         let pipeline = ManuallyDrop::new(pipeline);
 
+        // create vertex buffer
         debug!("memory_types: {:?}", memory_types);
-        let mut buffer_manager = BufferManager::new();
-        let vertex_buffer = ManuallyDrop::new(VertexBuffer::new::<shader::VertexData>(
+        let mut vertex_buffer = ManuallyDrop::new(VertexBuffer::new::<shader::VertexData>(
             &device,
-            &mut buffer_manager,
             &memory_types,
             3,
         ));
 
+        // fill vertex buffer
+        let rotation_matrix_trig = Matrix2::<f32>::from_angle(Rad {
+            0: std::f32::consts::PI * 2.0 / 3.0,
+        });
+
+        let vert_a = rotation_matrix_trig * Vector2::new(0.0, -0.8);
+        let vert_b = rotation_matrix_trig * vert_a;
+        let vert_c = rotation_matrix_trig * vert_b;
+
+        let vertices = [
+            shader::VertexData {
+                pos: vert_a,
+                col: Vector3::new(1.0, 0.0, 0.0),
+            },
+            shader::VertexData {
+                pos: vert_b,
+                col: Vector3::new(0.0, 1.0, 0.0),
+            },
+            shader::VertexData {
+                pos: vert_c,
+                col: Vector3::new(0.0, 0.0, 1.0),
+            },
+        ];
+        vertex_buffer.write(&device, 0, &vertices);
+
         // command pool for every 'frame in flight'
-        let frames_in_flight = 3;
         let submit_semaphores = (0..frames_in_flight)
             .map(|_| {
                 device
@@ -244,7 +269,6 @@ impl<B: Backend> GearsRenderer<B> {
             framebuffer,
             surface: ManuallyDrop::new(surface),
 
-            buffer_manager,
             queues,
             device,
             adapter,
@@ -257,6 +281,7 @@ impl<B: Backend> GearsRenderer<B> {
             frames_in_flight,
             frame_counter: 0,
             frame_counter_tp: instant::Instant::now(),
+            start_tp: instant::Instant::now(),
         }
     }
 
@@ -278,35 +303,6 @@ impl<B: Backend> GearsRenderer<B> {
             }
         };
 
-        let rotation_matrix_trig = Matrix2::<f32>::from_angle(Rad {
-            0: std::f32::consts::PI * 2.0 / 3.0,
-        });
-
-        let rotation_matrix_time = Matrix2::<f32>::from_angle(Rad {
-            0: (self.frame as f32) / 50.0 / self.frames_in_flight as f32,
-        });
-
-        let vert_a = rotation_matrix_time * rotation_matrix_trig * Vector2::new(0.0, -0.8);
-        let vert_b = rotation_matrix_trig * vert_a;
-        let vert_c = rotation_matrix_trig * vert_b;
-
-        let vertices = [
-            shader::VertexData {
-                pos: vert_a,
-                col: Vector3::new(1.0, 0.0, 0.0),
-            },
-            shader::VertexData {
-                pos: vert_b,
-                col: Vector3::new(0.0, 1.0, 0.0),
-            },
-            shader::VertexData {
-                pos: vert_c,
-                col: Vector3::new(0.0, 0.0, 1.0),
-            },
-        ];
-        self.vertex_buffer
-            .write(&self.device, &mut self.buffer_manager, 0, &vertices);
-
         let frame = self.frame % self.frames_in_flight;
         self.frame += 1;
         self.frame_counter += 1;
@@ -322,6 +318,13 @@ impl<B: Backend> GearsRenderer<B> {
             self.command_pools[frame].reset(false);
             fence
         };
+
+        let ubo = shader::UBO {
+            model_matrix: Matrix4::from_angle_z(Rad {
+                0: self.start_tp.elapsed().as_secs_f32(),
+            }),
+        };
+        self.pipeline.write_ubo(&self.device, ubo, frame);
 
         // print average fps every 3 seconds
         let avg_fps_interval = instant::Duration::from_secs_f32(3.0);
@@ -364,7 +367,7 @@ impl<B: Backend> GearsRenderer<B> {
             );
 
             // main draw
-            self.pipeline.bind(command_buffer);
+            self.pipeline.bind(command_buffer, frame);
             self.vertex_buffer.bind(command_buffer);
             command_buffer.draw(0..3, 0..1);
 
