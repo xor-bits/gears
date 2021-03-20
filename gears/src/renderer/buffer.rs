@@ -1,7 +1,9 @@
+pub mod image;
 pub mod index;
 pub mod uniform;
 pub mod vertex;
 
+pub use image::*;
 pub use index::*;
 pub use uniform::*;
 pub use vertex::*;

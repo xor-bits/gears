@@ -1,6 +1,6 @@
 extern crate gears;
 
-use gears::Gears;
+use gears::{GearsBuilder, VSync};
 #[cfg(target_arch = "wasm32")]
 use log::*;
 #[cfg(target_arch = "wasm32")]
@@ -23,6 +23,6 @@ fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     env_logger::init();
 
-    let gears = Gears::new(600, 600, false);
+    let gears = GearsBuilder::new().with_vsync(VSync::Off).build();
     gears.run();
 }

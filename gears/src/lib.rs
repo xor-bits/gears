@@ -25,7 +25,25 @@ use renderer::{queue::QueueFamilies, GearsRenderer};
 
 use colored::Colorize;
 use gfx_hal::{adapter::Adapter, window::Extent2D, Instance};
-use winit::event_loop::EventLoop;
+use winit::{dpi::LogicalSize, event_loop::EventLoop};
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum VSync {
+    Off,
+    On,
+}
+
+pub trait Application {}
+
+pub struct GearsBuilder {
+    title: String,
+
+    min_size: LogicalSize<u32>,
+    initial_size: LogicalSize<u32>,
+    max_size: Option<LogicalSize<u32>>,
+
+    vsync: VSync,
+}
 
 pub struct Gears {
     event_loop: EventLoop<()>,
@@ -33,16 +51,50 @@ pub struct Gears {
     renderer: GearsRenderer<gfx_back::Backend>,
 }
 
-fn adapter_to_string<B: gfx_hal::Backend>(adapter: &Adapter<B>) -> String {
-    format!(
-        "{} (type:{})",
-        adapter.info.name.cyan(),
-        format!("{:?}", adapter.info.device_type).green(),
-    )
+impl Default for GearsBuilder {
+    fn default() -> Self {
+        Self {
+            title: "Gears".into(),
+            min_size: LogicalSize::new(64, 64),
+            initial_size: LogicalSize::new(600, 600),
+            max_size: None,
+
+            vsync: VSync::On,
+        }
+    }
 }
 
-impl Gears {
-    pub fn new(width: u32, height: u32, vsync: bool) -> Self {
+impl GearsBuilder {
+    pub fn new() -> Self {
+        GearsBuilder::default()
+    }
+
+    pub fn with_title<S: Into<String>>(mut self, title: S) -> Self {
+        self.title = title.into();
+        self
+    }
+
+    pub fn with_min_size(mut self, width: u32, height: u32) -> Self {
+        self.min_size = LogicalSize::new(width, height);
+        self
+    }
+
+    pub fn with_size(mut self, width: u32, height: u32) -> Self {
+        self.initial_size = LogicalSize::new(width, height);
+        self
+    }
+
+    pub fn with_max_size(mut self, width: u32, height: u32) -> Self {
+        self.max_size = Some(LogicalSize::new(width, height));
+        self
+    }
+
+    pub fn with_vsync(mut self, vsync: VSync) -> Self {
+        self.vsync = vsync;
+        self
+    }
+
+    pub fn build(self) -> Gears {
         #[cfg(not(any(
             feature = "vulkan",
             feature = "dx11",
@@ -52,18 +104,15 @@ impl Gears {
         )))]
         warn!("Empty backend will have no graphical output");
 
-        let title = "Gears";
-        let name = "gears";
-
         let event_loop = winit::event_loop::EventLoop::new();
-        let _window = winit::window::WindowBuilder::new()
-            .with_min_inner_size(winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(
-                64.0, 64.0,
-            )))
-            .with_inner_size(winit::dpi::Size::Physical(winit::dpi::PhysicalSize::new(
-                width, height,
-            )))
-            .with_title(title)
+        let mut window_builder = winit::window::WindowBuilder::new()
+            .with_min_inner_size(self.min_size)
+            .with_inner_size(self.initial_size);
+        if let Some(max_size) = self.max_size {
+            window_builder = window_builder.with_max_inner_size(max_size);
+        }
+        let _window = window_builder
+            .with_title(self.title)
             .build(&event_loop)
             .unwrap();
 
@@ -77,7 +126,8 @@ impl Gears {
             .append_child(&winit::platform::web::WindowExtWebSys::canvas(&_window))
             .unwrap();
 
-        let instance = gfx_back::Instance::create(name, 1).expect("Failed to create an instance");
+        let instance =
+            gfx_back::Instance::create("gears", 1).expect("Failed to create an instance");
 
         let surface = unsafe {
             instance
@@ -127,17 +177,30 @@ impl Gears {
             surface,
             adapter,
             queue_families,
-            Extent2D { width, height },
-            vsync,
+            Extent2D {
+                width: self.initial_size.width,
+                height: self.initial_size.height,
+            },
+            self.vsync == VSync::On,
         );
 
-        Self {
+        Gears {
             event_loop,
             _window,
             renderer,
         }
     }
+}
 
+fn adapter_to_string<B: gfx_hal::Backend>(adapter: &Adapter<B>) -> String {
+    format!(
+        "{} (type:{})",
+        adapter.info.name.cyan(),
+        format!("{:?}", adapter.info.device_type).green(),
+    )
+}
+
+impl Gears {
     pub fn run(self) {
         let mut renderer = self.renderer;
         renderer.render();

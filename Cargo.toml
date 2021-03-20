@@ -2,5 +2,6 @@
 members = [
 	"examples",
 	"gears",
-	"gears-pipeline"
+	"gears-pipeline",
+	"gears-traits"
 ]

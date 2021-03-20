@@ -1,5 +1,5 @@
 use std::{
-    collections::hash_map::DefaultHasher,
+    collections::{hash_map::DefaultHasher, HashMap},
     hash::{Hash, Hasher},
 };
 
@@ -11,6 +11,19 @@ use syn::{ext::IdentExt, parse::ParseStream, Error, Token};
 pub enum ModuleType {
     Vertex,
     Fragment,
+}
+
+#[derive(Debug)]
+enum BindingLocation {
+    Binding(Binding),
+    Location(Location),
+}
+
+pub struct StructRegistry {
+    map: HashMap<String, BindingLocation>,
+    latest_binding: Binding,
+    latest_location_in: Location,
+    latest_location_out: Location,
 }
 
 #[derive(Debug)]
@@ -53,13 +66,56 @@ pub struct BindgenFields {
     pub in_module: ModuleType,
 }
 
+#[derive(Debug)]
 pub enum BindgenFieldType {
-    Uniform(Binding),
-    In,
-    Out,
+    Uniform(Option<Binding>),
+    In(Option<Location>),
+    Out(Option<Location>),
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Binding(u32);
+
+#[derive(Debug, Clone, Copy)]
+pub struct Location(u32);
+
+impl StructRegistry {
+    pub fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            latest_binding: Binding(0),
+            latest_location_in: Location(0),
+            latest_location_out: Location(0),
+        }
+    }
+
+    pub fn next_module(&mut self) {
+        self.latest_binding = Binding(0);
+        self.latest_location_in = Location(0);
+        self.latest_location_out = Location(0);
+    }
+
+    pub fn push_binding(&mut self, name: String) -> Binding {
+        let res = self.latest_binding;
+        self.map.insert(name, BindingLocation::Binding(res));
+        self.latest_binding.0 += 1;
+        res
+    }
+
+    pub fn push_location_in(&mut self, name: String) -> Location {
+        let res = self.latest_location_in;
+        self.map.insert(name, BindingLocation::Location(res));
+        self.latest_location_in.0 += 1;
+        res
+    }
+
+    pub fn push_location_out(&mut self, name: String) -> Location {
+        let res = self.latest_location_out;
+        self.map.insert(name, BindingLocation::Location(res));
+        self.latest_location_out.0 += 1;
+        res
+    }
+}
 
 impl StructFieldType {
     pub fn size(&self) -> usize {
@@ -212,36 +268,11 @@ impl syn::parse::Parse for BindgenFieldType {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let ident = input.call(Ident::parse_any)?.to_string();
         Ok(match ident.as_str() {
-            "in" => Self::In,
-            "out" => Self::Out,
-            "uniform" => Self::Uniform(syn::parse::<Binding>(
-                input.parse::<Group>()?.stream().into(),
-            )?),
+            "in" => Self::In(None),
+            "out" => Self::Out(None),
+            "uniform" => Self::Uniform(None),
             _ => panic!("Unknown BindgenFieldType: {}", ident),
         })
-    }
-}
-
-impl syn::parse::Parse for Binding {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let ident = input.parse::<Ident>()?;
-        let string = ident.to_string();
-        if string != "binding" {
-            Err(Error::new(
-                ident.span(),
-                format!("expected identifier 'binding', found '{}'", string),
-            ))
-        } else {
-            input.parse::<Token![=]>()?;
-
-            let index_lit = input.parse::<Literal>()?;
-            let index = index_lit.to_string().parse::<u32>().or(Err(Error::new(
-                index_lit.span(),
-                format!("Could not parse '{}' as u32", index_lit.to_string()),
-            )))?;
-
-            Ok(Binding(index))
-        }
     }
 }
 
@@ -267,6 +298,39 @@ impl syn::parse::Parse for StructFieldType {
 // impl process
 
 impl BindgenStruct {
+    pub fn generate(&mut self, reg: &mut StructRegistry) {
+        match (&mut self.meta.bind_type, reg.map.get(&self.struct_name)) {
+            (BindgenFieldType::Uniform(i), Some(BindingLocation::Binding(new_i))) => {
+                *i = Some(*new_i);
+            }
+            (BindgenFieldType::Uniform(i), None) => {
+                let binding = reg.push_binding(self.struct_name.clone());
+                *i = Some(binding);
+            }
+            (BindgenFieldType::In(i), Some(BindingLocation::Location(new_i))) => {
+                *i = Some(*new_i);
+            }
+            (BindgenFieldType::In(i), None) => {
+                let binding = reg.push_location_in(self.struct_name.clone());
+                *i = Some(binding);
+            }
+            (BindgenFieldType::Out(i), Some(BindingLocation::Location(new_i))) => {
+                *i = Some(*new_i);
+            }
+            (BindgenFieldType::Out(i), None) => {
+                let binding = reg.push_location_out(self.struct_name.clone());
+                *i = Some(binding);
+            }
+
+            _ => panic!(
+                "Gen struct {} expected {:?} but got {:?}",
+                self.struct_name,
+                self.meta.bind_type,
+                reg.map.get(&self.struct_name)
+            ),
+        };
+    }
+
     pub fn to_glsl(&self) -> String {
         match &self.meta.bind_type {
             BindgenFieldType::Uniform(i) => {
@@ -282,14 +346,17 @@ impl BindgenStruct {
 
                 format!(
                     "layout(binding = {}) uniform {} {{{}}} {};",
-                    i.0, self.struct_name, fields, self.field_name
+                    i.as_ref().expect("BindgenStruct bindings not generated").0,
+                    self.struct_name,
+                    fields,
+                    self.field_name
                 )
             }
-            BindgenFieldType::In | BindgenFieldType::Out => {
-                let mut first_i = 0;
+            BindgenFieldType::In(l) | BindgenFieldType::Out(l) => {
+                let mut first_i = l.as_ref().expect("BindgenStruct locations not generated").0;
                 let mut layouts = String::new();
                 let is_in = match self.meta.bind_type {
-                    BindgenFieldType::In => true,
+                    BindgenFieldType::In(_) => true,
                     _ => false,
                 };
 
@@ -493,11 +560,6 @@ impl BindgenStruct {
         tokens.append(Ident::new(self.struct_name.as_str(), Span::call_site()));
 
         let impl_tokens = {
-            /*
-            fn default() -> Self {
-                todo!()
-            } */
-
             let empty_tokens = TokenStream::new();
             let mut impl_tokens = TokenStream::new();
 
@@ -522,30 +584,39 @@ impl BindgenStruct {
                             }
                             StructFieldType::Float2() => {
                                 namespacer("cgmath", &mut self_tokens);
-                                namespacer("Float2", &mut self_tokens);
+                                namespacer("Vector2", &mut self_tokens);
                                 self_tokens.append(Ident::new("new", Span::call_site()));
                                 let mut value_tokens = TokenStream::new();
+                                value_tokens.append(Literal::f32_suffixed(0.0));
+                                value_tokens.append(Punct::new(',', Spacing::Alone));
                                 value_tokens.append(Literal::f32_suffixed(0.0));
                                 self_tokens
                                     .append(Group::new(Delimiter::Parenthesis, value_tokens));
                             }
                             StructFieldType::Float3() => {
                                 namespacer("cgmath", &mut self_tokens);
-                                namespacer("Float3", &mut self_tokens);
+                                namespacer("Vector3", &mut self_tokens);
                                 self_tokens.append(Ident::new("new", Span::call_site()));
                                 let mut value_tokens = TokenStream::new();
                                 value_tokens.append(Literal::f32_suffixed(0.0));
+                                value_tokens.append(Punct::new(',', Spacing::Alone));
+                                value_tokens.append(Literal::f32_suffixed(0.0));
+                                value_tokens.append(Punct::new(',', Spacing::Alone));
                                 value_tokens.append(Literal::f32_suffixed(0.0));
                                 self_tokens
                                     .append(Group::new(Delimiter::Parenthesis, value_tokens));
                             }
                             StructFieldType::Float4() => {
                                 namespacer("cgmath", &mut self_tokens);
-                                namespacer("Float4", &mut self_tokens);
+                                namespacer("Vector4", &mut self_tokens);
                                 self_tokens.append(Ident::new("new", Span::call_site()));
                                 let mut value_tokens = TokenStream::new();
                                 value_tokens.append(Literal::f32_suffixed(0.0));
+                                value_tokens.append(Punct::new(',', Spacing::Alone));
                                 value_tokens.append(Literal::f32_suffixed(0.0));
+                                value_tokens.append(Punct::new(',', Spacing::Alone));
+                                value_tokens.append(Literal::f32_suffixed(0.0));
+                                value_tokens.append(Punct::new(',', Spacing::Alone));
                                 value_tokens.append(Literal::f32_suffixed(0.0));
                                 self_tokens
                                     .append(Group::new(Delimiter::Parenthesis, value_tokens));
@@ -616,6 +687,18 @@ impl StructFieldType {
 
 impl ToTokens for BindgenStruct {
     fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.append(Punct::new('#', Spacing::Joint));
+        let mut derive_tokens = TokenStream::new();
+        derive_tokens.append(Ident::new("Debug", Span::call_site()));
+        derive_tokens.append(Punct::new(',', Spacing::Alone));
+        derive_tokens.append(Ident::new("Copy", Span::call_site()));
+        derive_tokens.append(Punct::new(',', Spacing::Alone));
+        derive_tokens.append(Ident::new("Clone", Span::call_site()));
+        let mut attrib_tokens = TokenStream::new();
+        attrib_tokens.append(Ident::new("derive", Span::call_site()));
+        attrib_tokens.append(Group::new(Delimiter::Parenthesis, derive_tokens));
+        tokens.append(Group::new(Delimiter::Bracket, attrib_tokens));
+
         tokens.append(Ident::new("pub", Span::call_site()));
         tokens.append(Ident::new("struct", Span::call_site()));
 
@@ -631,7 +714,7 @@ impl ToTokens for BindgenStruct {
 
         match &self.meta.bind_type {
             BindgenFieldType::Uniform(_) => self.uniform_to_tokens(tokens),
-            BindgenFieldType::In | BindgenFieldType::Out => self.in_out_to_tokens(tokens),
+            BindgenFieldType::In(_) | BindgenFieldType::Out(_) => self.in_out_to_tokens(tokens),
         }
     }
 }

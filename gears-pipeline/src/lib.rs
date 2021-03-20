@@ -1,11 +1,11 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Delimiter, Group, Literal, Punct, Spacing, Span};
-use quote::{quote, ToTokens, TokenStreamExt};
+use quote::{ToTokens, TokenStreamExt};
 use regex::{Captures, Regex};
 use shaderc::CompilationArtifact;
 use std::{collections::HashMap, env, fs::File, io::Read, path::Path};
 use syn::{parse::ParseStream, parse_macro_input, Error, Ident, LitStr, Token};
-use ubo::{BindgenFieldType, BindgenStruct, ModuleType};
+use ubo::{BindgenFieldType, BindgenStruct, ModuleType, StructRegistry};
 
 mod ubo;
 
@@ -262,7 +262,13 @@ fn read_shader_source(path: String, span: Span) -> syn::Result<String> {
 
 // impl processed
 
-fn glsl_attrib_macros<'a>(source: &'a str, module: ModuleType) -> (String, Vec<BindgenStruct>) {
+fn glsl_attrib_macros<'a>(
+    source: &'a str,
+    module: ModuleType,
+    struct_reg: &mut StructRegistry,
+) -> (String, Vec<BindgenStruct>) {
+    struct_reg.next_module();
+
     let attrib_matcher =
         Regex::new(r#"(\n|^)#\[gears_(bind)?(gen)\(.+\)\](\n?.+)\{([^}]+)*\n?\}.+;"#).unwrap();
 
@@ -275,12 +281,13 @@ fn glsl_attrib_macros<'a>(source: &'a str, module: ModuleType) -> (String, Vec<B
             match syn::parse_str::<BindgenStruct>(cap) {
                 Ok(mut s) => {
                     s.meta.in_module = module;
+                    s.generate(struct_reg);
                     let glsl = format!("\n{}", s.to_glsl());
 
                     // uniforms do not have to be renamed
                     match &s.meta.bind_type {
                         BindgenFieldType::Uniform(_) => (),
-                        BindgenFieldType::In | BindgenFieldType::Out => {
+                        BindgenFieldType::In(_) | BindgenFieldType::Out(_) => {
                             ident_renameres.push(
                                 Regex::new(format!("\\b{}\\.\\b", s.field_name).as_str()).unwrap(),
                             );
@@ -315,6 +322,7 @@ fn glsl_attrib_macros<'a>(source: &'a str, module: ModuleType) -> (String, Vec<B
 
 impl Pipeline {
     fn new(input: PipelineInput) -> syn::Result<Self> {
+        let mut struct_reg = StructRegistry::new();
         let mut bindgen_structs = Vec::new();
         let modules = input
             .modules
@@ -322,7 +330,7 @@ impl Pipeline {
             .map(|(module_type, input)| {
                 let span = input.span;
                 let (source, mut new_bindgen_structs) =
-                    glsl_attrib_macros(input.source.as_str(), module_type.clone());
+                    glsl_attrib_macros(input.source.as_str(), module_type.clone(), &mut struct_reg);
                 bindgen_structs.append(&mut new_bindgen_structs);
 
                 let spirv = compile_shader_module(
@@ -552,52 +560,59 @@ fn compile_shader_module(
 /// Specifies the entry point name.
 /// #### ```debug```
 /// Dumps glsl as a compile error
-/// ### example
-/// ```
-/// gears_pipeline::pipeline! {
-///     vs: {
-///         source: "#version 440\nvoid main(){}"
-///         include: "include-path"
-///     }
-///     fs: {
-///         path: "tests/test.glsl"
-///         def: [ "FRAGMENT", "VALUE" = "2" ]
-///     }
-/// }
-/// ```
-/// will produce
-/// ```
-/// pub const VERTEX_SPIRV: &[u8] = &[ /* ... */ ];
-/// pub const FRAGMENT_SPIRV: &[u8] = &[ /* ... */ ];
-/// ```
 ///
 /// ## gears-pipeline defines
 ///
 /// ### for vertex shaders:
-///
 ///  - ```#define GEARS_VERTEX```
-///
 ///  - ```#define GEARS_IN(_location, _data) layout(location = _location) in _data;```
-///
 ///  - ```#define GEARS_INOUT(_location, _data) layout(location = _location) out _data;```
-///
 ///  - ```#define GEARS_OUT(_location, _data) _data;```
 ///
 /// ### for vertex shaders:
-///
 ///  - ```#define GEARS_FRAGMENT```
-///
 ///  - ```#define GEARS_IN(_location, _data) _data;```
-///
 ///  - ```#define GEARS_INOUT(_location, _data) layout(location = _location) in _data;```
-///
 ///  - ```#define GEARS_OUT(_location, _data) layout(location = _location) out _data;```
 ///
 /// ## gears-pipeline default entry points
-///
 /// - vertex shader: ```vert```
-///
 /// - fragment shader: ```frag```
+///
+/// ### rust like attribute macros:
+/// ```#[gears_bindgen]```
+/// This expands a struct or uniform in the glsl source and generates rust bindings for it.
+/// Arguments for it can be given after 'gears_bindgen' in parentheses.
+/// Possible arguments:
+///  - shader input: ```in```
+///  - shader output: ```out```
+///  - uniforms: ```unifom(binding = 0)``` (the binding can be any integer)
+///
+/// ```#[gears_gen]```
+/// This is the same as ```#[gears_bindgen]``` but will not generate the rust bindings.
+///
+/// ### example
+/// ```
+/// mod pl {
+///     gears_pipeline::pipeline! {
+///         vs: {
+///             path: "tests/test.glsl"
+///             def: [ "FRAGMENT", "VALUE" = "2" ]
+///         }
+///         fs: {
+///             source: "#version 440\n#include \"include.glsl\""
+///             include: "tests/"
+///         }
+///     }
+/// }
+///
+/// // check SPIRV generation
+/// assert_eq!(1248, pl::VERT_SPIRV.len(), "Vert spirv not what expected");
+/// assert_eq!(252, pl::FRAG_SPIRV.len(), "Frag spirv not what expected");
+///
+/// // check UBO struct generation
+/// pl::UBO { time: 0f32 };
+/// ```
 #[proc_macro]
 pub fn pipeline(input: TokenStream) -> TokenStream {
     match Pipeline::new(parse_macro_input!(input as PipelineInput)) {
@@ -609,13 +624,4 @@ pub fn pipeline(input: TokenStream) -> TokenStream {
             tokens.into()
         }
     }
-}
-
-#[proc_macro_derive(UBO)]
-pub fn derive_ubo(_: TokenStream) -> TokenStream {
-    let expr = quote! {
-        pub const UBOData_C_STRUCT: &str = "UBOData { float time; }";
-    };
-
-    expr.into()
 }

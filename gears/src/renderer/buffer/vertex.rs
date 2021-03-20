@@ -16,6 +16,7 @@ pub struct VertexBuffer<B: Backend> {
     memory: B::Memory,
 
     len: usize,
+    count: usize,
 }
 
 impl<B: Backend> VertexBuffer<B> {
@@ -27,17 +28,17 @@ impl<B: Backend> VertexBuffer<B> {
     ) -> Self {
         let len = size * mem::size_of::<T>();
         let mut buffer = unsafe { device.create_buffer(len as u64, Usage::VERTEX) }.unwrap();
-        let vertex_buffer_req = unsafe { device.get_buffer_requirements(&buffer) };
+        let req = unsafe { device.get_buffer_requirements(&buffer) };
 
         let memory = unsafe {
             device.allocate_memory(
                 upload_type(
                     available_memory_types,
-                    &vertex_buffer_req,
+                    &req,
                     Properties::CPU_VISIBLE | Properties::COHERENT,
                     Properties::CPU_VISIBLE,
                 ),
-                vertex_buffer_req.size,
+                req.size,
             )
         }
         .unwrap();
@@ -47,6 +48,7 @@ impl<B: Backend> VertexBuffer<B> {
             buffer,
             memory,
             len,
+            count: 0,
         }
     }
 
@@ -55,9 +57,9 @@ impl<B: Backend> VertexBuffer<B> {
             // map
             let mapping = device.map_memory(&mut self.memory, Segment::ALL).unwrap();
 
-            let written_len = mem::size_of::<T>() * data.len();
+            self.count = data.len();
             assert!(
-                offset + written_len <= self.len,
+                offset + mem::size_of::<T>() * self.count <= self.len,
                 "Tried to overflow the buffer"
             );
 
@@ -74,6 +76,10 @@ impl<B: Backend> VertexBuffer<B> {
             // unmap
             device.unmap_memory(&mut self.memory);
         }
+    }
+
+    pub fn count(&self) -> usize {
+        self.count
     }
 
     pub fn bind(&self, command_buffer: &mut B::CommandBuffer) {

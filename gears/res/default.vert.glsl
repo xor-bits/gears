@@ -1,25 +1,30 @@
 #version 420
 #extension GL_ARB_separate_shader_objects : enable
 
-#[gears_bindgen(uniform(binding = 0))]
+#[gears_bindgen(uniform)]
 struct UBO {
 	mat4 model_matrix;
+	mat4 view_matrix;
+	mat4 projection_matrix;
+	vec3 light_dir;
 } ubo;
 
 #[gears_bindgen(in)]
 struct VertexData {
-	vec2 pos;
-	vec3 col;
+	vec3 pos;
+	vec3 norm;
 } vert_in;
 
 #[gears_gen(out)]
-struct {
-	vec3 col;
+struct VFSharedData {
+	float exposure;
 } vert_out;
 
 
 
 void main() {
-	gl_Position = ubo.model_matrix * vec4(vert_in.pos, 0.0, 1.0);
-	vert_out.col = vert_in.col;
+	mat4 mvp = ubo.projection_matrix * ubo.view_matrix * ubo.model_matrix;
+	gl_Position = mvp * vec4(vert_in.pos, 1.0);
+
+	vert_out.exposure = 1.0 + dot(vert_in.norm, ubo.light_dir);
 }

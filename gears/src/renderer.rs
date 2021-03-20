@@ -11,6 +11,7 @@ pub mod queue;
 
 use cgmath::*;
 use log::*;
+use wavefront_obj::obj::Primitive;
 
 use std::{
     borrow::Borrow,
@@ -28,7 +29,7 @@ use gfx_hal::{
     },
     device::Device,
     format::{ChannelType, Format, SurfaceType},
-    image::Layout,
+    image::{FramebufferAttachment, Layout},
     pass::{Attachment, AttachmentLoadOp, AttachmentOps, AttachmentStoreOp, SubpassDesc},
     pool::{CommandPool, CommandPoolCreateFlags},
     prelude::{CommandQueue, PhysicalDevice},
@@ -40,7 +41,7 @@ use gfx_hal::{
 use pipeline::{Pipeline, PipelineBuilder};
 
 use self::{
-    buffer::{Buffer, IndexBuffer, VertexBuffer},
+    buffer::{Buffer, Image, VertexBuffer},
     queue::{QueueFamilies, Queues},
 };
 
@@ -57,11 +58,12 @@ pub struct GearsRenderer<B: Backend> {
     submit_fences: Vec<B::Fence>,
     submit_semaphores: Vec<B::Semaphore>,
 
-    index_buffer: ManuallyDrop<IndexBuffer<B>>,
+    // index_buffer: ManuallyDrop<IndexBuffer<B>>,
     vertex_buffer: ManuallyDrop<VertexBuffer<B>>,
     pipeline: ManuallyDrop<Pipeline<B>>,
 
     render_pass: ManuallyDrop<B::RenderPass>,
+    depth_image: ManuallyDrop<Image<B>>,
     framebuffer: ManuallyDrop<B::Framebuffer>,
     surface: ManuallyDrop<B::Surface>,
 
@@ -133,13 +135,22 @@ impl<B: Backend> GearsRenderer<B> {
             surface.supported_formats(physical_device)
         );
         let config = swap_config::<B>(&surface, &physical_device, format, extent, vsync);
-        let framebuffer_attachment = config.framebuffer_attachment();
+        let color_fat = config.framebuffer_attachment();
         let extent = extent;
         unsafe {
             surface
                 .configure_swapchain(&device, config)
                 .expect("Could not configure the swapchain")
         };
+
+        let memory_types = adapter.physical_device.memory_properties().memory_types;
+        let depth_image = ManuallyDrop::new(Image::new_depth_texture(
+            &device,
+            &memory_types,
+            extent.width,
+            extent.height,
+        ));
+        let depth_fat = depth_image.framebuffer_attachment();
 
         let viewport = Viewport {
             rect: Rect {
@@ -152,7 +163,7 @@ impl<B: Backend> GearsRenderer<B> {
         };
 
         let render_pass = {
-            let attachment = Attachment {
+            let color_attachment = Attachment {
                 format: Some(format),
                 samples: 1,
                 ops: AttachmentOps::new(AttachmentLoadOp::Clear, AttachmentStoreOp::Store),
@@ -160,9 +171,17 @@ impl<B: Backend> GearsRenderer<B> {
                 layouts: Layout::Undefined..Layout::Present,
             };
 
+            let depth_attachment = Attachment {
+                format: Some(Format::D32Sfloat),
+                samples: 1,
+                ops: AttachmentOps::new(AttachmentLoadOp::Clear, AttachmentStoreOp::DontCare),
+                stencil_ops: AttachmentOps::DONT_CARE,
+                layouts: Layout::Undefined..Layout::DepthStencilAttachmentOptimal,
+            };
+
             let subpass = SubpassDesc {
                 colors: &[(0, Layout::ColorAttachmentOptimal)],
-                depth_stencil: None,
+                depth_stencil: Some(&(1, Layout::DepthStencilAttachmentOptimal)),
                 inputs: &[],
                 resolves: &[],
                 preserves: &[],
@@ -171,7 +190,7 @@ impl<B: Backend> GearsRenderer<B> {
             ManuallyDrop::new(
                 unsafe {
                     device.create_render_pass(
-                        std::iter::once(attachment),
+                        [color_attachment, depth_attachment].iter().cloned(),
                         std::iter::once(subpass),
                         std::iter::empty(),
                     )
@@ -180,19 +199,12 @@ impl<B: Backend> GearsRenderer<B> {
             )
         };
 
-        let framebuffer = ManuallyDrop::new(unsafe {
-            device
-                .create_framebuffer(
-                    &render_pass,
-                    iter::once(framebuffer_attachment),
-                    extent.to_extent(),
-                )
-                .expect("Could not create a framebuffer")
-        });
+        let framebuffer =
+            create_framebuffer::<B>(&device, &render_pass, extent, color_fat, depth_fat);
 
         // graphics pipeline
         let frames_in_flight = 3;
-        let memory_types = adapter.physical_device.memory_properties().memory_types;
+        debug!("memory_types: {:?}", memory_types);
         let pipeline =
             PipelineBuilder::new(&device, &*render_pass, &memory_types, frames_in_flight)
                 .with_input::<shader::VertexData>()
@@ -203,35 +215,72 @@ impl<B: Backend> GearsRenderer<B> {
         let pipeline = ManuallyDrop::new(pipeline);
 
         // create vertex&index buffer
-        debug!("memory_types: {:?}", memory_types);
-        let mut index_buffer = ManuallyDrop::new(IndexBuffer::new(&device, &memory_types, 6));
+        let objset = wavefront_obj::obj::parse(include_str!("../res/gears.obj")).unwrap();
+        // let mtl = wavefront_obj::mtl::parse(include_str!("../res/gears.mtl")).unwrap();
+        let obj = &objset.objects[0];
+        let i_count = obj
+            .geometry
+            .iter()
+            .map(|g| {
+                g.shapes
+                    .iter()
+                    .map(|s| match &s.primitive {
+                        Primitive::Triangle(_, _, _) => 3,
+                        _ => panic!("Only triangles"),
+                    })
+                    .sum::<usize>()
+            })
+            .sum::<usize>();
+
+        /* let mut index_buffer = ManuallyDrop::new(IndexBuffer::new(&device, &memory_types, i_count));
+        let mut indices = Vec::<u32>::with_capacity(i_count);
+        for g in obj.geometry.iter() {
+            for s in g.shapes.iter() {
+                match &s.primitive {
+                    Primitive::Triangle(a, b, c) => {
+                        indices.extend([a.0 as u32, b.0 as u32, c.0 as u32].iter());
+                    }
+                    _ => panic!("Only triangles"),
+                }
+            }
+        }
+        index_buffer.write(&device, 0, &indices); */
         let mut vertex_buffer = ManuallyDrop::new(VertexBuffer::new::<shader::VertexData>(
             &device,
             &memory_types,
-            6,
+            i_count,
         ));
 
         // fill vertex&index buffer
-        let indices = [0, 1, 2, 0, 2, 3];
-        index_buffer.write(&device, 0, &indices);
-        let vertices = [
-            shader::VertexData {
-                pos: Vector2::new(-1.0, 1.0),
-                col: Vector3::new(0.0, 0.0, 1.0),
-            },
-            shader::VertexData {
-                pos: Vector2::new(1.0, 1.0),
-                col: Vector3::new(0.0, 1.0, 0.0),
-            },
-            shader::VertexData {
-                pos: Vector2::new(1.0, -1.0),
-                col: Vector3::new(1.0, 1.0, 1.0),
-            },
-            shader::VertexData {
-                pos: Vector2::new(-1.0, -1.0),
-                col: Vector3::new(1.0, 0.0, 0.0),
-            },
-        ];
+        let mut vertices = Vec::<shader::VertexData>::with_capacity(i_count);
+        for g in obj.geometry.iter() {
+            for s in g.shapes.iter() {
+                match s.primitive {
+                    Primitive::Triangle(
+                        (a_vert_id, _, a_norm_id),
+                        (b_vert_id, _, b_norm_id),
+                        (c_vert_id, _, c_norm_id),
+                    ) => {
+                        let id_to_vertex = |vert: usize, norm: Option<usize>| {
+                            let vert = obj.vertices[vert];
+                            let norm = obj.normals[norm.unwrap()];
+
+                            shader::VertexData {
+                                pos: Vector3::new(vert.x as f32, vert.y as f32, vert.z as f32),
+                                norm: Vector3::new(norm.x as f32, norm.y as f32, norm.z as f32), /* Vector3::new(norm.x as f32, norm.y as f32, norm.z as f32), */
+                            }
+                        };
+
+                        vertices.extend_from_slice(&[
+                            id_to_vertex(a_vert_id, a_norm_id),
+                            id_to_vertex(b_vert_id, b_norm_id),
+                            id_to_vertex(c_vert_id, c_norm_id),
+                        ]);
+                    }
+                    _ => panic!("Only triangles"),
+                }
+            }
+        }
         vertex_buffer.write(&device, 0, &vertices);
 
         // command pool for every 'frame in flight'
@@ -265,11 +314,11 @@ impl<B: Backend> GearsRenderer<B> {
             submit_fences,
             submit_semaphores,
 
-            index_buffer,
             vertex_buffer,
             pipeline,
 
             render_pass,
+            depth_image,
             framebuffer,
             surface: ManuallyDrop::new(surface),
 
@@ -324,11 +373,18 @@ impl<B: Backend> GearsRenderer<B> {
             fence
         };
 
+        let t = self.start_tp.elapsed().as_secs_f32();
         let ubo = shader::UBO {
-            model_matrix: Matrix4::from_angle_z(Rad {
-                0: self.start_tp.elapsed().as_secs_f32() * 1.5,
-            }) * Matrix4::from_scale(0.5),
+            model_matrix: Matrix4::from_scale(1.0),
+            view_matrix: Matrix4::look_at_rh(
+                Point3::new(t.sin() * 3.0, (t * 0.2).sin() * 3.0, t.cos() * 3.0),
+                Point3::new(0.0, 0.0, 0.0),
+                Vector3::new(0.0, -1.0, 0.0),
+            ),
+            projection_matrix: perspective(Deg { 0: 60.0 }, 1.0, 0.01, 100.0),
+            light_dir: Vector3::new(1.0, 2.0, 0.5).normalize(),
         };
+        // debug!("ubo = {:#?}", ubo);
         self.pipeline.write_ubo(&self.device, ubo, frame);
 
         // print average fps every 3 seconds
@@ -353,6 +409,27 @@ impl<B: Backend> GearsRenderer<B> {
             let command_buffer = &mut self.command_buffers[frame];
             command_buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
 
+            // slice doesn't work for some odd reason
+            let iter = vec![
+                RenderAttachmentInfo {
+                    image_view: surface_image.borrow(),
+                    clear_value: ClearValue {
+                        color: ClearColor {
+                            float32: [0.18, 0.18, 0.2, 1.0],
+                        },
+                    },
+                },
+                RenderAttachmentInfo {
+                    image_view: self.depth_image.view(),
+                    clear_value: ClearValue {
+                        color: ClearColor {
+                            float32: [1.0, 1.0, 1.0, 1.0],
+                        },
+                    },
+                },
+            ]
+            .into_iter();
+
             // begin render pass
             command_buffer.set_viewports(0, iter::once(self.viewport.clone()));
             command_buffer.set_scissors(0, iter::once(self.viewport.rect));
@@ -360,22 +437,16 @@ impl<B: Backend> GearsRenderer<B> {
                 &self.render_pass,
                 &self.framebuffer,
                 self.viewport.rect,
-                iter::once(RenderAttachmentInfo {
-                    image_view: surface_image.borrow(),
-                    clear_value: ClearValue {
-                        color: ClearColor {
-                            float32: [0.18, 0.18, 0.2, 1.0],
-                        },
-                    },
-                }),
+                iter,
                 SubpassContents::Inline,
             );
 
             // main draw
             self.pipeline.bind(command_buffer, frame);
-            self.index_buffer.bind(command_buffer);
             self.vertex_buffer.bind(command_buffer);
-            command_buffer.draw_indexed(0..6, 0, 0..1);
+            /* self.index_buffer.bind(command_buffer);
+            command_buffer.draw_indexed(0..(self.index_buffer.count() as u32), 0, 0..1); */
+            command_buffer.draw(0..(self.vertex_buffer.count() as u32), 0..1);
 
             // stop render pass
             command_buffer.end_render_pass();
@@ -435,15 +506,13 @@ impl<B: Backend> GearsRenderer<B> {
                 .expect("Could not configure the swapchain")
         };
 
-        let mut framebuffer = ManuallyDrop::new(unsafe {
-            self.device
-                .create_framebuffer(
-                    &self.render_pass,
-                    iter::once(framebuffer_attachment),
-                    self.dimensions.to_extent(),
-                )
-                .expect("Could not create a framebuffer")
-        });
+        let mut framebuffer = create_framebuffer::<B>(
+            &self.device,
+            &self.render_pass,
+            self.dimensions,
+            framebuffer_attachment,
+            self.depth_image.framebuffer_attachment(),
+        );
         swap(&mut self.framebuffer, &mut framebuffer);
 
         let framebuffer = ManuallyDrop::into_inner(framebuffer);
@@ -470,14 +539,16 @@ impl<B: Backend> Drop for GearsRenderer<B> {
                 self.device.destroy_semaphore(submit_semaphore);
             }
 
-            let index_buffer = ManuallyDrop::into_inner(ptr::read(&self.index_buffer));
-            index_buffer.destroy(&self.device);
+            /* let index_buffer = ManuallyDrop::into_inner(ptr::read(&self.index_buffer));
+            index_buffer.destroy(&self.device); */
             let vertex_buffer = ManuallyDrop::into_inner(ptr::read(&self.vertex_buffer));
             vertex_buffer.destroy(&self.device);
 
             let pipeline = ManuallyDrop::into_inner(ptr::read(&self.pipeline));
             pipeline.destroy(&self.device);
 
+            let depth_image = ManuallyDrop::into_inner(ptr::read(&self.depth_image));
+            depth_image.destroy(&self.device);
             let framebuffer = ManuallyDrop::into_inner(ptr::read(&self.framebuffer));
             self.device.destroy_framebuffer(framebuffer);
 
@@ -490,6 +561,24 @@ impl<B: Backend> Drop for GearsRenderer<B> {
             self.instance.destroy_surface(surface);
         }
     }
+}
+
+fn create_framebuffer<B: Backend>(
+    device: &B::Device,
+    render_pass: &B::RenderPass,
+    extent: Extent2D,
+    color_fat: FramebufferAttachment,
+    depth_fat: FramebufferAttachment,
+) -> ManuallyDrop<B::Framebuffer> {
+    ManuallyDrop::new(unsafe {
+        device
+            .create_framebuffer(
+                &render_pass,
+                [color_fat, depth_fat].iter().cloned(),
+                extent.to_extent(),
+            )
+            .expect("Could not create a framebuffer")
+    })
 }
 
 fn swap_config<B: Backend>(

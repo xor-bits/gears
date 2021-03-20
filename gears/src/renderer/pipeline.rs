@@ -14,11 +14,11 @@ use gfx_hal::{
     pass::Subpass,
     pso::{
         AttributeDesc, BlendState, BufferDescriptorFormat, BufferDescriptorType, ColorBlendDesc,
-        ColorMask, Descriptor, DescriptorPool, DescriptorPoolCreateFlags, DescriptorRangeDesc,
-        DescriptorSetLayoutBinding, DescriptorSetWrite, DescriptorType, EntryPoint, Face,
-        FrontFace, GraphicsPipelineDesc, InputAssemblerDesc, PolygonMode, Primitive,
-        PrimitiveAssemblerDesc, Rasterizer, ShaderStageFlags, Specialization, State,
-        VertexBufferDesc,
+        ColorMask, Comparison, DepthStencilDesc, DepthTest, Descriptor, DescriptorPool,
+        DescriptorPoolCreateFlags, DescriptorRangeDesc, DescriptorSetLayoutBinding,
+        DescriptorSetWrite, DescriptorType, EntryPoint, Face, FrontFace, GraphicsPipelineDesc,
+        InputAssemblerDesc, PolygonMode, Primitive, PrimitiveAssemblerDesc, Rasterizer,
+        ShaderStageFlags, Specialization, State, StencilTest, VertexBufferDesc,
     },
     Backend,
 };
@@ -226,20 +226,29 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
                 geometry: None,
                 tessellation: None,
             },
-            Rasterizer::FILL,
-            /* Rasterizer {
+            /* Rasterizer::FILL, */
+            Rasterizer {
                 polygon_mode: PolygonMode::Fill,
-                cull_face: Face::BACK,
+                cull_face: Face::NONE,
                 front_face: FrontFace::Clockwise,
                 depth_clamping: false,
                 depth_bias: None,
                 conservative: false,
                 line_width: State::Static(1.0),
-            }, */
+            },
             Some(frag_entry),
             &pipeline_layout,
             subpass,
         );
+
+        pipeline_desc.depth_stencil = DepthStencilDesc {
+            depth: Some(DepthTest {
+                fun: Comparison::LessEqual,
+                write: true,
+            }),
+            depth_bounds: false,
+            stencil: Some(StencilTest::default()),
+        };
 
         pipeline_desc.blender.targets.push(ColorBlendDesc {
             mask: ColorMask::ALL,
