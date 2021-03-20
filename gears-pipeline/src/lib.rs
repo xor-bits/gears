@@ -269,10 +269,10 @@ fn glsl_attrib_macros<'a>(
 ) -> (String, Vec<BindgenStruct>) {
     struct_reg.next_module();
 
-    let comment_matcher = Regex::new(r#"(//.*)|(/\*(.|\n)*\*/)"#).unwrap();
+    let comment_matcher = Regex::new(r#"(//.*)|(/\*(.|(\r?\n))*\*/)"#).unwrap();
 
     let attrib_matcher =
-        Regex::new(r#"#\[gears_(bind)?(gen)\(.+\)\](\n?.+)\{([^}]+)*\n?\}.+;"#).unwrap();
+        Regex::new(r#"#\[gears_(bind)?(gen)\(.+\)\]((\r?\n)?.+)\{([^}]+)*(\r?\n)?\}.+;"#).unwrap();
 
     let mut bindgen_structs = Vec::new();
     let mut ident_renameres = Vec::new();
