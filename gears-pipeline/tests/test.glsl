@@ -1,7 +1,7 @@
 #version 460
 #if VALUE == 2
 
-#[gears_bindgen(uniform(binding = 0))]
+#[gears_bindgen(uniform)]
 struct UBO {
 	float time;
 } ubo;
