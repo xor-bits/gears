@@ -1,3 +1,5 @@
+use std::{mem::ManuallyDrop, ptr, sync::Arc};
+
 use gfx_hal::{
     adapter::MemoryType,
     device::Device,
@@ -9,22 +11,22 @@ use gfx_hal::{
     Backend,
 };
 
-use super::{upload_type, Buffer};
+use super::upload_type;
 
 pub struct Image<B: Backend> {
-    image: B::Image,
-    image_view: B::ImageView,
-    memory: B::Memory,
+    device: Arc<B::Device>,
 
-    width: u32,
-    height: u32,
+    image: ManuallyDrop<B::Image>,
+    image_view: ManuallyDrop<B::ImageView>,
+    memory: ManuallyDrop<B::Memory>,
+
     format: Format,
     usage: Usage,
 }
 
 impl<B: Backend> Image<B> {
-    pub fn new(
-        device: &B::Device,
+    pub fn new_with_device(
+        device: Arc<B::Device>,
         available_memory_types: &Vec<MemoryType>,
         format: Format,
         usage: Usage,
@@ -32,71 +34,75 @@ impl<B: Backend> Image<B> {
         width: u32,
         height: u32,
     ) -> Self {
-        let mut image = unsafe {
-            device.create_image(
-                Kind::D2(width, height, 1, 1),
-                1,
-                format,
-                Tiling::Optimal,
-                usage,
-                ViewCapabilities::empty(),
-            )
-        }
-        .unwrap();
+        let mut image = ManuallyDrop::new(
+            unsafe {
+                device.create_image(
+                    Kind::D2(width, height, 1, 1),
+                    1,
+                    format,
+                    Tiling::Optimal,
+                    usage,
+                    ViewCapabilities::empty(),
+                )
+            }
+            .unwrap(),
+        );
         let req = unsafe { device.get_image_requirements(&image) };
 
-        let memory = unsafe {
-            device.allocate_memory(
-                upload_type(
-                    available_memory_types,
-                    &req,
-                    Properties::DEVICE_LOCAL,
-                    Properties::DEVICE_LOCAL,
-                ),
-                req.size,
-            )
-        }
-        .unwrap();
+        let memory = ManuallyDrop::new(
+            unsafe {
+                device.allocate_memory(
+                    upload_type(
+                        available_memory_types,
+                        &req,
+                        Properties::DEVICE_LOCAL,
+                        Properties::DEVICE_LOCAL,
+                    ),
+                    req.size,
+                )
+            }
+            .unwrap(),
+        );
         unsafe { device.bind_image_memory(&memory, 0, &mut image) }.unwrap();
 
-        let image_view = unsafe {
-            device.create_image_view(
-                &image,
-                ViewKind::D2,
-                format,
-                Swizzle::NO,
-                SubresourceRange {
-                    aspects,
+        let image_view = ManuallyDrop::new(
+            unsafe {
+                device.create_image_view(
+                    &image,
+                    ViewKind::D2,
+                    format,
+                    Swizzle::NO,
+                    SubresourceRange {
+                        aspects,
 
-                    level_start: 0,
-                    level_count: Some(1),
+                        level_start: 0,
+                        level_count: Some(1),
 
-                    layer_start: 0,
-                    layer_count: Some(1),
-                },
-            )
-        }
-        .unwrap();
+                        layer_start: 0,
+                        layer_count: Some(1),
+                    },
+                )
+            }
+            .unwrap(),
+        );
 
         Self {
+            device,
             image,
             image_view,
             memory,
-
-            width,
-            height,
             format,
             usage,
         }
     }
 
-    pub fn new_depth_texture(
-        device: &B::Device,
+    pub fn new_depth_texture_with_device(
+        device: Arc<B::Device>,
         available_memory_types: &Vec<MemoryType>,
         width: u32,
         height: u32,
     ) -> Self {
-        Self::new(
+        Self::new_with_device(
             device,
             available_memory_types,
             Format::D32Sfloat,
@@ -115,7 +121,7 @@ impl<B: Backend> Image<B> {
         // Aspects::COLOR
     }
 
-    pub fn view<'a>(&'a self) -> &'a B::ImageView {
+    pub fn view(&self) -> &B::ImageView {
         &self.image_view
     }
 
@@ -128,12 +134,17 @@ impl<B: Backend> Image<B> {
     }
 }
 
-impl<B: Backend> Buffer<B> for Image<B> {
-    fn destroy(self, device: &B::Device) {
+impl<B: Backend> Drop for Image<B> {
+    fn drop(&mut self) {
         unsafe {
-            device.destroy_image_view(self.image_view);
-            device.free_memory(self.memory);
-            device.destroy_image(self.image);
+            let image_view = ManuallyDrop::into_inner(ptr::read(&self.image_view));
+            self.device.destroy_image_view(image_view);
+
+            let memory = ManuallyDrop::into_inner(ptr::read(&self.memory));
+            self.device.free_memory(memory);
+
+            let image = ManuallyDrop::into_inner(ptr::read(&self.image));
+            self.device.destroy_image(image);
         }
     }
 }

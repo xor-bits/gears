@@ -4,43 +4,66 @@ use gfx_hal::{
     memory::{Properties, Segment},
     Backend,
 };
-use std::{iter, mem, ptr};
+use std::{
+    iter,
+    mem::{self, ManuallyDrop},
+    ptr,
+    sync::Arc,
+};
 
-use super::{upload_type, Buffer};
+use crate::GearsRenderer;
+
+use super::upload_type;
 
 pub struct UniformBuffer<B: Backend> {
-    buffer: B::Buffer,
-    memory: B::Memory,
+    device: Arc<B::Device>,
+
+    buffer: ManuallyDrop<B::Buffer>,
+    memory: ManuallyDrop<B::Memory>,
 
     len: usize,
     count: usize,
 }
 
 impl<B: Backend> UniformBuffer<B> {
-    // size is the UBO size in bytes
-    pub fn new(
-        device: &B::Device,
+    pub fn new<T>(renderer: &GearsRenderer<B>, size: usize) -> Self {
+        Self::new_with_device::<T>(renderer.device.clone(), &renderer.memory_types, size)
+    }
+
+    pub fn new_with_data<T>(renderer: &GearsRenderer<B>, data: &[T]) -> Self {
+        let mut buffer = Self::new::<T>(renderer, data.len());
+        buffer.write(0, data);
+        buffer
+    }
+
+    pub fn new_with_device<T>(
+        device: Arc<B::Device>,
         available_memory_types: &Vec<gfx_hal::adapter::MemoryType>,
         size: usize,
     ) -> Self {
-        let mut buffer = unsafe { device.create_buffer(size as u64, Usage::UNIFORM) }.unwrap();
+        let len = size * mem::size_of::<T>();
+        let mut buffer =
+            ManuallyDrop::new(unsafe { device.create_buffer(len as u64, Usage::UNIFORM) }.unwrap());
         let req = unsafe { device.get_buffer_requirements(&buffer) };
 
-        let memory = unsafe {
-            device.allocate_memory(
-                upload_type(
-                    available_memory_types,
-                    &req,
-                    Properties::CPU_VISIBLE | Properties::COHERENT,
-                    Properties::CPU_VISIBLE,
-                ),
-                req.size,
-            )
-        }
-        .unwrap();
+        let memory = ManuallyDrop::new(
+            unsafe {
+                device.allocate_memory(
+                    upload_type(
+                        available_memory_types,
+                        &req,
+                        Properties::CPU_VISIBLE | Properties::COHERENT,
+                        Properties::CPU_VISIBLE,
+                    ),
+                    req.size,
+                )
+            }
+            .unwrap(),
+        );
         unsafe { device.bind_buffer_memory(&memory, 0, &mut buffer) }.unwrap();
 
         Self {
+            device,
             buffer,
             memory,
             len: size,
@@ -48,10 +71,13 @@ impl<B: Backend> UniformBuffer<B> {
         }
     }
 
-    pub fn write<T>(&mut self, device: &B::Device, offset: usize, data: &[T]) {
+    pub fn write<T>(&mut self, offset: usize, data: &[T]) {
         unsafe {
             // map
-            let mapping = device.map_memory(&mut self.memory, Segment::ALL).unwrap();
+            let mapping = self
+                .device
+                .map_memory(&mut self.memory, Segment::ALL)
+                .unwrap();
 
             self.count = data.len();
             assert!(
@@ -65,29 +91,28 @@ impl<B: Backend> UniformBuffer<B> {
                 mapping,
                 mem::size_of::<T>() * data.len(),
             );
-            device
-                .flush_mapped_memory_ranges(iter::once((&self.memory, Segment::ALL)))
+            self.device
+                .flush_mapped_memory_ranges(iter::once((&*self.memory, Segment::ALL)))
                 .unwrap();
 
             // unmap
-            device.unmap_memory(&mut self.memory);
+            self.device.unmap_memory(&mut self.memory);
         }
     }
 
-    pub fn count(&self) -> usize {
-        self.count
-    }
-
-    pub fn get<'a>(&'a self) -> &'a B::Buffer {
+    pub fn get(&self) -> &B::Buffer {
         &self.buffer
     }
 }
 
-impl<B: Backend> Buffer<B> for UniformBuffer<B> {
-    fn destroy(self, device: &B::Device) {
+impl<B: Backend> Drop for UniformBuffer<B> {
+    fn drop(&mut self) {
         unsafe {
-            device.free_memory(self.memory);
-            device.destroy_buffer(self.buffer);
+            let memory = ManuallyDrop::into_inner(ptr::read(&self.memory));
+            self.device.free_memory(memory);
+
+            let buffer = ManuallyDrop::into_inner(ptr::read(&self.buffer));
+            self.device.destroy_buffer(buffer);
         }
     }
 }

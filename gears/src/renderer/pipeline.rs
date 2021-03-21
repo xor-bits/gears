@@ -3,7 +3,10 @@ use std::{
     any::{type_name, TypeId},
     collections::HashMap,
     io::Cursor,
-    iter, mem,
+    iter,
+    mem::{self, ManuallyDrop},
+    ptr,
+    sync::Arc,
 };
 
 use gfx_hal::{
@@ -23,10 +26,12 @@ use gfx_hal::{
     Backend,
 };
 
-use super::buffer::{Buffer, UniformBuffer};
+use crate::GearsRenderer;
+
+use super::buffer::UniformBuffer;
 
 pub struct PipelineBuilder<'a, B: Backend> {
-    device: &'a B::Device,
+    device: Arc<B::Device>,
     render_pass: &'a B::RenderPass,
     available_memory_types: &'a Vec<MemoryType>,
     set_count: usize,
@@ -41,18 +46,37 @@ pub struct PipelineBuilder<'a, B: Backend> {
 }
 
 pub struct Pipeline<B: Backend> {
+    device: Arc<B::Device>,
+
     desc_pool: Option<B::DescriptorPool>,
 
-    desc_set_layout: B::DescriptorSetLayout,
+    desc_set_layout: ManuallyDrop<B::DescriptorSetLayout>,
     desc_sets: Vec<(B::DescriptorSet, HashMap<TypeId, UniformBuffer<B>>)>,
 
-    pipeline_layout: B::PipelineLayout,
-    pipeline: B::GraphicsPipeline,
+    pipeline_layout: ManuallyDrop<B::PipelineLayout>,
+    pipeline: ManuallyDrop<B::GraphicsPipeline>,
 }
 
 impl<'a, B: Backend> PipelineBuilder<'a, B> {
-    pub fn new(
-        device: &'a B::Device,
+    pub fn new(renderer: &'a GearsRenderer<B>) -> Self {
+        Self {
+            device: renderer.device.clone(),
+            render_pass: &renderer.render_pass,
+            available_memory_types: &renderer.memory_types,
+            set_count: renderer.frames_in_flight,
+
+            vert_spirv: None,
+            frag_spirv: None,
+
+            vert_input_binding: Vec::new(),
+            vert_input_attribute: Vec::new(),
+
+            ubos: HashMap::new(),
+        }
+    }
+
+    pub fn new_with_device(
+        device: Arc<B::Device>,
         render_pass: &'a B::RenderPass,
         available_memory_types: &'a Vec<MemoryType>,
         set_count: usize,
@@ -94,9 +118,12 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
 
         let buffers = (0..self.set_count)
             .map(|_| {
-                let mut ubo =
-                    UniformBuffer::<B>::new(self.device, self.available_memory_types, size);
-                ubo.write(self.device, 0, &[U::default()]);
+                let mut ubo = UniformBuffer::<B>::new_with_device::<U>(
+                    self.device.clone(),
+                    self.available_memory_types,
+                    size,
+                );
+                ubo.write(0, &[U::default()]);
                 ubo
             })
             .collect();
@@ -155,11 +182,13 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
             count: 1,
         });
 
-        let desc_set_layout = unsafe {
-            self.device
-                .create_descriptor_set_layout(bindings.into_iter(), iter::empty())
-        }
-        .expect("Could not create a descriptor set layout");
+        let desc_set_layout = ManuallyDrop::new(
+            unsafe {
+                self.device
+                    .create_descriptor_set_layout(bindings.into_iter(), iter::empty())
+            }
+            .expect("Could not create a descriptor set layout"),
+        );
 
         let (desc_pool, desc_sets) = if descriptor_ranges.len() > 0 {
             let mut desc_pool = unsafe {
@@ -202,11 +231,13 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
             (None, Vec::new())
         };
 
-        let pipeline_layout = unsafe {
-            self.device
-                .create_pipeline_layout(iter::once(&desc_set_layout), iter::empty())
-        }
-        .expect("Could not create a pipeline layout");
+        let pipeline_layout = ManuallyDrop::new(
+            unsafe {
+                self.device
+                    .create_pipeline_layout(iter::once(&*desc_set_layout), iter::empty())
+            }
+            .expect("Could not create a pipeline layout"),
+        );
 
         let subpass = Subpass {
             index: 0,
@@ -237,7 +268,7 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
                 line_width: State::Static(1.0),
             },
             Some(frag_entry),
-            &pipeline_layout,
+            &*pipeline_layout,
             subpass,
         );
 
@@ -262,14 +293,13 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
             self.device.destroy_shader_module(vert_module);
         }
 
-        let pipeline = pipeline.expect("Could not create a graphics pipeline");
+        let pipeline = ManuallyDrop::new(pipeline.expect("Could not create a graphics pipeline"));
 
         Pipeline::<B> {
+            device: self.device,
             desc_pool,
-
             desc_sets,
             desc_set_layout,
-
             pipeline_layout,
             pipeline,
         }
@@ -292,18 +322,13 @@ impl<B: Backend> Pipeline<B> {
         }
     }
 
-    pub fn write_ubo<U: 'static + UBO>(
-        &mut self,
-        device: &B::Device,
-        new_data: U,
-        set_index: usize,
-    ) {
+    pub fn write_ubo<U: 'static + UBO>(&mut self, new_data: U, set_index: usize) {
         if let Some((set, ubo_set)) = self.desc_sets.get_mut(set_index) {
             let ubo = ubo_set.get_mut(&TypeId::of::<U>()).unwrap();
-            ubo.write(device, 0, &[new_data]);
+            ubo.write(0, &[new_data]);
 
             unsafe {
-                device.write_descriptor_set(DescriptorSetWrite {
+                self.device.write_descriptor_set(DescriptorSetWrite {
                     set,
                     descriptors: iter::once(Descriptor::Buffer(ubo.get(), SubRange::WHOLE)),
                     array_offset: 0,
@@ -317,20 +342,24 @@ impl<B: Backend> Pipeline<B> {
             );
         }
     }
+}
 
-    pub fn destroy(self, device: &B::Device) {
+impl<B: Backend> Drop for Pipeline<B> {
+    fn drop(&mut self) {
+        self.desc_sets.clear();
+
         unsafe {
-            for (_, ubos) in self.desc_sets {
-                for (_, ubo) in ubos {
-                    ubo.destroy(device);
-                }
-            }
+            let pipeline_layout = ManuallyDrop::into_inner(ptr::read(&self.pipeline_layout));
+            self.device.destroy_pipeline_layout(pipeline_layout);
 
-            device.destroy_pipeline_layout(self.pipeline_layout);
-            device.destroy_graphics_pipeline(self.pipeline);
-            device.destroy_descriptor_set_layout(self.desc_set_layout);
-            if let Some(desc_pool) = self.desc_pool {
-                device.destroy_descriptor_pool(desc_pool);
+            let pipeline = ManuallyDrop::into_inner(ptr::read(&self.pipeline));
+            self.device.destroy_graphics_pipeline(pipeline);
+
+            let desc_set_layout = ManuallyDrop::into_inner(ptr::read(&self.desc_set_layout));
+            self.device.destroy_descriptor_set_layout(desc_set_layout);
+
+            if let Some(desc_pool) = self.desc_pool.take() {
+                self.device.destroy_descriptor_pool(desc_pool);
             }
         }
     }

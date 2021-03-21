@@ -11,19 +11,9 @@ pub use vertex::*;
 use gfx_hal::{
     adapter::MemoryType,
     memory::{Properties, Requirements},
-    Backend, MemoryTypeId,
+    MemoryTypeId,
 };
 use log::warn;
-
-pub trait Buffer<B: Backend> {
-    /* fn new<T>(
-        device: &B::Device,
-        buffer_manager: &mut BufferManager,
-        available_memory_types: &Vec<MemoryType>,
-        size: usize,
-    ) -> Self; */
-    fn destroy(self, device: &B::Device);
-}
 
 fn find_mem_type(
     available_memory_types: &Vec<MemoryType>,

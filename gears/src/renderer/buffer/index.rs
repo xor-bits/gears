@@ -1,4 +1,9 @@
-use std::{iter, mem, ptr};
+use std::{
+    iter,
+    mem::{self, ManuallyDrop},
+    ptr,
+    sync::Arc,
+};
 
 use gfx_hal::{
     adapter::MemoryType,
@@ -9,38 +14,59 @@ use gfx_hal::{
     Backend, IndexType,
 };
 
-use super::{upload_type, Buffer};
+use crate::GearsRenderer;
+
+use super::upload_type;
 
 pub struct IndexBuffer<B: Backend> {
-    buffer: B::Buffer,
-    memory: B::Memory,
+    device: Arc<B::Device>,
+
+    buffer: ManuallyDrop<B::Buffer>,
+    memory: ManuallyDrop<B::Memory>,
 
     len: usize,
     count: usize,
 }
 
 impl<B: Backend> IndexBuffer<B> {
-    // size = index count NOT byte count
-    pub fn new(device: &B::Device, available_memory_types: &Vec<MemoryType>, size: usize) -> Self {
+    pub fn new(renderer: &GearsRenderer<B>, size: usize) -> Self {
+        Self::new_with_device(renderer.device.clone(), &renderer.memory_types, size)
+    }
+
+    pub fn new_with_data(renderer: &GearsRenderer<B>, data: &[u32]) -> Self {
+        let mut buffer = Self::new(renderer, data.len());
+        buffer.write(0, data);
+        buffer
+    }
+
+    pub fn new_with_device(
+        device: Arc<B::Device>,
+        available_memory_types: &Vec<MemoryType>,
+        size: usize,
+    ) -> Self {
         let len = size * mem::size_of::<u32>();
-        let mut buffer = unsafe { device.create_buffer(len as u64, Usage::INDEX) }.unwrap();
+        let mut buffer =
+            ManuallyDrop::new(unsafe { device.create_buffer(len as u64, Usage::INDEX) }.unwrap());
         let req = unsafe { device.get_buffer_requirements(&buffer) };
 
-        let memory = unsafe {
-            device.allocate_memory(
-                upload_type(
-                    available_memory_types,
-                    &req,
-                    Properties::CPU_VISIBLE | Properties::COHERENT,
-                    Properties::CPU_VISIBLE,
-                ),
-                req.size,
-            )
-        }
-        .unwrap();
+        let memory = ManuallyDrop::new(
+            unsafe {
+                device.allocate_memory(
+                    upload_type(
+                        available_memory_types,
+                        &req,
+                        Properties::CPU_VISIBLE | Properties::COHERENT,
+                        Properties::CPU_VISIBLE,
+                    ),
+                    req.size,
+                )
+            }
+            .unwrap(),
+        );
         unsafe { device.bind_buffer_memory(&memory, 0, &mut buffer) }.unwrap();
 
         Self {
+            device,
             buffer,
             memory,
             len,
@@ -48,10 +74,13 @@ impl<B: Backend> IndexBuffer<B> {
         }
     }
 
-    pub fn write(&mut self, device: &B::Device, offset: usize, data: &[u32]) {
+    pub fn write(&mut self, offset: usize, data: &[u32]) {
         unsafe {
             // map
-            let mapping = device.map_memory(&mut self.memory, Segment::ALL).unwrap();
+            let mapping = self
+                .device
+                .map_memory(&mut self.memory, Segment::ALL)
+                .unwrap();
 
             self.count = data.len();
             assert!(
@@ -65,12 +94,12 @@ impl<B: Backend> IndexBuffer<B> {
                 mapping,
                 mem::size_of::<u32>() * data.len(),
             );
-            device
-                .flush_mapped_memory_ranges(iter::once((&self.memory, Segment::ALL)))
+            self.device
+                .flush_mapped_memory_ranges(iter::once((&*self.memory, Segment::ALL)))
                 .unwrap();
 
             // unmap
-            device.unmap_memory(&mut self.memory);
+            self.device.unmap_memory(&mut self.memory);
         }
     }
 
@@ -85,11 +114,14 @@ impl<B: Backend> IndexBuffer<B> {
     }
 }
 
-impl<B: Backend> Buffer<B> for IndexBuffer<B> {
-    fn destroy(self, device: &B::Device) {
+impl<B: Backend> Drop for IndexBuffer<B> {
+    fn drop(&mut self) {
         unsafe {
-            device.free_memory(self.memory);
-            device.destroy_buffer(self.buffer);
+            let memory = ManuallyDrop::into_inner(ptr::read(&self.memory));
+            self.device.free_memory(memory);
+
+            let buffer = ManuallyDrop::into_inner(ptr::read(&self.buffer));
+            self.device.destroy_buffer(buffer);
         }
     }
 }

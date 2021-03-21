@@ -18,14 +18,21 @@ use gfx_backend_metal as gfx_back;
 use gfx_backend_vulkan as gfx_back;
 
 //
-mod renderer;
+pub mod renderer;
 
 use log::*;
-use renderer::{queue::QueueFamilies, GearsRenderer};
+use renderer::{queue::QueueFamilies, FrameInfo};
 
 use colored::Colorize;
 use gfx_hal::{adapter::Adapter, window::Extent2D, Instance};
-use winit::{dpi::LogicalSize, event_loop::EventLoop};
+use std::{mem::ManuallyDrop, ptr};
+use winit::dpi::LogicalSize;
+
+pub use renderer::{FrameCommands, GearsRenderer};
+
+pub use winit::event::*;
+
+pub type B = gfx_back::Backend;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum VSync {
@@ -33,9 +40,16 @@ pub enum VSync {
     On,
 }
 
-pub trait Application {}
+pub trait Application {
+    fn init(gears: &mut GearsRenderer<B>) -> Self;
 
-pub struct GearsBuilder {
+    fn event(&mut self, event: WindowEvent);
+    fn render(&mut self, frame_info: FrameInfo, frame: &mut FrameCommands<B>, fifi: usize);
+}
+
+pub struct NoApplication {}
+
+pub struct Gears {
     title: String,
 
     min_size: LogicalSize<u32>,
@@ -45,13 +59,33 @@ pub struct GearsBuilder {
     vsync: VSync,
 }
 
-pub struct Gears {
-    event_loop: EventLoop<()>,
-    _window: winit::window::Window,
-    renderer: GearsRenderer<gfx_back::Backend>,
+pub struct ApplicationWrapper<A: Application> {
+    application: ManuallyDrop<A>,
+    renderer: GearsRenderer<B>,
 }
 
-impl Default for GearsBuilder {
+impl<A: Application> Drop for ApplicationWrapper<A> {
+    fn drop(&mut self) {
+        self.renderer.wait();
+
+        unsafe {
+            let application = ManuallyDrop::into_inner(ptr::read(&self.application));
+            drop(application);
+        }
+    }
+}
+
+impl Application for NoApplication {
+    fn init(_: &mut GearsRenderer<B>) -> Self {
+        Self {}
+    }
+
+    fn event(&mut self, _: WindowEvent) {}
+
+    fn render(&mut self, _: FrameInfo, _: &mut FrameCommands<B>, _: usize) {}
+}
+
+impl Default for Gears {
     fn default() -> Self {
         Self {
             title: "Gears".into(),
@@ -64,9 +98,9 @@ impl Default for GearsBuilder {
     }
 }
 
-impl GearsBuilder {
+impl<'a> Gears {
     pub fn new() -> Self {
-        GearsBuilder::default()
+        Gears::default()
     }
 
     pub fn with_title<S: Into<String>>(mut self, title: S) -> Self {
@@ -94,7 +128,7 @@ impl GearsBuilder {
         self
     }
 
-    pub fn build(self) -> Gears {
+    pub fn run_with<A: Application + 'static>(self) {
         #[cfg(not(any(
             feature = "vulkan",
             feature = "dx11",
@@ -172,7 +206,7 @@ impl GearsBuilder {
         let (adapter, queue_families, _) = adapter.expect("No suitable GPUs");
         info!("Selected GPU: {}", adapter_to_string(&adapter));
 
-        let renderer = GearsRenderer::new(
+        let mut renderer = GearsRenderer::new(
             instance,
             surface,
             adapter,
@@ -183,59 +217,62 @@ impl GearsBuilder {
             },
             self.vsync == VSync::On,
         );
-
-        Gears {
-            event_loop,
-            _window,
+        let mut wrap = ApplicationWrapper {
+            application: ManuallyDrop::new(A::init(&mut renderer)),
             renderer,
-        }
+        };
+
+        event_loop.run(move |event, _, control_flow| {
+            *control_flow = winit::event_loop::ControlFlow::Poll;
+
+            match event {
+                Event::WindowEvent { event, .. } => match event {
+                    WindowEvent::CloseRequested => {
+                        *control_flow = winit::event_loop::ControlFlow::Exit
+                    }
+                    WindowEvent::Resized(dims) => {
+                        wrap.renderer.dimensions = Extent2D {
+                            width: dims.width,
+                            height: dims.height,
+                        };
+                        wrap.renderer.recreate_swapchain();
+                    }
+                    e => wrap.application.event(e),
+                },
+                Event::RedrawEventsCleared => {
+                    if let Some((
+                        frame_info,
+                        frame_commands,
+                        fifi,
+                        swapchain_image,
+                        frame,
+                        frametime_id,
+                        frametime_tp,
+                    )) = wrap.renderer.begin_render()
+                    {
+                        wrap.application.render(frame_info, frame_commands, fifi);
+                        wrap.renderer.end_render(
+                            swapchain_image,
+                            frame,
+                            frametime_id,
+                            frametime_tp,
+                        );
+                    }
+                }
+                _ => (),
+            }
+        });
+    }
+
+    pub fn run(self) {
+        self.run_with::<NoApplication>()
     }
 }
 
-fn adapter_to_string<B: gfx_hal::Backend>(adapter: &Adapter<B>) -> String {
+fn adapter_to_string(adapter: &Adapter<B>) -> String {
     format!(
         "{} (type:{})",
         adapter.info.name.cyan(),
         format!("{:?}", adapter.info.device_type).green(),
     )
-}
-
-impl Gears {
-    pub fn run(self) {
-        let mut renderer = self.renderer;
-        renderer.render();
-
-        self.event_loop.run(move |event, _, control_flow| {
-            *control_flow = winit::event_loop::ControlFlow::Poll;
-
-            match event {
-                winit::event::Event::WindowEvent { event, .. } => match event {
-                    winit::event::WindowEvent::CloseRequested => {
-                        *control_flow = winit::event_loop::ControlFlow::Exit
-                    }
-                    winit::event::WindowEvent::KeyboardInput {
-                        input:
-                            winit::event::KeyboardInput {
-                                virtual_keycode: Some(winit::event::VirtualKeyCode::Escape),
-                                ..
-                            },
-                        ..
-                    } => *control_flow = winit::event_loop::ControlFlow::Exit,
-                    winit::event::WindowEvent::Resized(dims) => {
-                        debug!("resized to {:?}", dims);
-                        renderer.dimensions = Extent2D {
-                            width: dims.width,
-                            height: dims.height,
-                        };
-                        renderer.recreate_swapchain();
-                    }
-                    _ => {}
-                },
-                winit::event::Event::RedrawEventsCleared => {
-                    renderer.render();
-                }
-                _ => {}
-            }
-        });
-    }
 }
