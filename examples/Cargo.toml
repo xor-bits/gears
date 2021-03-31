@@ -5,8 +5,12 @@ authors = ["Overpeek <overpeek.fin@gmail.com>"]
 edition = "2018"
 
 [[bin]]
-name = "main"
-path = "main/main.rs"
+name = "gear"
+path = "gear/main.rs"
+
+[[bin]]
+name = "voxel"
+path = "voxel/main.rs"
 
 [features]
 default = []
@@ -17,8 +21,9 @@ dx12 = ["gears/dx12"]
 vulkan = ["gears/vulkan"]
 
 [dependencies]
-cgmath = "0.18.0"
-instant = "0.1.9"
+noise = "0.7.0"
+cgmath = { version = "0.18.0", features = ["swizzle"] }
+winit = { version = "0.24.0", features = ["web-sys"] }
 gears = { path = "../gears" }
 gears-pipeline = { path = "../gears-pipeline" }
 gears-traits = { path = "../gears-traits/" }

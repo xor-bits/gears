@@ -133,7 +133,7 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
         self
     }
 
-    pub fn build(mut self) -> Pipeline<B> {
+    pub fn build(mut self, debug: bool) -> Pipeline<B> {
         let vert_module = {
             let spirv = gfx_auxil::read_spirv(Cursor::new(&self.vert_spirv.unwrap()[..])).unwrap();
             unsafe { self.device.create_shader_module(&spirv) }
@@ -257,10 +257,13 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
                 geometry: None,
                 tessellation: None,
             },
-            /* Rasterizer::FILL, */
             Rasterizer {
-                polygon_mode: PolygonMode::Fill,
-                cull_face: Face::NONE,
+                polygon_mode: if debug {
+                    PolygonMode::Line
+                } else {
+                    PolygonMode::Fill
+                },
+                cull_face: if debug { Face::NONE } else { Face::BACK },
                 front_face: FrontFace::Clockwise,
                 depth_clamping: false,
                 depth_bias: None,

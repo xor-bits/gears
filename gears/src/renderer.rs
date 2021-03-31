@@ -41,11 +41,14 @@ use queue::{QueueFamilies, Queues};
 pub type Handle<T> = Rc<RefCell<ManuallyDrop<T>>>;
 pub type FrameCommands<B> = <B as Backend>::CommandBuffer;
 
-pub struct FrameInfo {
+pub struct FrameInfo<'a, B: Backend> {
     pub width: u32,
     pub height: u32,
     pub aspect: f32,
     pub delta_time: Duration,
+
+    pub commands: &'a mut FrameCommands<B>,
+    pub frame_in_flight: usize,
 }
 
 #[derive(Debug)]
@@ -289,9 +292,7 @@ impl<B: Backend> GearsRenderer<B> {
     pub fn begin_render(
         &mut self,
     ) -> Option<(
-        FrameInfo,
-        &mut FrameCommands<B>,
-        usize,
+        FrameInfo<B>,
         <<B as gfx_hal::Backend>::Surface as PresentationSurface<B>>::SwapchainImage,
         usize,
         usize,
@@ -399,9 +400,9 @@ impl<B: Backend> GearsRenderer<B> {
                 aspect,
                 delta_time: self.frametime_array
                     [(self.frame + self.frametime_array.len() - 2) % self.frametime_array.len()],
+                commands: command_buffer,
+                frame_in_flight: frame,
             },
-            command_buffer,
-            frame,
             swapchain_image,
             frame,
             frametime_id,

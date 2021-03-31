@@ -1,15 +1,17 @@
-use std::collections::HashMap;
-
-use cgmath::{perspective, Deg, InnerSpace, Matrix4, Point3, Rad, Vector2, Vector3};
+use cgmath::{perspective, Deg, InnerSpace, Matrix4, Point3, Rad, Vector3};
 use gears::{
+    input_state::InputState,
     renderer::{
         buffer::VertexBuffer,
         object::load_obj,
         pipeline::{Pipeline, PipelineBuilder},
         FrameInfo,
     },
-    Application, ElementState, Gears, GearsRenderer, KeyboardInput, VSync, VirtualKeyCode,
-    WindowEvent, B,
+    Application, Gears, GearsRenderer, VSync, B,
+};
+use winit::{
+    event::{KeyboardInput, VirtualKeyCode, WindowEvent},
+    window::Window,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -25,8 +27,8 @@ pub fn wasm_main() {
 
 mod shader {
     gears_pipeline::pipeline! {
-        vs: { path: "main/res/default.vert.glsl" }
-        fs: { path: "main/res/default.frag.glsl" }
+        vs: { path: "gear/res/default.vert.glsl" }
+        fs: { path: "gear/res/default.frag.glsl" }
     }
 }
 
@@ -36,7 +38,7 @@ struct App {
     vb: VertexBuffer<B>,
     shader: Pipeline<B>,
 
-    keymap: HashMap<VirtualKeyCode, bool>,
+    input: InputState,
 
     position: Vector3<f32>,
     velocity: Vector3<f32>,
@@ -56,18 +58,10 @@ impl App {
         self.vb
             .write(0, &vertices[..vertices.len().min(MAX_VBO_LEN)]);
     }
-
-    fn get_key(&self, key: VirtualKeyCode) -> bool {
-        if let Some(value) = self.keymap.get(&key) {
-            *value
-        } else {
-            false
-        }
-    }
 }
 
 impl Application for App {
-    fn init(renderer: &mut GearsRenderer<B>) -> Self {
+    fn init(input: InputState, renderer: &mut GearsRenderer<B>) -> Self {
         let mut app = Self {
             vb: VertexBuffer::new::<shader::VertexData>(renderer, MAX_VBO_LEN),
             shader: PipelineBuilder::new(renderer)
@@ -75,8 +69,8 @@ impl Application for App {
                 .with_module_vert(shader::VERT_SPIRV)
                 .with_module_frag(shader::FRAG_SPIRV)
                 .with_ubo::<shader::UBO>()
-                .build(),
-            keymap: HashMap::new(),
+                .build(false),
+            input,
             position: Vector3::new(0.0, 0.0, 0.0),
             velocity: Vector3::new(0.0, 0.0, 0.0),
         };
@@ -86,7 +80,7 @@ impl Application for App {
         app
     }
 
-    fn event(&mut self, event: WindowEvent) {
+    fn event(&mut self, event: &WindowEvent, window: &Window) {
         match event {
             WindowEvent::KeyboardInput {
                 input:
@@ -101,72 +95,54 @@ impl Application for App {
             _ => {}
         }
 
-        match event {
-            WindowEvent::KeyboardInput {
-                input:
-                    KeyboardInput {
-                        virtual_keycode: Some(k),
-                        state,
-                        ..
-                    },
-                ..
-            } => {
-                self.keymap.insert(
-                    k,
-                    match state {
-                        ElementState::Pressed => true,
-                        _ => false,
-                    },
-                );
-            }
-            _ => {}
-        }
+        self.input.update(event, window);
     }
 
-    fn render(&mut self, frame_info: FrameInfo, frame: &mut gears::FrameCommands<B>, fifi: usize) {
-        let dt_s = frame_info.delta_time.as_secs_f32();
+    fn render(&mut self, frame: &mut FrameInfo<B>) {
+        let dt_s = frame.delta_time.as_secs_f32();
         self.velocity = Vector3::new(0.0, 0.0, 0.0);
-        if self.get_key(VirtualKeyCode::A) {
+        if self.input.key_held(VirtualKeyCode::A) {
             self.velocity.x += 1.0;
         }
-        if self.get_key(VirtualKeyCode::D) {
+        if self.input.key_held(VirtualKeyCode::D) {
             self.velocity.x -= 1.0;
         }
-        if self.get_key(VirtualKeyCode::W) {
+        if self.input.key_held(VirtualKeyCode::W) {
             self.velocity.y += 1.0;
         }
-        if self.get_key(VirtualKeyCode::S) {
+        if self.input.key_held(VirtualKeyCode::S) {
             self.velocity.y -= 1.0;
         }
-        if self.get_key(VirtualKeyCode::Space) {
+        if self.input.key_held(VirtualKeyCode::Space) {
             self.velocity.z += 2.0;
         }
         self.position += self.velocity * 3.0 * dt_s;
         self.position.y = self
             .position
             .y
-            .min(std::f32::consts::PI / 2.0 - f32::EPSILON)
-            .max(-std::f32::consts::PI / 2.0 + f32::EPSILON);
+            .min(std::f32::consts::PI / 2.0 - 0.0001)
+            .max(-std::f32::consts::PI / 2.0 + 0.0001);
+
+        let eye = Point3::new(
+            self.position.x.sin() * self.position.y.cos(),
+            self.position.y.sin(),
+            self.position.x.cos() * self.position.y.cos(),
+        ) * 2.5;
+        let focus = Point3::new(0.0, 0.0, 0.0);
 
         let ubo = shader::UBO {
             model_matrix: Matrix4::from_angle_x(Rad { 0: self.position.z }),
-            view_matrix: Matrix4::look_at_rh(
-                Point3::new(
-                    self.position.x.sin() * self.position.y.cos(),
-                    self.position.y.sin(),
-                    self.position.x.cos() * self.position.y.cos(),
-                ) * 2.5,
-                Point3::new(0.0, 0.0, 0.0),
-                Vector3::new(0.0, -1.0, 0.0),
-            ),
-            projection_matrix: perspective(Deg { 0: 60.0 }, frame_info.aspect, 0.01, 100.0),
+            view_matrix: Matrix4::look_at_rh(eye, focus, Vector3::new(0.0, -1.0, 0.0)),
+            projection_matrix: perspective(Deg { 0: 60.0 }, frame.aspect, 0.01, 100.0),
             light_dir: Vector3::new(0.2, 2.0, 0.5).normalize(),
         };
-        self.shader.write_ubo(ubo, fifi);
 
-        self.shader.bind(frame, fifi);
-        self.vb.draw(frame);
+        self.shader.write_ubo(ubo, frame.frame_in_flight);
+        self.shader.bind(frame.commands, frame.frame_in_flight);
+        self.vb.draw(frame.commands);
     }
+
+    fn update(&mut self, _: gears::UpsThread) {}
 }
 
 fn main() {

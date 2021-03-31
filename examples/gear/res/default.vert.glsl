@@ -25,7 +25,7 @@ struct VFSharedData {
 void main() {
 	mat4 mvp = ubo.projection_matrix * ubo.view_matrix * ubo.model_matrix;
 	gl_Position = mvp * vec4(vert_in.pos, 1.0);
-	vec4 normal = mvp * vec4(vert_in.norm, 1.0);
+	vec3 normal = (ubo.model_matrix * vec4(vert_in.norm, 1.0)).xyz;
 
-	vert_out.exposure = 1.0 + dot(normal.xyz, ubo.light_dir);
+	vert_out.exposure = 1.0 + dot(normal, ubo.light_dir);
 }

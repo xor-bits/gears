@@ -18,19 +18,29 @@ use gfx_backend_metal as gfx_back;
 use gfx_backend_vulkan as gfx_back;
 
 //
+pub mod input_state;
 pub mod renderer;
 
+use input_state::InputState;
 use log::*;
 use renderer::{queue::QueueFamilies, FrameInfo};
 
 use colored::Colorize;
 use gfx_hal::{adapter::Adapter, window::Extent2D, Instance};
-use std::{mem::ManuallyDrop, ptr};
-use winit::dpi::LogicalSize;
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    thread,
+};
+use winit::{
+    dpi::LogicalSize,
+    event::{Event, WindowEvent},
+    window::Window,
+};
 
 pub use renderer::{FrameCommands, GearsRenderer};
-
-pub use winit::event::*;
 
 pub type B = gfx_back::Backend;
 
@@ -40,11 +50,16 @@ pub enum VSync {
     On,
 }
 
-pub trait Application {
-    fn init(gears: &mut GearsRenderer<B>) -> Self;
+pub struct UpsThread(u32);
 
-    fn event(&mut self, event: WindowEvent);
-    fn render(&mut self, frame_info: FrameInfo, frame: &mut FrameCommands<B>, fifi: usize);
+pub trait Application {
+    fn init(input_state: InputState, gears: &mut GearsRenderer<B>) -> Self;
+
+    fn event(&mut self, event: &WindowEvent, window: &Window);
+
+    fn render(&mut self, frame_info: &mut FrameInfo<B>);
+
+    fn update(&mut self, ups_thread_id: UpsThread);
 }
 
 pub struct NoApplication {}
@@ -57,32 +72,20 @@ pub struct Gears {
     max_size: Option<LogicalSize<u32>>,
 
     vsync: VSync,
-}
 
-pub struct ApplicationWrapper<A: Application> {
-    application: ManuallyDrop<A>,
-    renderer: GearsRenderer<B>,
-}
-
-impl<A: Application> Drop for ApplicationWrapper<A> {
-    fn drop(&mut self) {
-        self.renderer.wait();
-
-        unsafe {
-            let application = ManuallyDrop::into_inner(ptr::read(&self.application));
-            drop(application);
-        }
-    }
+    ups: Vec<UpsThread>,
 }
 
 impl Application for NoApplication {
-    fn init(_: &mut GearsRenderer<B>) -> Self {
+    fn init(_: InputState, _: &mut GearsRenderer<B>) -> Self {
         Self {}
     }
 
-    fn event(&mut self, _: WindowEvent) {}
+    fn event(&mut self, _: &WindowEvent, _: &Window) {}
 
-    fn render(&mut self, _: FrameInfo, _: &mut FrameCommands<B>, _: usize) {}
+    fn render(&mut self, _: &mut FrameInfo<B>) {}
+
+    fn update(&mut self, _: UpsThread) {}
 }
 
 impl Default for Gears {
@@ -94,6 +97,8 @@ impl Default for Gears {
             max_size: None,
 
             vsync: VSync::On,
+
+            ups: Vec::new(),
         }
     }
 }
@@ -128,7 +133,12 @@ impl<'a> Gears {
         self
     }
 
-    pub fn run_with<A: Application + 'static>(self) {
+    pub fn with_ups(mut self, ups: UpsThread) -> Self {
+        self.ups.push(ups);
+        self
+    }
+
+    pub fn run_with<A: Application + 'static + Send>(self) {
         #[cfg(not(any(
             feature = "vulkan",
             feature = "dx11",
@@ -145,7 +155,7 @@ impl<'a> Gears {
         if let Some(max_size) = self.max_size {
             window_builder = window_builder.with_max_inner_size(max_size);
         }
-        let _window = window_builder
+        let window = window_builder
             .with_title(self.title)
             .build(&event_loop)
             .unwrap();
@@ -157,7 +167,7 @@ impl<'a> Gears {
             .unwrap()
             .body()
             .unwrap()
-            .append_child(&winit::platform::web::WindowExtWebSys::canvas(&_window))
+            .append_child(&winit::platform::web::WindowExtWebSys::canvas(&window))
             .unwrap();
 
         let instance =
@@ -165,7 +175,7 @@ impl<'a> Gears {
 
         let surface = unsafe {
             instance
-                .create_surface(&_window)
+                .create_surface(&window)
                 .expect("Failed to create a surface")
         };
 
@@ -217,47 +227,82 @@ impl<'a> Gears {
             },
             self.vsync == VSync::On,
         );
-        let mut wrap = ApplicationWrapper {
-            application: ManuallyDrop::new(A::init(&mut renderer)),
-            renderer,
-        };
+        let input = InputState::new(
+            false,
+            self.initial_size,
+            self.initial_size.to_physical(window.scale_factor()),
+        );
+        let mut application = Some(Arc::new(Mutex::new(A::init(input, &mut renderer))));
+        let running = AtomicBool::new(true);
+
+        let mut threads = self
+            .ups
+            .iter()
+            .map(|u| {
+                let app = application.as_ref().unwrap().clone();
+                thread::spawn(move || {
+                    /* app.lock().unwrap();
+                    while running.load(Ordering::Relaxed) {
+                        wrap.application.lock().unwrap().update(*u);
+                    } */
+                })
+            })
+            .collect::<Vec<_>>();
 
         event_loop.run(move |event, _, control_flow| {
             *control_flow = winit::event_loop::ControlFlow::Poll;
 
             match event {
-                Event::WindowEvent { event, .. } => match event {
-                    WindowEvent::CloseRequested => {
-                        *control_flow = winit::event_loop::ControlFlow::Exit
+                Event::WindowEvent { event, .. } => {
+                    application
+                        .as_ref()
+                        .unwrap()
+                        .lock()
+                        .unwrap()
+                        .event(&event, &window);
+
+                    match event {
+                        WindowEvent::CloseRequested => {
+                            *control_flow = winit::event_loop::ControlFlow::Exit
+                        }
+                        WindowEvent::Resized(dims) => {
+                            let dims = dims.to_logical(window.scale_factor());
+
+                            renderer.dimensions = Extent2D {
+                                width: dims.width,
+                                height: dims.height,
+                            };
+                            renderer.recreate_swapchain();
+                        }
+                        _ => (),
                     }
-                    WindowEvent::Resized(dims) => {
-                        wrap.renderer.dimensions = Extent2D {
-                            width: dims.width,
-                            height: dims.height,
-                        };
-                        wrap.renderer.recreate_swapchain();
-                    }
-                    e => wrap.application.event(e),
-                },
+                }
                 Event::RedrawEventsCleared => {
                     if let Some((
-                        frame_info,
-                        frame_commands,
-                        fifi,
+                        mut frame_info,
                         swapchain_image,
                         frame,
                         frametime_id,
                         frametime_tp,
-                    )) = wrap.renderer.begin_render()
+                    )) = renderer.begin_render()
                     {
-                        wrap.application.render(frame_info, frame_commands, fifi);
-                        wrap.renderer.end_render(
-                            swapchain_image,
-                            frame,
-                            frametime_id,
-                            frametime_tp,
-                        );
+                        application
+                            .as_ref()
+                            .unwrap()
+                            .lock()
+                            .unwrap()
+                            .render(&mut frame_info);
+                        renderer.end_render(swapchain_image, frame, frametime_id, frametime_tp);
                     }
+                }
+                Event::LoopDestroyed => {
+                    running.store(false, Ordering::Relaxed);
+                    for thread in threads.drain(..) {
+                        thread.join().unwrap();
+                    }
+
+                    renderer.wait();
+                    application = None;
                 }
                 _ => (),
             }
