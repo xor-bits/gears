@@ -22,6 +22,8 @@ vulkan = ["gears/vulkan"]
 
 [dependencies]
 noise = "0.7.0"
+rand = "0.8.3"
+instant = "0.1.9"
 cgmath = { version = "0.18.0", features = ["swizzle"] }
 winit = { version = "0.24.0", features = ["web-sys"] }
 gears = { path = "../gears" }

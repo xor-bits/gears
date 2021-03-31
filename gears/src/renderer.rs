@@ -114,7 +114,7 @@ impl<B: Backend> GearsRenderer<B> {
                     Features::SPARSE_BINDING | Features::SPARSE_RESIDENCY_IMAGE_2D
                 } else {
                     Features::empty()
-                },
+                } | Features::NON_FILL_POLYGON_MODE,
             )
         }
         .unwrap();

@@ -1,3 +1,5 @@
+use std::{collections::HashMap, time::Instant};
+
 use cgmath::{perspective, Deg, InnerSpace, Matrix4, Point3, Rad, Vector3};
 use gears::{
     input_state::InputState,
@@ -7,7 +9,7 @@ use gears::{
         pipeline::{Pipeline, PipelineBuilder},
         FrameInfo,
     },
-    Application, Gears, GearsRenderer, VSync, B,
+    Application, Gears, GearsRenderer, VSync, B, UPS,
 };
 use winit::{
     event::{KeyboardInput, VirtualKeyCode, WindowEvent},
@@ -80,7 +82,7 @@ impl Application for App {
         app
     }
 
-    fn event(&mut self, event: &WindowEvent, window: &Window) {
+    fn event(&mut self, event: &WindowEvent, window: &Window, _: &mut GearsRenderer<B>) {
         match event {
             WindowEvent::KeyboardInput {
                 input:
@@ -98,7 +100,7 @@ impl Application for App {
         self.input.update(event, window);
     }
 
-    fn render(&mut self, frame: &mut FrameInfo<B>) {
+    fn render(&mut self, frame: &mut FrameInfo<B>, _: &HashMap<UPS, Instant>) {
         let dt_s = frame.delta_time.as_secs_f32();
         self.velocity = Vector3::new(0.0, 0.0, 0.0);
         if self.input.key_held(VirtualKeyCode::A) {
@@ -142,7 +144,7 @@ impl Application for App {
         self.vb.draw(frame.commands);
     }
 
-    fn update(&mut self, _: gears::UpsThread) {}
+    fn update(&mut self, _: &UPS) {}
 }
 
 fn main() {

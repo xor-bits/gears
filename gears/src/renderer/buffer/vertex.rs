@@ -107,6 +107,10 @@ impl<B: Backend> VertexBuffer<B> {
         self.count
     }
 
+    pub fn size<T>(&self) -> usize {
+        self.len / mem::size_of::<T>()
+    }
+
     pub fn bind(&self, command_buffer: &mut FrameCommands<B>) {
         unsafe {
             command_buffer.bind_vertex_buffers(0, iter::once((&*self.buffer, SubRange::WHOLE)));

@@ -3,33 +3,29 @@
 
 #[gears_bindgen(uniform)]
 struct UBO {
-	mat4 model_matrix;
-	mat4 view_matrix;
-	mat4 projection_matrix;
-	vec3 light_dir;
+	mat4 mvp;
 } ubo;
 
 #[gears_bindgen(in)]
 struct VertexData {
-	vec3 pos;
-	vec3 norm;
+	uint raw_data;
 } vert_in;
 
 #[gears_gen(out)]
 struct VFSharedData {
 	float exposure;
-	/* vec3 color; */
 } vert_out;
 
 
 
 void main() {
-	mat4 mvp = ubo.projection_matrix * ubo.view_matrix * ubo.model_matrix;
-	gl_Position = mvp * vec4(vert_in.pos, 1.0);
-	
-	vec3 normal = (ubo.model_matrix * vec4(vert_in.norm, 1.0)).xyz;
+	vec3 position = vec3(
+		float((vert_in.raw_data & 0x00007F) >> 0),
+		float((vert_in.raw_data & 0x003F80) >> 7),
+		float((vert_in.raw_data & 0x1FC000) >> 14));
 
-	/* vert_out.color = normal; */
+	float exposure = float((vert_in.raw_data & 0x600000) >> 21) * 0.25 + 0.25;
 
-	vert_out.exposure = 1.0 + dot(normal, ubo.light_dir);
+	gl_Position = ubo.mvp * vec4(position, 1.0);
+	vert_out.exposure = exposure;
 }

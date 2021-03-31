@@ -28,6 +28,10 @@ pub struct StructRegistry {
 
 #[derive(Debug)]
 pub enum StructFieldType {
+    Bool(),
+    Int(),
+    UInt(),
+
     Float(),
     Float2(),
     Float3(),
@@ -120,28 +124,38 @@ impl StructRegistry {
 impl StructFieldType {
     pub fn size(&self) -> usize {
         match self {
-            StructFieldType::Float() => std::mem::size_of::<f32>() * 1,
-            StructFieldType::Float2() => std::mem::size_of::<f32>() * 2,
-            StructFieldType::Float3() => std::mem::size_of::<f32>() * 3,
-            StructFieldType::Float4() => std::mem::size_of::<f32>() * 4,
+            Self::Bool() => {
+                std::mem::size_of::<i32 /* glsl bool is 32 bits unlike rust's 8 bits */>()
+            }
+            Self::Int() => std::mem::size_of::<i32>(),
+            Self::UInt() => std::mem::size_of::<u32>(),
 
-            StructFieldType::Mat2() => std::mem::size_of::<f32>() * 2 * 2,
-            StructFieldType::Mat3() => std::mem::size_of::<f32>() * 3 * 3,
-            StructFieldType::Mat4() => std::mem::size_of::<f32>() * 4 * 4,
+            Self::Float() => std::mem::size_of::<f32>() * 1,
+            Self::Float2() => std::mem::size_of::<f32>() * 2,
+            Self::Float3() => std::mem::size_of::<f32>() * 3,
+            Self::Float4() => std::mem::size_of::<f32>() * 4,
+
+            Self::Mat2() => std::mem::size_of::<f32>() * 2 * 2,
+            Self::Mat3() => std::mem::size_of::<f32>() * 3 * 3,
+            Self::Mat4() => std::mem::size_of::<f32>() * 4 * 4,
         }
     }
 
     pub fn format(&self) -> Ident {
         Ident::new(
             match self {
-                StructFieldType::Float() => "R32Sfloat",
-                StructFieldType::Float2() => "Rg32Sfloat",
-                StructFieldType::Float3() => "Rgb32Sfloat",
-                StructFieldType::Float4() => "Rgba32Sfloat",
+                Self::Bool() => "R32Uint",
+                Self::Int() => "R32Sint",
+                Self::UInt() => "R32Uint",
 
-                StructFieldType::Mat2() => "Rg32Sfloat",
-                StructFieldType::Mat3() => "Rgb32Sfloat",
-                StructFieldType::Mat4() => "Rgba32Sfloat",
+                Self::Float() => "R32Sfloat",
+                Self::Float2() => "Rg32Sfloat",
+                Self::Float3() => "Rgb32Sfloat",
+                Self::Float4() => "Rgba32Sfloat",
+
+                Self::Mat2() => "Rg32Sfloat",
+                Self::Mat3() => "Rgb32Sfloat",
+                Self::Mat4() => "Rgba32Sfloat",
             },
             Span::call_site(),
         )
@@ -149,27 +163,38 @@ impl StructFieldType {
 
     pub fn format_count(&self) -> usize {
         match self {
-            StructFieldType::Float() => 1,
-            StructFieldType::Float2() => 1,
-            StructFieldType::Float3() => 1,
-            StructFieldType::Float4() => 1,
+            Self::Mat2() => 2,
+            Self::Mat3() => 3,
+            Self::Mat4() => 4,
 
-            StructFieldType::Mat2() => 2,
-            StructFieldType::Mat3() => 3,
-            StructFieldType::Mat4() => 4,
+            _ => 1,
         }
     }
 
     pub fn format_offset(&self) -> usize {
         match self {
-            StructFieldType::Float() => std::mem::size_of::<f32>() * 1,
-            StructFieldType::Float2() => std::mem::size_of::<f32>() * 2,
-            StructFieldType::Float3() => std::mem::size_of::<f32>() * 3,
-            StructFieldType::Float4() => std::mem::size_of::<f32>() * 4,
+            Self::Mat2() => std::mem::size_of::<f32>() * 2,
+            Self::Mat3() => std::mem::size_of::<f32>() * 3,
+            Self::Mat4() => std::mem::size_of::<f32>() * 4,
 
-            StructFieldType::Mat2() => std::mem::size_of::<f32>() * 2,
-            StructFieldType::Mat3() => std::mem::size_of::<f32>() * 3,
-            StructFieldType::Mat4() => std::mem::size_of::<f32>() * 4,
+            _ => self.size(),
+        }
+    }
+
+    pub fn to_glsl(&self) -> &'static str {
+        match self {
+            Self::Bool() => "bool",
+            Self::Int() => "int",
+            Self::UInt() => "uint",
+
+            Self::Float() => "float",
+            Self::Float2() => "vec2",
+            Self::Float3() => "vec3",
+            Self::Float4() => "vec4",
+
+            Self::Mat2() => "mat2",
+            Self::Mat3() => "mat3",
+            Self::Mat4() => "mat4",
         }
     }
 }
@@ -281,6 +306,10 @@ impl syn::parse::Parse for StructFieldType {
         let field_type = input.parse::<Ident>()?.to_string();
 
         Ok(match field_type.as_str() {
+            "bool" => StructFieldType::Bool(),
+            "int" => StructFieldType::Int(),
+            "uint" => StructFieldType::UInt(),
+
             "float" => StructFieldType::Float(),
             "vec2" => StructFieldType::Float2(),
             "vec3" => StructFieldType::Float3(),
@@ -579,6 +608,11 @@ impl BindgenStruct {
                             .append(Ident::new(field.field_name.as_str(), Span::call_site()));
                         self_tokens.append(Punct::new(':', Spacing::Alone));
                         match &field.field_type {
+                            StructFieldType::Bool() => {
+                                self_tokens.append(Ident::new("false", Span::call_site()))
+                            }
+                            StructFieldType::Int() => self_tokens.append(Literal::i32_suffixed(0)),
+                            StructFieldType::UInt() => self_tokens.append(Literal::u32_suffixed(0)),
                             StructFieldType::Float() => {
                                 self_tokens.append(Literal::f32_suffixed(0.0))
                             }
@@ -670,21 +704,6 @@ impl BindgenStruct {
     }
 }
 
-impl StructFieldType {
-    pub fn to_glsl(&self) -> &'static str {
-        match self {
-            StructFieldType::Float() => "float",
-            StructFieldType::Float2() => "vec2",
-            StructFieldType::Float3() => "vec3",
-            StructFieldType::Float4() => "vec4",
-
-            StructFieldType::Mat2() => "mat2",
-            StructFieldType::Mat3() => "mat3",
-            StructFieldType::Mat4() => "mat4",
-        }
-    }
-}
-
 impl ToTokens for BindgenStruct {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         tokens.append(Punct::new('#', Spacing::Joint));
@@ -743,6 +762,9 @@ impl ToTokens for StructField {
         };
 
         match self.field_type {
+            StructFieldType::Bool() => tokens.append(Ident::new("bool", Span::call_site())),
+            StructFieldType::Int() => tokens.append(Ident::new("i32", Span::call_site())),
+            StructFieldType::UInt() => tokens.append(Ident::new("u32", Span::call_site())),
             StructFieldType::Float() => tokens.append(Ident::new("f32", Span::call_site())),
             StructFieldType::Float2() => {
                 append_cgmath(tokens);

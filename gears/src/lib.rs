@@ -22,15 +22,19 @@ pub mod input_state;
 pub mod renderer;
 
 use input_state::InputState;
+use instant::{Duration, Instant};
 use log::*;
+use parking_lot::Mutex;
 use renderer::{queue::QueueFamilies, FrameInfo};
 
 use colored::Colorize;
 use gfx_hal::{adapter::Adapter, window::Extent2D, Instance};
 use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc,
     },
     thread,
 };
@@ -50,16 +54,52 @@ pub enum VSync {
     On,
 }
 
-pub struct UpsThread(u32);
+#[derive(Debug, Clone, Copy)]
+pub struct UPS {
+    pub updates_per_second: u32,
+    pub update_time: Duration,
+
+    _p: (),
+}
+
+impl PartialEq for UPS {
+    fn eq(&self, other: &Self) -> bool {
+        self.updates_per_second == other.updates_per_second
+    }
+}
+
+impl Eq for UPS {}
+
+impl Hash for UPS {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u32(self.updates_per_second)
+    }
+}
+
+impl UPS {
+    pub fn new(updates_per_second: u32) -> Self {
+        if updates_per_second == 0 {
+            error!("updates_per_second cannot be 0");
+            panic!();
+        }
+
+        Self {
+            updates_per_second,
+            update_time: Duration::from_secs_f64(1.0).div_f64(updates_per_second as f64),
+
+            _p: (),
+        }
+    }
+}
 
 pub trait Application {
     fn init(input_state: InputState, gears: &mut GearsRenderer<B>) -> Self;
 
-    fn event(&mut self, event: &WindowEvent, window: &Window);
+    fn event(&mut self, event: &WindowEvent, window: &Window, gears: &mut GearsRenderer<B>);
 
-    fn render(&mut self, frame_info: &mut FrameInfo<B>);
+    fn render(&mut self, frame_info: &mut FrameInfo<B>, update_tps: &HashMap<UPS, Instant>);
 
-    fn update(&mut self, ups_thread_id: UpsThread);
+    fn update(&mut self, ups_thread_id: &UPS);
 }
 
 pub struct NoApplication {}
@@ -73,7 +113,7 @@ pub struct Gears {
 
     vsync: VSync,
 
-    ups: Vec<UpsThread>,
+    ups: HashSet<UPS>,
 }
 
 impl Application for NoApplication {
@@ -81,11 +121,11 @@ impl Application for NoApplication {
         Self {}
     }
 
-    fn event(&mut self, _: &WindowEvent, _: &Window) {}
+    fn event(&mut self, _: &WindowEvent, _: &Window, _: &mut GearsRenderer<B>) {}
 
-    fn render(&mut self, _: &mut FrameInfo<B>) {}
+    fn render(&mut self, _: &mut FrameInfo<B>, _: &HashMap<UPS, Instant>) {}
 
-    fn update(&mut self, _: UpsThread) {}
+    fn update(&mut self, _: &UPS) {}
 }
 
 impl Default for Gears {
@@ -98,7 +138,7 @@ impl Default for Gears {
 
             vsync: VSync::On,
 
-            ups: Vec::new(),
+            ups: HashSet::new(),
         }
     }
 }
@@ -133,8 +173,8 @@ impl<'a> Gears {
         self
     }
 
-    pub fn with_ups(mut self, ups: UpsThread) -> Self {
-        self.ups.push(ups);
+    pub fn with_ups(mut self, ups: UPS) -> Self {
+        self.ups.insert(ups);
         self
     }
 
@@ -233,21 +273,58 @@ impl<'a> Gears {
             self.initial_size.to_physical(window.scale_factor()),
         );
         let mut application = Some(Arc::new(Mutex::new(A::init(input, &mut renderer))));
-        let running = AtomicBool::new(true);
+        let running = Arc::new(AtomicBool::new(true));
 
+        let thread_tps = Arc::new(Mutex::new(HashMap::new()));
         let mut threads = self
             .ups
-            .iter()
+            .into_iter()
             .map(|u| {
                 let app = application.as_ref().unwrap().clone();
-                thread::spawn(move || {
-                    /* app.lock().unwrap();
-                    while running.load(Ordering::Relaxed) {
-                        wrap.application.lock().unwrap().update(*u);
-                    } */
-                })
+                let running = running.clone();
+                thread_tps.lock().insert(u, Instant::now());
+                let thread_tps = thread_tps.clone();
+                (
+                    u,
+                    thread::spawn(move || {
+                        let time_zero: Duration = Duration::from_secs_f64(0.0);
+                        let mut lag = time_zero;
+
+                        while running.load(Ordering::Relaxed) {
+                            let begin = Instant::now();
+                            thread_tps.lock().insert(u, begin);
+
+                            app.lock().update(&u);
+
+                            let update_time = begin.elapsed();
+                            if update_time <= u.update_time {
+                                let time_left = u.update_time - update_time;
+                                // there is leftover time
+                                if lag <= time_zero {
+                                    // no lag to reduce
+                                    thread::sleep(time_left);
+                                } else {
+                                    // lag to be reduced
+                                    if time_left >= lag {
+                                        // can be fixed in a single update
+                                        thread::sleep(time_left - lag);
+                                        lag = time_zero;
+                                    } else {
+                                        // cannot --
+                                        lag -= time_left;
+                                    }
+                                }
+                            } else {
+                                // falling behind
+                                lag += update_time - u.update_time;
+                                thread::sleep(u.update_time);
+                                warn!("{:?} is behind: {} seconds", u, lag.as_secs());
+                            }
+                        }
+                    }),
+                )
             })
-            .collect::<Vec<_>>();
+            .collect::<HashMap<_, _>>();
 
         event_loop.run(move |event, _, control_flow| {
             *control_flow = winit::event_loop::ControlFlow::Poll;
@@ -258,8 +335,7 @@ impl<'a> Gears {
                         .as_ref()
                         .unwrap()
                         .lock()
-                        .unwrap()
-                        .event(&event, &window);
+                        .event(&event, &window, &mut renderer);
 
                     match event {
                         WindowEvent::CloseRequested => {
@@ -290,15 +366,14 @@ impl<'a> Gears {
                             .as_ref()
                             .unwrap()
                             .lock()
-                            .unwrap()
-                            .render(&mut frame_info);
+                            .render(&mut frame_info, &*thread_tps.lock());
                         renderer.end_render(swapchain_image, frame, frametime_id, frametime_tp);
                     }
                 }
                 Event::LoopDestroyed => {
                     running.store(false, Ordering::Relaxed);
-                    for thread in threads.drain(..) {
-                        thread.join().unwrap();
+                    for thread in threads.drain() {
+                        thread.1.join().unwrap();
                     }
 
                     renderer.wait();

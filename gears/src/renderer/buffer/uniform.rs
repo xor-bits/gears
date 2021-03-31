@@ -103,6 +103,10 @@ impl<B: Backend> UniformBuffer<B> {
     pub fn get(&self) -> &B::Buffer {
         &self.buffer
     }
+
+    pub fn size<T>(&self) -> usize {
+        self.len / mem::size_of::<T>()
+    }
 }
 
 impl<B: Backend> Drop for UniformBuffer<B> {

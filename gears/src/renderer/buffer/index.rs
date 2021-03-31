@@ -107,6 +107,10 @@ impl<B: Backend> IndexBuffer<B> {
         self.count
     }
 
+    pub fn size<T>(&self) -> usize {
+        self.len / mem::size_of::<T>()
+    }
+
     pub fn bind(&self, command_buffer: &mut B::CommandBuffer) {
         unsafe {
             command_buffer.bind_index_buffer(&self.buffer, SubRange::WHOLE, IndexType::U32);

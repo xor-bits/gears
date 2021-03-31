@@ -4,7 +4,6 @@
 #[gears_gen(in)]
 struct VFSharedData {
 	float exposure;
-	/* vec3 color; */
 } frag_in;
 
 #[gears_gen(out)]
@@ -15,6 +14,5 @@ struct VFFragmentData {
 
 
 void main() {
-	vec3 color = vec3(1.0) * smoothstep(-0.3, 1.9, frag_in.exposure);
-	frag_out.col = vec4(color /* * frag_in.color */, 1.0);
+	frag_out.col = vec4(frag_in.exposure, frag_in.exposure, frag_in.exposure, 1.0);
 }
