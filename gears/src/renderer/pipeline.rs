@@ -37,6 +37,7 @@ pub struct PipelineBuilder<'a, B: Backend> {
     set_count: usize,
 
     vert_spirv: Option<&'a [u8]>,
+    geom_spirv: Option<&'a [u8]>,
     frag_spirv: Option<&'a [u8]>,
 
     vert_input_binding: Vec<VertexBufferDesc>,
@@ -66,6 +67,7 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
             set_count: renderer.frames_in_flight,
 
             vert_spirv: None,
+            geom_spirv: None,
             frag_spirv: None,
 
             vert_input_binding: Vec::new(),
@@ -88,6 +90,7 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
             set_count,
 
             vert_spirv: None,
+            geom_spirv: None,
             frag_spirv: None,
 
             vert_input_binding: Vec::new(),
@@ -99,6 +102,11 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
 
     pub fn with_module_vert(mut self, vert_spirv: &'a [u8]) -> Self {
         self.vert_spirv = Some(vert_spirv);
+        self
+    }
+
+    pub fn with_module_geom(mut self, geom_spirv: &'a [u8]) -> Self {
+        self.geom_spirv = Some(geom_spirv);
         self
     }
 
@@ -134,22 +142,43 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
     }
 
     pub fn build(mut self, debug: bool) -> Pipeline<B> {
-        let vert_module = {
-            let spirv = gfx_auxil::read_spirv(Cursor::new(&self.vert_spirv.unwrap()[..])).unwrap();
-            unsafe { self.device.create_shader_module(&spirv) }
-                .expect("Could not create a vertex shader module")
-        };
-        let vert_entry = EntryPoint {
+        // vertex
+        let vert_module = self
+            .vert_spirv
+            .map(|vert_spirv| {
+                let spirv = gfx_auxil::read_spirv(Cursor::new(&vert_spirv[..])).unwrap();
+                unsafe { self.device.create_shader_module(&spirv) }
+                    .expect("Could not create a fragment shader module")
+            })
+            .expect("Missing vertex shader");
+        let vert_entry = EntryPoint::<B> {
             entry: "main",
             module: &vert_module,
             specialization: Specialization::default(),
         };
-        let frag_module = {
-            let spirv = gfx_auxil::read_spirv(Cursor::new(&self.frag_spirv.unwrap()[..])).unwrap();
+
+        // geometry
+        let geom_module = self.geom_spirv.map(|geom_spirv| {
+            let spirv = gfx_auxil::read_spirv(Cursor::new(&geom_spirv[..])).unwrap();
             unsafe { self.device.create_shader_module(&spirv) }
                 .expect("Could not create a fragment shader module")
-        };
-        let frag_entry = EntryPoint {
+        });
+        let geom_entry = geom_module.as_ref().map(|module| EntryPoint::<B> {
+            entry: "main",
+            module,
+            specialization: Specialization::default(),
+        });
+
+        // fragment
+        let frag_module = self
+            .frag_spirv
+            .map(|frag_spirv| {
+                let spirv = gfx_auxil::read_spirv(Cursor::new(&frag_spirv[..])).unwrap();
+                unsafe { self.device.create_shader_module(&spirv) }
+                    .expect("Could not create a fragment shader module")
+            })
+            .expect("Missing fragment shader");
+        let frag_entry = EntryPoint::<B> {
             entry: "main",
             module: &frag_module,
             specialization: Specialization::default(),
@@ -254,7 +283,7 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
                     restart_index: None,
                 },
                 vertex: vert_entry,
-                geometry: None,
+                geometry: geom_entry,
                 tessellation: None,
             },
             Rasterizer {
@@ -293,6 +322,7 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
 
         unsafe {
             self.device.destroy_shader_module(frag_module);
+            geom_module.map(|geom_module| self.device.destroy_shader_module(geom_module));
             self.device.destroy_shader_module(vert_module);
         }
 

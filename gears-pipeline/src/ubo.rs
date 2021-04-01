@@ -11,6 +11,7 @@ use syn::{ext::IdentExt, parse::ParseStream, Error, Token};
 pub enum ModuleType {
     Vertex,
     Fragment,
+    Geometry,
 }
 
 #[derive(Debug)]
@@ -45,6 +46,7 @@ pub enum StructFieldType {
 pub struct StructField {
     pub field_name: String,
     pub field_type: StructFieldType,
+    pub array: bool,
 
     pub size: usize,
     pub offset: usize,
@@ -209,6 +211,10 @@ impl syn::parse::Parse for StructFields {
             let field_type = input.parse::<StructFieldType>()?;
             let field_name = input.parse::<Ident>()?.to_string();
 
+            let array = input
+                .parse::<Group>()
+                .map_or(false, |g| g.delimiter() == Delimiter::Bracket);
+
             input.parse::<Token![;]>()?;
 
             let size = field_type.size();
@@ -218,6 +224,7 @@ impl syn::parse::Parse for StructFields {
             fields.push(StructField {
                 field_name,
                 field_type,
+                array,
 
                 size,
                 offset,
@@ -391,12 +398,13 @@ impl BindgenStruct {
 
                 for field in self.fields.fields.iter() {
                     layouts += format!(
-                        "layout(location = {}) {} {} _{}_{};",
+                        "layout(location = {}) {} {} _{}_{}{};",
                         first_i,
                         if is_in { "in" } else { "out" },
                         field.field_type.to_glsl(),
                         self.field_name,
-                        field.field_name
+                        field.field_name,
+                        if field.array { "[]" } else { "" }
                     )
                     .as_str();
                     first_i += 1;
@@ -572,6 +580,7 @@ impl BindgenStruct {
                 match self.meta.in_module {
                     ModuleType::Vertex => "VERTEX",
                     ModuleType::Fragment => "FRAGMENT",
+                    ModuleType::Geometry => "GEOMETRY",
                 },
                 Span::call_site(),
             ));

@@ -107,6 +107,9 @@ impl<B: Backend> GearsRenderer<B> {
         let sparsely_bound = physical_device
             .features()
             .contains(Features::SPARSE_BINDING | Features::SPARSE_RESIDENCY_IMAGE_2D);
+        let non_fill = physical_device
+            .features()
+            .contains(Features::NON_FILL_POLYGON_MODE);
         let gpu = unsafe {
             physical_device.open(
                 &queue_families.get_vec(&adapter).unwrap()[..],
@@ -114,7 +117,11 @@ impl<B: Backend> GearsRenderer<B> {
                     Features::SPARSE_BINDING | Features::SPARSE_RESIDENCY_IMAGE_2D
                 } else {
                     Features::empty()
-                } | Features::NON_FILL_POLYGON_MODE,
+                } | if non_fill {
+                    Features::NON_FILL_POLYGON_MODE
+                } else {
+                    Features::empty()
+                },
             )
         }
         .unwrap();

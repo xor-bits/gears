@@ -32,6 +32,7 @@ pub fn wasm_main() {
 mod shader {
     gears_pipeline::pipeline! {
         vs: { path: "voxel/res/default.vert.glsl" }
+        ge: { path: "voxel/res/default.geom.glsl" }
         fs: { path: "voxel/res/default.frag.glsl" }
     }
 }
@@ -251,9 +252,10 @@ impl Application for App {
                 PipelineBuilder::new(renderer)
                     .with_input::<shader::VertexData>()
                     .with_module_vert(shader::VERT_SPIRV)
+                    .with_module_geom(shader::GEOM_SPIRV)
                     .with_module_frag(shader::FRAG_SPIRV)
                     .with_ubo::<shader::UBO>()
-                    .build(true),
+                    .build(false),
             ),
 
             input,

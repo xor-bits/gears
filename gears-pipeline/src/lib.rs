@@ -109,6 +109,7 @@ impl parse_macro_input::ParseMacroInput for PipelineInput
             let module_type = match shader_type_string.as_str() {
                 "vs" | "vertex" | "vert" => ModuleType::Vertex,
                 "fs" | "fragment" | "frag" => ModuleType::Fragment,
+                "ge" | "geometry" | "geom" => ModuleType::Geometry,
                 _ => {
                     return Err(Error::new(
                         shader.span(),
@@ -368,6 +369,7 @@ impl ModuleType {
         match self {
             ModuleType::Fragment => "FRAG",
             ModuleType::Vertex => "VERT",
+            ModuleType::Geometry => "GEOM",
         }
     }
 
@@ -375,6 +377,7 @@ impl ModuleType {
         match self {
             ModuleType::Fragment => shaderc::ShaderKind::Fragment,
             ModuleType::Vertex => shaderc::ShaderKind::Vertex,
+            ModuleType::Geometry => shaderc::ShaderKind::Geometry,
         }
     }
 }
