@@ -107,9 +107,16 @@ impl<B: Backend> GearsRenderer<B> {
         let sparsely_bound = physical_device
             .features()
             .contains(Features::SPARSE_BINDING | Features::SPARSE_RESIDENCY_IMAGE_2D);
-        let non_fill = physical_device
+        let geometry_shader = physical_device
+            .features()
+            .contains(Features::GEOMETRY_SHADER);
+        let non_fill_polygon_mode = physical_device
             .features()
             .contains(Features::NON_FILL_POLYGON_MODE);
+        debug!(
+            "sparsely_bound: {}, geometry_shader: {}, non_fill_polygon_mode: {}",
+            sparsely_bound, geometry_shader, non_fill_polygon_mode
+        );
         let gpu = unsafe {
             physical_device.open(
                 &queue_families.get_vec(&adapter).unwrap()[..],
@@ -117,7 +124,11 @@ impl<B: Backend> GearsRenderer<B> {
                     Features::SPARSE_BINDING | Features::SPARSE_RESIDENCY_IMAGE_2D
                 } else {
                     Features::empty()
-                } | if non_fill {
+                } | if geometry_shader {
+                    Features::GEOMETRY_SHADER
+                } else {
+                    Features::empty()
+                } | if non_fill_polygon_mode {
                     Features::NON_FILL_POLYGON_MODE
                 } else {
                     Features::empty()
@@ -158,12 +169,15 @@ impl<B: Backend> GearsRenderer<B> {
         };
 
         let memory_types = adapter.physical_device.memory_properties().memory_types;
-        let depth_image = ManuallyDrop::new(Image::new_depth_texture_with_device(
-            device.clone(),
-            &memory_types,
-            extent.width,
-            extent.height,
-        ));
+        let depth_image = ManuallyDrop::new(
+            Image::new_depth_texture_with_device(
+                device.clone(),
+                &memory_types,
+                extent.width,
+                extent.height,
+            )
+            .unwrap(),
+        );
         let depth_fat = depth_image.framebuffer_attachment();
 
         let viewport = Viewport {
@@ -486,12 +500,15 @@ impl<B: Backend> GearsRenderer<B> {
                 .expect("Could not configure the swapchain")
         };
 
-        let mut depth_image = ManuallyDrop::new(Image::new_depth_texture_with_device(
-            self.device.clone(),
-            &self.memory_types,
-            self.dimensions.width,
-            self.dimensions.height,
-        ));
+        let mut depth_image = ManuallyDrop::new(
+            Image::new_depth_texture_with_device(
+                self.device.clone(),
+                &self.memory_types,
+                self.dimensions.width,
+                self.dimensions.height,
+            )
+            .unwrap(),
+        );
         swap(&mut self.depth_image, &mut depth_image);
 
         let depth_image = ManuallyDrop::into_inner(depth_image);

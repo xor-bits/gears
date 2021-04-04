@@ -11,7 +11,7 @@ use gfx_hal::{
     Backend,
 };
 
-use super::upload_type;
+use super::{upload_type, BufferError};
 
 pub struct Image<B: Backend> {
     device: Arc<B::Device>,
@@ -33,66 +33,70 @@ impl<B: Backend> Image<B> {
         aspects: Aspects,
         width: u32,
         height: u32,
-    ) -> Self {
-        let mut image = ManuallyDrop::new(
-            unsafe {
-                device.create_image(
-                    Kind::D2(width, height, 1, 1),
-                    1,
-                    format,
-                    Tiling::Optimal,
-                    usage,
-                    ViewCapabilities::empty(),
-                )
-            }
-            .unwrap(),
-        );
-        let req = unsafe { device.get_image_requirements(&image) };
+    ) -> Result<Self, BufferError> {
+        if width == 0 || height == 0 {
+            Err(BufferError::InvalidSize)
+        } else {
+            let mut image = ManuallyDrop::new(
+                unsafe {
+                    device.create_image(
+                        Kind::D2(width, height, 1, 1),
+                        1,
+                        format,
+                        Tiling::Optimal,
+                        usage,
+                        ViewCapabilities::empty(),
+                    )
+                }
+                .unwrap(),
+            );
+            let req = unsafe { device.get_image_requirements(&image) };
 
-        let memory = ManuallyDrop::new(
-            unsafe {
-                device.allocate_memory(
-                    upload_type(
-                        available_memory_types,
-                        &req,
-                        Properties::DEVICE_LOCAL,
-                        Properties::DEVICE_LOCAL,
-                    ),
-                    req.size,
-                )
-            }
-            .unwrap(),
-        );
-        unsafe { device.bind_image_memory(&memory, 0, &mut image) }.unwrap();
+            let memory = ManuallyDrop::new(
+                unsafe {
+                    device.allocate_memory(
+                        upload_type(
+                            available_memory_types,
+                            &req,
+                            Properties::DEVICE_LOCAL,
+                            Properties::DEVICE_LOCAL,
+                        ),
+                        req.size,
+                    )
+                }
+                .unwrap(),
+            );
+            unsafe { device.bind_image_memory(&memory, 0, &mut image) }.unwrap();
 
-        let image_view = ManuallyDrop::new(
-            unsafe {
-                device.create_image_view(
-                    &image,
-                    ViewKind::D2,
-                    format,
-                    Swizzle::NO,
-                    SubresourceRange {
-                        aspects,
+            let image_view = ManuallyDrop::new(
+                unsafe {
+                    device.create_image_view(
+                        &image,
+                        ViewKind::D2,
+                        format,
+                        Swizzle::NO,
+                        SubresourceRange {
+                            aspects,
 
-                        level_start: 0,
-                        level_count: Some(1),
+                            level_start: 0,
+                            level_count: Some(1),
 
-                        layer_start: 0,
-                        layer_count: Some(1),
-                    },
-                )
-            }
-            .unwrap(),
-        );
+                            layer_start: 0,
+                            layer_count: Some(1),
+                        },
+                    )
+                }
+                .unwrap(),
+            );
 
-        Self {
-            device,
-            image,
-            image_view,
-            memory,
-            format,
-            usage,
+            Ok(Self {
+                device,
+                image,
+                image_view,
+                memory,
+                format,
+                usage,
+            })
         }
     }
 
@@ -101,7 +105,7 @@ impl<B: Backend> Image<B> {
         available_memory_types: &Vec<MemoryType>,
         width: u32,
         height: u32,
-    ) -> Self {
+    ) -> Result<Self, BufferError> {
         Self::new_with_device(
             device,
             available_memory_types,

@@ -15,6 +15,13 @@ use gfx_hal::{
 };
 use log::warn;
 
+#[derive(Debug)]
+pub enum BufferError {
+    InvalidSize,
+    TriedToOverflow,
+    OutOfMemory,
+}
+
 fn find_mem_type(
     available_memory_types: &Vec<MemoryType>,
     requirements: &Requirements,

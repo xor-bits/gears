@@ -37,7 +37,7 @@ mod shader {
 const MAX_VBO_LEN: usize = 50_000;
 
 struct App {
-    vb: VertexBuffer<B>,
+    vb: VertexBuffer<shader::VertexData, B>,
     shader: Pipeline<B>,
 
     input: InputState,
@@ -58,20 +58,21 @@ impl App {
         );
 
         self.vb
-            .write(0, &vertices[..vertices.len().min(MAX_VBO_LEN)]);
+            .write(0, &vertices[..vertices.len().min(MAX_VBO_LEN)])
+            .unwrap();
     }
 }
 
 impl Application for App {
     fn init(input: InputState, renderer: &mut GearsRenderer<B>) -> Self {
         let mut app = Self {
-            vb: VertexBuffer::new::<shader::VertexData>(renderer, MAX_VBO_LEN),
+            vb: VertexBuffer::new(renderer, MAX_VBO_LEN).unwrap(),
             shader: PipelineBuilder::new(renderer)
+                .with_graphics_modules(shader::VERT_SPIRV, shader::FRAG_SPIRV)
                 .with_input::<shader::VertexData>()
-                .with_module_vert(shader::VERT_SPIRV)
-                .with_module_frag(shader::FRAG_SPIRV)
                 .with_ubo::<shader::UBO>()
-                .build(false),
+                .build(false)
+                .unwrap(),
             input,
             position: Vector3::new(0.0, 0.0, 0.0),
             velocity: Vector3::new(0.0, 0.0, 0.0),
@@ -139,7 +140,7 @@ impl Application for App {
             light_dir: Vector3::new(0.2, 2.0, 0.5).normalize(),
         };
 
-        self.shader.write_ubo(ubo, frame.frame_in_flight);
+        self.shader.write_ubo(&ubo, frame.frame_in_flight);
         self.shader.bind(frame.commands, frame.frame_in_flight);
         self.vb.draw(frame.commands);
     }

@@ -1,22 +1,34 @@
+/// controls:
+/// - W,A,S,D,Space,C to move around
+/// - Mouse to look around
+/// - R to regenerate voxels with new seed
+/// - N to generate cube mesh
+/// - M to generate marching cubes mesh
+/// - Tab to toggle wireframe
 use std::collections::HashMap;
 
 use cgmath::{perspective, Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Vector2, Vector3};
+use cubes::generate_cubes;
 use gears::{
     input_state::InputState,
     renderer::{
-        buffer::VertexBuffer,
+        buffer::{IndexBuffer, VertexBuffer},
         pipeline::{Pipeline, PipelineBuilder},
         FrameInfo,
     },
     Application, Gears, GearsRenderer, VSync, B, UPS,
 };
 use instant::Instant;
-use noise::{NoiseFn, Seedable};
+use marching_cubes::generate_marching_cubes;
+use simdnoise::NoiseBuilder;
 use winit::{
     dpi::{LogicalPosition, PhysicalPosition},
     event::{ElementState, KeyboardInput, VirtualKeyCode, WindowEvent},
     window::Window,
 };
+
+mod cubes;
+mod marching_cubes;
 
 #[cfg(target_arch = "wasm32")]
 use log::*;
@@ -37,7 +49,17 @@ mod shader {
     }
 }
 
+mod debug_shader {
+    gears_pipeline::pipeline! {
+        fs: { path: "voxel/res/default.frag.glsl" define: ["DEBUGGING"] }
+    }
+}
+
 const UPDATES_PER_SECOND: u32 = 60;
+
+const WIDTH: usize = 64;
+const HEIGHT: usize = 64;
+const DEPTH: usize = 64;
 
 enum Lighting {
     Top,
@@ -47,7 +69,8 @@ enum Lighting {
 }
 
 struct App {
-    vb: VertexBuffer<B>,
+    vb: VertexBuffer<shader::VertexData, B>,
+    ib: IndexBuffer<B>,
     shaders: (Pipeline<B>, Pipeline<B>),
 
     input: InputState,
@@ -57,215 +80,124 @@ struct App {
     velocity: Vector3<f32>,
 
     focused: bool,
+    next_ignored_value: Option<PhysicalPosition<f64>>,
+    next_ignored: bool,
     debug: bool,
+    voxels: Vec<f32>,
 
     ups: UPS,
 }
 
 impl Lighting {
-    fn to_raw(&self) -> u32 {
+    fn to_exposure(&self) -> f32 {
         match self {
-            Self::Top => 3 << 21,
-            Self::Z => 2 << 21,
-            Self::X => 1 << 21,
-            Self::Bottom => 0 << 21,
+            Self::Top => 1.0,
+            Self::Z => 0.75,
+            Self::X => 0.5,
+            Self::Bottom => 0.25,
         }
     }
 }
 
-fn to_u7_vec(x: u8, y: u8, z: u8) -> u32 {
-    (x as u32 & 0x7F) | ((y as u32 & 0x7F) << 7) | ((z as u32 & 0x7F) << 14)
+fn generate_voxels(seed: i32) -> Vec<f32> {
+    let voxels = NoiseBuilder::fbm_3d(WIDTH, HEIGHT, DEPTH)
+        .with_freq(0.02)
+        .with_octaves(4)
+        .with_gain(0.8)
+        .with_lacunarity(1.5)
+        .with_seed(seed)
+        .generate_scaled(0.0, 1.0);
+    voxels
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let x = i % WIDTH;
+            let y = (i / WIDTH) % HEIGHT;
+            let z = i / (WIDTH * HEIGHT);
+
+            let fade_x = 1.0 - (2.0 / WIDTH as f32 * x as f32 - 1.0).powf(4.0);
+            let fade_y = 1.0 - (2.0 / HEIGHT as f32 * y as f32 - 1.0).powf(4.0);
+            let fade_z = 1.0 - (2.0 / DEPTH as f32 * z as f32 - 1.0).powf(4.0);
+
+            let fade = fade_x * fade_y * fade_z;
+            /* let fade = 1.0; */
+
+            v * fade
+        })
+        .collect::<Vec<_>>()
 }
 
-fn generate() -> Vec<shader::VertexData> {
-    const WIDTH: usize = 64;
-    const HEIGHT: usize = 64;
-    const DEPTH: usize = 64;
-    const QUADS: usize = WIDTH * HEIGHT * DEPTH;
-    const VERT_PER_QUAD: usize = 6;
-    const QUAD_PER_CUBE: usize = 6;
-    const VERT_PER_CUBE: usize = VERT_PER_QUAD * QUAD_PER_CUBE;
-    const MAX_VERT: usize = VERT_PER_CUBE * QUADS;
+fn point_to_index(x: usize, y: usize, z: usize) -> usize {
+    x + y * WIDTH + z * WIDTH * HEIGHT
+}
 
-    // generate quad vertices
-    let quad = |x: u8,
-                y: u8,
-                z: u8,
-                sx: u8,
-                sy: u8,
-                sz: u8,
-                inv: bool,
-                light: Lighting,
-                vertices: &mut Vec<shader::VertexData>| {
-        let light_raw = light.to_raw();
-        let (al, bl, ar, br) = if inv { (0, 1, 1, 0) } else { (1, 0, 1, 0) };
-
-        let varying_ax = if sx == 1 { 1 } else { 0 };
-        let varying_bx = if sx == 2 { 1 } else { 0 };
-        let varying_ay = if sy == 1 { 1 } else { 0 };
-        let varying_by = if sy == 2 { 1 } else { 0 };
-        let varying_az = if sz == 1 { 1 } else { 0 };
-        let varying_bz = if sz == 2 { 1 } else { 0 };
-
-        vertices.push(shader::VertexData {
-            raw_data: to_u7_vec(
-                x + al * varying_ax + ar * varying_bx,
-                y + al * varying_ay + ar * varying_by,
-                z + al * varying_az + ar * varying_bz,
-            ) | light_raw,
-        });
-        vertices.push(shader::VertexData {
-            raw_data: to_u7_vec(
-                x + al * varying_ax + br * varying_bx,
-                y + al * varying_ay + br * varying_by,
-                z + al * varying_az + br * varying_bz,
-            ) | light_raw,
-        });
-        vertices.push(shader::VertexData {
-            raw_data: to_u7_vec(
-                x + bl * varying_ax + br * varying_bx,
-                y + bl * varying_ay + br * varying_by,
-                z + bl * varying_az + br * varying_bz,
-            ) | light_raw,
-        });
-        vertices.push(shader::VertexData {
-            raw_data: to_u7_vec(
-                x + al * varying_ax + ar * varying_bx,
-                y + al * varying_ay + ar * varying_by,
-                z + al * varying_az + ar * varying_bz,
-            ) | light_raw,
-        });
-        vertices.push(shader::VertexData {
-            raw_data: to_u7_vec(
-                x + bl * varying_ax + br * varying_bx,
-                y + bl * varying_ay + br * varying_by,
-                z + bl * varying_az + br * varying_bz,
-            ) | light_raw,
-        });
-        vertices.push(shader::VertexData {
-            raw_data: to_u7_vec(
-                x + bl * varying_ax + ar * varying_bx,
-                y + bl * varying_ay + ar * varying_by,
-                z + bl * varying_az + ar * varying_bz,
-            ) | light_raw,
-        });
-    };
-
-    // generate cube vertices
-    let cube = |x: u8,
-                y: u8,
-                z: u8,
-                neg_x: bool,
-                pos_x: bool,
-                neg_y: bool,
-                pos_y: bool,
-                neg_z: bool,
-                pos_z: bool,
-                vertices: &mut Vec<shader::VertexData>| {
-        if neg_x {
-            quad(x, y, z, 0, 1, 2, false, Lighting::X, vertices);
+impl App {
+    fn remesh(
+        &mut self,
+        renderer: &GearsRenderer<B>,
+        vertices: Vec<shader::VertexData>,
+        indices: Vec<u32>,
+    ) {
+        // TODO: impl VertexBuffer::resize
+        let vb_resize = self.vb.len() < vertices.len();
+        let ib_resize = self.ib.len() < indices.len();
+        if vb_resize || ib_resize {
+            renderer.wait();
         }
-        if pos_x {
-            quad(x + 1, y, z, 0, 1, 2, true, Lighting::X, vertices);
+        if vb_resize {
+            self.vb = VertexBuffer::new_with_data(renderer, &vertices[..]).unwrap();
+        } else {
+            self.vb.write(0, &vertices[..]).unwrap();
         }
-        if neg_y {
-            quad(x, y, z, 1, 0, 2, true, Lighting::Top, vertices);
-        }
-        if pos_y {
-            quad(x, y + 1, z, 1, 0, 2, false, Lighting::Bottom, vertices);
-        }
-        if neg_z {
-            quad(x, y, z, 1, 2, 0, false, Lighting::Z, vertices);
-        }
-        if pos_z {
-            quad(x, y, z + 1, 1, 2, 0, true, Lighting::Z, vertices);
-        }
-    };
-    // fill voxels randomly
-    let mut noise = noise::Fbm::new();
-    // let mut noise = noise::SuperSimplex::new();
-    // let mut noise = noise::Perlin::new();
-    noise = noise.set_seed(rand::random());
-    let mut voxels = [[[false; WIDTH]; HEIGHT]; DEPTH];
-    for (voxel_z, voxel_zi) in voxels.iter_mut().enumerate() {
-        for (voxel_y, voxel_yi) in voxel_zi.iter_mut().enumerate() {
-            for (voxel_x, voxel) in voxel_yi.iter_mut().enumerate() {
-                *voxel = noise.get([
-                    voxel_x as f64 * 0.03,
-                    voxel_y as f64 * 0.03,
-                    voxel_z as f64 * 0.03,
-                ]) > 0.0;
-            }
+        if ib_resize {
+            self.ib = IndexBuffer::new_with_data(renderer, &indices[..]).unwrap();
+        } else {
+            self.ib.write(0, &indices[..]).unwrap();
         }
     }
-
-    // generate cubes
-    let mut vertices = Vec::with_capacity(MAX_VERT);
-    for (voxel_z, voxel_zi) in voxels.iter().enumerate() {
-        for (voxel_y, voxel_yi) in voxel_zi.iter().enumerate() {
-            for (voxel_x, voxel) in voxel_yi.iter().enumerate() {
-                if !voxel {
-                    continue;
-                }
-
-                let neg_x = voxel_x == 0 || !voxels[voxel_z][voxel_y][voxel_x - 1];
-                let pos_x = voxel_x == WIDTH - 1 || !voxels[voxel_z][voxel_y][voxel_x + 1];
-                let neg_y = voxel_y == 0 || !voxels[voxel_z][voxel_y - 1][voxel_x];
-                let pos_y = voxel_y == HEIGHT - 1 || !voxels[voxel_z][voxel_y + 1][voxel_x];
-                let neg_z = voxel_z == 0 || !voxels[voxel_z - 1][voxel_y][voxel_x];
-                let pos_z = voxel_z == DEPTH - 1 || !voxels[voxel_z + 1][voxel_y][voxel_x];
-
-                cube(
-                    voxel_x as u8,
-                    voxel_y as u8,
-                    voxel_z as u8,
-                    /* true, */ neg_x,
-                    /* true, */ pos_x,
-                    /* true, */ neg_y,
-                    /* true, */ pos_y,
-                    /* true, */ neg_z,
-                    /* true, */ pos_z,
-                    &mut vertices,
-                );
-            }
-        }
-    }
-    vertices
 }
 
 impl Application for App {
     fn init(input: InputState, renderer: &mut GearsRenderer<B>) -> Self {
-        let vertices = generate();
+        let voxels = generate_voxels(0);
+        let (vertices, indices) = generate_cubes(&voxels);
 
-        let mut vb = VertexBuffer::new::<shader::VertexData>(renderer, vertices.len().max(1));
-        vb.write(0, &vertices[..]);
+        let vb = VertexBuffer::new_with_data(renderer, &vertices[..]).unwrap();
+        let ib = IndexBuffer::new_with_data(renderer, &indices[..]).unwrap();
+
+        let fill_shader = PipelineBuilder::new(renderer)
+            .with_ubo::<shader::UBO>()
+            .with_graphics_modules(shader::VERT_SPIRV, shader::FRAG_SPIRV)
+            .with_input::<shader::VertexData>()
+            .build(false)
+            .unwrap();
+        let line_shader = PipelineBuilder::new(renderer)
+            .with_ubo::<shader::UBO>()
+            .with_graphics_modules(shader::VERT_SPIRV, debug_shader::FRAG_SPIRV)
+            .with_geometry_module(shader::GEOM_SPIRV)
+            .with_input::<shader::VertexData>()
+            .build(false)
+            .unwrap();
 
         Self {
             vb,
-            shaders: (
-                PipelineBuilder::new(renderer)
-                    .with_input::<shader::VertexData>()
-                    .with_module_vert(shader::VERT_SPIRV)
-                    .with_module_frag(shader::FRAG_SPIRV)
-                    .with_ubo::<shader::UBO>()
-                    .build(false),
-                PipelineBuilder::new(renderer)
-                    .with_input::<shader::VertexData>()
-                    .with_module_vert(shader::VERT_SPIRV)
-                    .with_module_geom(shader::GEOM_SPIRV)
-                    .with_module_frag(shader::FRAG_SPIRV)
-                    .with_ubo::<shader::UBO>()
-                    .build(false),
-            ),
+            ib,
+            shaders: (fill_shader, line_shader),
 
             input,
 
-            look_dir: Vector2::new(0.0, 0.0),
-            position: Point3::new(0.0, 0.0, 0.0),
+            look_dir: Vector2::new(
+                -std::f32::consts::FRAC_PI_4 * 3.0,
+                -std::f32::consts::PI / 5.0,
+            ),
+            position: Point3::new(-26.0, -26.0, -26.0),
             velocity: Vector3::new(0.0, 0.0, 0.0),
 
             focused: false,
+            next_ignored_value: None,
+            next_ignored: false,
             debug: false,
+            voxels,
 
             ups: UPS::new(UPDATES_PER_SECOND),
         }
@@ -274,17 +206,23 @@ impl Application for App {
     fn event(&mut self, event: &WindowEvent, window: &Window, renderer: &mut GearsRenderer<B>) {
         self.input.update(event, window);
 
-        let focused = self.input.window_focused();
-        if self.focused != focused {
-            self.focused = focused;
-            window.set_cursor_visible(!self.focused);
-        }
-
         let middle = LogicalPosition {
             x: self.input.window_size().width / 2,
             y: self.input.window_size().height / 2,
         }
-        .to_physical::<f32>(window.scale_factor());
+        .to_physical::<f64>(window.scale_factor());
+
+        let focused = self.input.window_focused();
+        if self.focused != focused {
+            self.focused = focused;
+            window.set_cursor_visible(!self.focused);
+
+            // just focused
+            if self.focused {
+                window.set_cursor_position(middle).unwrap();
+                self.next_ignored = true;
+            }
+        }
 
         match (event, self.focused) {
             (
@@ -313,23 +251,68 @@ impl Application for App {
                 },
                 _,
             ) => {
-                let vertices = generate();
-
-                if self.vb.size::<shader::VertexData>() < vertices.len() {
-                    renderer.wait();
-                    self.vb =
-                        VertexBuffer::new::<shader::VertexData>(renderer, vertices.len().max(1));
-                }
-                self.vb.write(0, &vertices[..]);
+                let tp = Instant::now();
+                self.voxels = generate_voxels(rand::random());
+                let (vertices, indices) = generate_cubes(&self.voxels);
+                self.remesh(&renderer, vertices, indices);
+                println!("Regen and remesh took: {}ms", tp.elapsed().as_millis());
             }
-            (WindowEvent::CursorMoved { position, .. }, true) => {
+            (
+                WindowEvent::KeyboardInput {
+                    input:
+                        KeyboardInput {
+                            virtual_keycode: Some(VirtualKeyCode::N),
+                            state: ElementState::Pressed,
+                            ..
+                        },
+                    ..
+                },
+                _,
+            ) => {
+                let tp = Instant::now();
+                let (vertices, indices) = generate_cubes(&self.voxels);
+                self.remesh(&renderer, vertices, indices);
+                println!("Remesh took: {}ms", tp.elapsed().as_millis());
+            }
+            (
+                WindowEvent::KeyboardInput {
+                    input:
+                        KeyboardInput {
+                            virtual_keycode: Some(VirtualKeyCode::M),
+                            state: ElementState::Pressed,
+                            ..
+                        },
+                    ..
+                },
+                _,
+            ) => {
+                let tp = Instant::now();
+                let (vertices, indices) = generate_marching_cubes(&self.voxels);
+                self.remesh(&renderer, vertices, indices);
+                println!("Remesh took: {}ms", tp.elapsed().as_millis());
+            }
+            (WindowEvent::CursorMoved { position, .. }, true) => loop {
                 let centered_position = PhysicalPosition::new(
-                    (position.x as f32 - middle.x) * 0.001,
-                    (position.y as f32 - middle.y) * 0.001,
+                    (position.x - middle.x) * 0.001,
+                    (position.y - middle.y) * 0.001,
                 );
 
+                if self.next_ignored {
+                    self.next_ignored_value = Some(centered_position);
+                    self.next_ignored = false;
+                    break;
+                }
+                if let Some(next_ignored_value) = self.next_ignored_value {
+                    if next_ignored_value == centered_position {
+                        break;
+                    } else {
+                        self.next_ignored_value = None;
+                    }
+                }
+
                 if !(centered_position.x == 0.0 && centered_position.y == 0.0) && self.focused {
-                    self.look_dir -= Vector2::new(centered_position.x, centered_position.y);
+                    self.look_dir -=
+                        Vector2::new(centered_position.x as f32, centered_position.y as f32);
 
                     self.look_dir.y = self.look_dir.y.clamp(
                         -std::f32::consts::PI / 2.0 + 0.0001,
@@ -338,7 +321,8 @@ impl Application for App {
 
                     window.set_cursor_position(middle).unwrap();
                 }
-            }
+                break;
+            },
             _ => (),
         }
     }
@@ -362,15 +346,15 @@ impl Application for App {
                 * Matrix4::from_scale(1.0),
         };
 
-        let shader = if self.debug {
-            &mut self.shaders.1
-        } else {
-            &mut self.shaders.0
-        };
+        self.shaders.0.write_ubo(&ubo, frame.frame_in_flight);
+        self.shaders.0.bind(frame.commands, frame.frame_in_flight);
+        self.ib.draw(&self.vb, frame.commands);
 
-        shader.write_ubo(ubo, frame.frame_in_flight);
-        shader.bind(frame.commands, frame.frame_in_flight);
-        self.vb.draw(frame.commands);
+        if self.debug {
+            self.shaders.1.write_ubo(&ubo, frame.frame_in_flight);
+            self.shaders.1.bind(frame.commands, frame.frame_in_flight);
+            self.ib.draw(&self.vb, frame.commands);
+        }
     }
 
     fn update(&mut self, ups: &UPS) {
@@ -383,11 +367,16 @@ impl Application for App {
         );
         let up = Vector3::new(0.0, 1.0, 0.0);
 
-        let speed = if self.input.key_held(VirtualKeyCode::LShift) {
-            100.0
-        } else {
-            10.0
-        } * dt_s;
+        let speed = {
+            let mut speed = 10.0 * dt_s;
+            if self.input.key_held(VirtualKeyCode::LShift) {
+                speed *= 10.0;
+            }
+            if self.input.key_held(VirtualKeyCode::LAlt) {
+                speed *= 0.1;
+            }
+            speed
+        };
         let dir = {
             let mut dir = dir;
             dir.y = 0.0;

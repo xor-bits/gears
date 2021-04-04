@@ -14,5 +14,9 @@ struct VFFragmentData {
 
 
 void main() {
+#if defined(DEBUGGING)
+	frag_out.col = vec4(1.0, 0.0, 0.0, 1.0);
+#else
 	frag_out.col = vec4(frag_in.exposure, frag_in.exposure, frag_in.exposure, 1.0);
+#endif
 }
