@@ -12,12 +12,12 @@ license = "MIT"
 proc_macro = true
 
 [dependencies]
-proc-macro2 = "1.0"
-syn = "1.0"
-quote = "1.0"
-shaderc = "0.7"
-regex = "1.4.5"
-cgmath = "0.18.0"
+proc-macro2 = "~1.0"
+syn = "~1.0"
+quote = "~1.0"
+shaderc = "~0.7"
+regex = "~1.4"
+cgmath = "~0.18"
 
 [dev-dependencies]
 gears-traits = { path = "../gears-traits/" }
