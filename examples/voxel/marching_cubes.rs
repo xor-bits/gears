@@ -10,8 +10,6 @@ const LIGHT_DIR: Vector3<f32> = Vector3::<f32> {
     z: 0.09656090991705351577,
 };
 
-const SMOOTHING: bool = false;
-
 fn triangle(
     p_a: Vector3<f32>,
     p_b: Vector3<f32>,
@@ -108,7 +106,10 @@ macro_rules! hex {
     };
 }
 
-pub fn generate_marching_cubes(voxels: &Vec<f32>) -> (Vec<shader::VertexData>, Vec<u32>) {
+pub fn generate_marching_cubes(
+    voxels: &Vec<f32>,
+    smooth: bool,
+) -> (Vec<shader::VertexData>, Vec<u32>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let mut missing = 0u64;
@@ -148,11 +149,7 @@ pub fn generate_marching_cubes(voxels: &Vec<f32>) -> (Vec<shader::VertexData>, V
                 let origin = Vector3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
 
                 let lerp = |a: &Vector3<f32>, b: &Vector3<f32>, av: f32, bv: f32| {
-                    let t = if SMOOTHING {
-                        (0.5 - bv) / (av - bv)
-                    } else {
-                        0.5
-                    };
+                    let t = if smooth { (0.5 - bv) / (av - bv) } else { 0.5 };
                     origin + a * t + b * (1.0 - t)
                 };
 
@@ -226,6 +223,107 @@ pub fn generate_marching_cubes(voxels: &Vec<f32>) -> (Vec<shader::VertexData>, V
                     }
                     (true, true, true, true, true, true, true, false) => {
                         tri!(f l h, vertices, indices);
+                    }
+                    // same face corners
+                    // a    b      c      d      e      f      g      h
+                    (false, true, true, false, true, true, true, true) => {
+                        tri!(a c i, vertices, indices);
+                        tri!(b d l, vertices, indices);
+                    }
+                    (false, true, true, true, true, false, true, true) => {
+                        tri!(a c i, vertices, indices);
+                        tri!(f g j, vertices, indices);
+                    }
+                    (false, true, true, true, true, true, false, true) => {
+                        tri!(a c i, vertices, indices);
+                        tri!(e h k, vertices, indices);
+                    }
+                    (true, false, true, true, false, true, true, true) => {
+                        tri!(b j c, vertices, indices);
+                        tri!(e i g, vertices, indices);
+                    }
+                    (true, false, false, true, true, true, true, true) => {
+                        tri!(b j c, vertices, indices);
+                        tri!(a k d, vertices, indices);
+                    }
+                    (true, false, true, true, true, true, true, false) => {
+                        tri!(b j c, vertices, indices);
+                        tri!(f l h, vertices, indices);
+                    }
+                    (true, true, false, true, true, true, true, false) => {
+                        tri!(a k d, vertices, indices);
+                        tri!(f l h, vertices, indices);
+                    }
+                    (true, true, true, true, false, true, true, false) => {
+                        tri!(e i g, vertices, indices);
+                        tri!(f l h, vertices, indices);
+                    }
+                    (true, true, true, false, true, true, false, true) => {
+                        tri!(b d l, vertices, indices);
+                        tri!(e h k, vertices, indices);
+                    }
+                    (true, true, true, true, true, false, false, true) => {
+                        tri!(f g j, vertices, indices);
+                        tri!(e h k, vertices, indices);
+                    }
+                    (true, true, true, false, true, false, true, true) => {
+                        tri!(b d l, vertices, indices);
+                        tri!(f g j, vertices, indices);
+                    }
+                    (true, true, false, true, false, true, true, true) => {
+                        tri!(a k d, vertices, indices);
+                        tri!(e i g, vertices, indices);
+                    }
+
+                    // inverted face corners
+                    // a    b      c      d      e      f      g      h
+                    (true, false, false, true, false, false, false, false) => {
+                        qua!(a i l d, vertices, indices);
+                        qua!(i c b l, vertices, indices);
+                    }
+                    (true, false, false, false, false, true, false, false) => {
+                        qua!(a f j c, vertices, indices);
+                        qua!(f a i g, vertices, indices);
+                    }
+                    (true, false, false, false, false, false, true, false) => {
+                        qua!(a k h c, vertices, indices);
+                        qua!(c h e i, vertices, indices);
+                    }
+                    (false, true, false, false, true, false, false, false) => {
+                        qua!(e b c i, vertices, indices);
+                        qua!(b e g j, vertices, indices);
+                    }
+                    (false, true, true, false, false, false, false, false) => {
+                        qua!(d k j b, vertices, indices);
+                        qua!(k a c j, vertices, indices);
+                    }
+                    (false, true, false, false, false, false, false, true) => {
+                        qua!(c h l b, vertices, indices);
+                        qua!(c j f h, vertices, indices);
+                    }
+                    (false, false, true, false, false, false, false, true) => {
+                        qua!(k a f h, vertices, indices);
+                        qua!(d l a f, vertices, indices);
+                    }
+                    (false, false, false, false, true, false, false, true) => {
+                        qua!(h l i e, vertices, indices);
+                        qua!(l f g i, vertices, indices);
+                    }
+                    (false, false, false, true, false, false, true, false) => {
+                        qua!(h e b l, vertices, indices);
+                        qua!(k d b e, vertices, indices);
+                    }
+                    (false, false, false, false, false, true, true, false) => {
+                        qua!(k j g e, vertices, indices);
+                        qua!(k h f j, vertices, indices);
+                    }
+                    (false, false, false, true, false, true, false, false) => {
+                        qua!(f l d g, vertices, indices);
+                        qua!(g d b j, vertices, indices);
+                    }
+                    (false, false, true, false, true, false, false, false) => {
+                        qua!(d g i a, vertices, indices);
+                        qua!(k e g d, vertices, indices);
                     }
 
                     // single edges
@@ -357,6 +455,7 @@ pub fn generate_marching_cubes(voxels: &Vec<f32>) -> (Vec<shader::VertexData>, V
                         qua!(l k a b, vertices, indices);
                         qua!(e f j i, vertices, indices);
                     }
+
                     // pentagons
                     // a    b      c      d      e      f      g      h
                     (true, true, false, false, true, false, false, false) => {
@@ -436,6 +535,7 @@ pub fn generate_marching_cubes(voxels: &Vec<f32>) -> (Vec<shader::VertexData>, V
                     (false, true, false, true, false, true, false, false) => {
                         pen!(g f l d c, vertices, indices);
                     }
+
                     // inverted pentagons
                     // a    b      c      d      e      f      g      h
                     (false, false, true, true, false, true, true, true) => {
@@ -515,6 +615,7 @@ pub fn generate_marching_cubes(voxels: &Vec<f32>) -> (Vec<shader::VertexData>, V
                     (true, false, true, false, true, false, true, true) => {
                         pen!(d l f g c, vertices, indices);
                     }
+
                     // hexagons
                     // a    b      c      d      e      f      g      h
                     (false, true, true, true, false, false, false, true) => {
@@ -541,6 +642,7 @@ pub fn generate_marching_cubes(voxels: &Vec<f32>) -> (Vec<shader::VertexData>, V
                     (true, false, false, false, true, true, true, false) => {
                         hex!(a k h f j c, vertices, indices);
                     }
+
                     // awkward hexagons
                     // a    b      c      d      e      f      g      h
                     (true, true, false, true, true, false, false, false) => {
@@ -568,7 +670,7 @@ pub fn generate_marching_cubes(voxels: &Vec<f32>) -> (Vec<shader::VertexData>, V
                         hex!(a b l h g i, vertices, indices);
                     }
 
-                    // TODO: Add opposite and same corners (case 3 and case 4)
+                    // TODO: Add opposite corners (case 4)
 
                     // new
                     /* (false, false, false, false, false, false, false, false) => {

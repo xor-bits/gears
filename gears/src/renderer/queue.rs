@@ -1,148 +1,117 @@
-use std::{marker::PhantomPinned, mem::swap, pin::Pin, ptr::NonNull};
+use std::sync::Arc;
 
-use gfx_hal::{
-    adapter::Adapter,
-    prelude::QueueFamily,
-    queue::{QueueFamilyId, QueueGroup},
-    window::Surface,
-    Backend,
+use ash::{
+    extensions::khr::Surface,
+    version::{DeviceV1_0, InstanceV1_0},
+    vk,
 };
 
-use super::RendererError;
+use crate::{ContextError, MapErrorLog};
 
 const PRIORITY: [f32; 1] = [1.0];
 pub struct QueueFamilies {
-    pub present: Option<QueueFamilyId>,
-    pub graphics: Option<QueueFamilyId>,
+    pub present: Option<usize>,
+    pub graphics: Option<usize>,
 }
 
-pub struct Queues<B: Backend> {
-    present_pin: QueueGroup<B>,
-    graphics_pin: Option<QueueGroup<B>>,
-
-    pub present: NonNull<QueueGroup<B>>,
-    pub graphics: NonNull<QueueGroup<B>>,
-    _pin: PhantomPinned,
+pub struct Queues {
+    pub present: vk::Queue,
+    pub present_family: usize,
+    pub graphics: vk::Queue,
+    pub graphics_family: usize,
 }
 
 impl QueueFamilies {
-    pub fn new<B: Backend>(surface: &B::Surface, adapter: &Adapter<B>) -> Self {
+    pub fn new(
+        instance: &ash::Instance,
+        surface_loader: &Surface,
+        surface: vk::SurfaceKHR,
+        pdevice: vk::PhysicalDevice,
+    ) -> Result<Self, ContextError> {
         let mut queue_families = Self {
             present: None,
             graphics: None,
         };
 
-        for queue_family in adapter.queue_families.iter() {
-            if surface.supports_queue_family(queue_family) {
-                queue_families.present = Some(queue_family.id());
+        let queue_family_properties =
+            unsafe { instance.get_physical_device_queue_family_properties(pdevice) };
+
+        for (index, queue_family_property) in queue_family_properties.into_iter().enumerate() {
+            let present_support = unsafe {
+                surface_loader.get_physical_device_surface_support(pdevice, index as u32, surface)
             }
-            if queue_family.queue_type().supports_graphics() {
-                queue_families.graphics = Some(queue_family.id());
+            .map_err_log(
+                "Physical device surface support query failed",
+                ContextError::OutOfMemory,
+            )?;
+
+            let graphics_support = queue_family_property
+                .queue_flags
+                .contains(vk::QueueFlags::GRAPHICS);
+
+            if present_support {
+                queue_families.present = Some(index);
             }
+            if graphics_support {
+                queue_families.graphics = Some(index);
+            }
+
             if queue_families.finished() {
                 break;
             }
         }
 
-        queue_families
+        Ok(queue_families)
     }
 
     pub fn finished(&self) -> bool {
         self.present.is_some() && self.graphics.is_some()
     }
 
-    pub fn same(&self) -> Result<bool, RendererError> {
-        Ok(self
-            .present
-            .ok_or(RendererError::QueueFamiliesNotFinished)?
-            == self
-                .graphics
-                .ok_or(RendererError::QueueFamiliesNotFinished)?)
+    pub fn same(&self) -> Option<bool> {
+        Some(self.present? == self.graphics?)
     }
 
-    pub fn get_vec<'a, B: Backend>(
-        &self,
-        adapter: &'a Adapter<B>,
-    ) -> Result<Vec<(&'a B::QueueFamily, &[f32])>, RendererError> {
+    pub fn get_vec(&self) -> Option<Vec<vk::DeviceQueueCreateInfo>> {
         if self.same()? {
-            let present = self.present.unwrap();
-            let present = adapter
-                .queue_families
-                .iter()
-                .find(|i| i.id() == present)
-                .ok_or(RendererError::AdapterMismatch)?;
-            Ok(vec![(present, &PRIORITY)])
+            Some(vec![vk::DeviceQueueCreateInfo::builder()
+                .queue_family_index(self.present.unwrap() as u32)
+                .queue_priorities(&PRIORITY)
+                .build()])
         } else {
-            let present = self.present.unwrap();
-            let present = adapter
-                .queue_families
-                .iter()
-                .find(|i| i.id() == present)
-                .ok_or(RendererError::AdapterMismatch)?;
-            let graphics = self.present.unwrap();
-            let graphics = adapter
-                .queue_families
-                .iter()
-                .find(|i| i.id() == graphics)
-                .ok_or(RendererError::AdapterMismatch)?;
-            Ok(vec![(present, &PRIORITY), (graphics, &PRIORITY)])
+            Some(vec![
+                vk::DeviceQueueCreateInfo::builder()
+                    .queue_family_index(self.present.unwrap() as u32)
+                    .queue_priorities(&PRIORITY)
+                    .build(),
+                vk::DeviceQueueCreateInfo::builder()
+                    .queue_family_index(self.graphics.unwrap() as u32)
+                    .queue_priorities(&PRIORITY)
+                    .build(),
+            ])
         }
     }
 
-    pub fn get_queues<B: Backend>(
-        &self,
-        mut queue_groups: Vec<QueueGroup<B>>,
-    ) -> Result<Pin<Box<Queues<B>>>, RendererError> {
+    pub fn get_queues(&self, device: Arc<ash::Device>) -> Option<Queues> {
         if self.same()? {
-            let present_pin = queue_groups
-                .pop()
-                .ok_or(RendererError::QueueGroupMismatch)?;
+            let queue = unsafe { device.get_device_queue(self.present.unwrap() as u32, 0) };
 
-            let mut res = Box::pin(Queues::<B> {
-                present_pin,
-                graphics_pin: None,
-                present: NonNull::dangling(),
-                graphics: NonNull::dangling(),
-                _pin: PhantomPinned,
-            });
-
-            let mut_ref = Pin::as_mut(&mut res);
-
-            unsafe {
-                let pin = Pin::get_unchecked_mut(mut_ref);
-                pin.present = NonNull::from(&pin.present_pin);
-                pin.graphics = NonNull::from(&pin.present_pin);
-            }
-
-            Ok(res)
+            Some(Queues {
+                present: queue,
+                present_family: self.present.unwrap(),
+                graphics: queue,
+                graphics_family: self.present.unwrap(),
+            })
         } else {
-            let mut present_pin = queue_groups
-                .pop()
-                .ok_or(RendererError::QueueGroupMismatch)?;
+            let present = unsafe { device.get_device_queue(self.present.unwrap() as u32, 0) };
+            let graphics = unsafe { device.get_device_queue(self.graphics.unwrap() as u32, 0) };
 
-            let mut graphics_pin = queue_groups
-                .pop()
-                .ok_or(RendererError::QueueGroupMismatch)?;
-
-            if present_pin.family != self.present.unwrap() {
-                swap(&mut present_pin, &mut graphics_pin);
-            }
-
-            let mut res = Box::pin(Queues::<B> {
-                present_pin,
-                graphics_pin: Some(graphics_pin),
-                present: NonNull::dangling(),
-                graphics: NonNull::dangling(),
-                _pin: PhantomPinned,
-            });
-
-            let mut_ref = Pin::as_mut(&mut res);
-
-            let pin = unsafe { Pin::get_unchecked_mut(mut_ref) };
-            pin.present = NonNull::from(&pin.present_pin);
-            pin.graphics = NonNull::from(pin.graphics_pin.as_ref().unwrap());
-
-            Ok(res)
+            Some(Queues {
+                present,
+                present_family: self.present.unwrap(),
+                graphics,
+                graphics_family: self.graphics.unwrap(),
+            })
         }
     }
 }

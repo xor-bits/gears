@@ -1,6 +1,24 @@
 use cgmath::Vector3;
 
-use super::{point_to_index, shader, Lighting, DEPTH, HEIGHT, WIDTH};
+use super::{point_to_index, shader, DEPTH, HEIGHT, WIDTH};
+
+enum Lighting {
+    Top,
+    Bottom,
+    X,
+    Z,
+}
+
+impl Lighting {
+    fn to_exposure(&self) -> f32 {
+        match self {
+            Self::Top => 1.0,
+            Self::Z => 0.75,
+            Self::X => 0.5,
+            Self::Bottom => 0.25,
+        }
+    }
+}
 
 fn quad(
     x: u8,

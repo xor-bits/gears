@@ -20,5 +20,4 @@ regex = "1.4.5"
 cgmath = "0.18.0"
 
 [dev-dependencies]
-gfx-hal = "0.7.0"
 gears-traits = { path = "../gears-traits/" }

@@ -146,18 +146,18 @@ impl StructFieldType {
     pub fn format(&self) -> Ident {
         Ident::new(
             match self {
-                Self::Bool() => "R32Uint",
-                Self::Int() => "R32Sint",
-                Self::UInt() => "R32Uint",
+                Self::Bool() => "R32_UINT",
+                Self::Int() => "R32_SINT",
+                Self::UInt() => "R32_UINT",
 
-                Self::Float() => "R32Sfloat",
-                Self::Float2() => "Rg32Sfloat",
-                Self::Float3() => "Rgb32Sfloat",
-                Self::Float4() => "Rgba32Sfloat",
+                Self::Float() => "R32_SFLOAT",
+                Self::Float2() => "R32G32_SFLOAT",
+                Self::Float3() => "R32G32B32_SFLOAT",
+                Self::Float4() => "R32G32B32A32_SFLOAT",
 
-                Self::Mat2() => "Rg32Sfloat",
-                Self::Mat3() => "Rgb32Sfloat",
-                Self::Mat4() => "Rgba32Sfloat",
+                Self::Mat2() => "R32G32_SFLOAT",
+                Self::Mat3() => "R32G32B32_SFLOAT",
+                Self::Mat4() => "R32G32B32A32_SFLOAT",
             },
             Span::call_site(),
         )
@@ -437,7 +437,11 @@ impl BindgenStruct {
             impl_tokens.append(Ident::new("Vec", Span::call_site()));
             impl_tokens.append(Punct::new('<', Spacing::Joint));
             namespacer("gears_traits", &mut impl_tokens);
-            impl_tokens.append(Ident::new("VertexBufferDesc", Span::call_site()));
+            namespacer("vk", &mut impl_tokens);
+            impl_tokens.append(Ident::new(
+                "VertexInputBindingDescription",
+                Span::call_site(),
+            ));
             impl_tokens.append(Punct::new('>', Spacing::Alone));
 
             let binding_desc = {
@@ -453,11 +457,12 @@ impl BindgenStruct {
                     fields.append(Literal::u32_unsuffixed(0));
                     fields.append(Punct::new(',', Spacing::Alone));
 
-                    fields.append(Ident::new("rate", Span::call_site()));
+                    fields.append(Ident::new("input_rate", Span::call_site()));
                     fields.append(Punct::new(':', Spacing::Alone));
                     namespacer("gears_traits", &mut fields);
+                    namespacer("vk", &mut fields);
                     namespacer("VertexInputRate", &mut fields);
-                    fields.append(Ident::new("Vertex", Span::call_site()));
+                    fields.append(Ident::new("VERTEX", Span::call_site()));
                     fields.append(Punct::new(',', Spacing::Alone));
 
                     fields.append(Ident::new("stride", Span::call_site()));
@@ -465,10 +470,14 @@ impl BindgenStruct {
                     fields.append(Literal::u32_unsuffixed(self.fields.size as u32));
                     fields.append(Punct::new(',', Spacing::Alone));
 
-                    // VertexBufferDesc { ... }
+                    // VertexInputBindingDescription { ... }
                     let mut contents = TokenStream::new();
                     namespacer("gears_traits", &mut contents);
-                    contents.append(Ident::new("VertexBufferDesc", Span::call_site()));
+                    namespacer("vk", &mut contents);
+                    contents.append(Ident::new(
+                        "VertexInputBindingDescription",
+                        Span::call_site(),
+                    ));
                     contents.append(Group::new(Delimiter::Brace, fields));
                     contents.append(Punct::new(',', Spacing::Alone));
                     contents
@@ -489,7 +498,11 @@ impl BindgenStruct {
             impl_tokens.append(Ident::new("Vec", Span::call_site()));
             impl_tokens.append(Punct::new('<', Spacing::Joint));
             namespacer("gears_traits", &mut impl_tokens);
-            impl_tokens.append(Ident::new("AttributeDesc", Span::call_site()));
+            namespacer("vk", &mut impl_tokens);
+            impl_tokens.append(Ident::new(
+                "VertexInputAttributeDescription",
+                Span::call_site(),
+            ));
             impl_tokens.append(Punct::new('>', Spacing::Alone));
 
             let attribute_desc = {
@@ -513,31 +526,27 @@ impl BindgenStruct {
                             fields.append(Literal::u32_unsuffixed(index as u32));
                             fields.append(Punct::new(',', Spacing::Alone));
 
-                            fields.append(Ident::new("element", Span::call_site()));
+                            fields.append(Ident::new("format", Span::call_site()));
                             fields.append(Punct::new(':', Spacing::Alone));
                             namespacer("gears_traits", &mut fields);
-                            fields.append(Ident::new("Element", Span::call_site()));
-                            let element = {
-                                let mut element = TokenStream::new();
-                                element.append(Ident::new("format", Span::call_site()));
-                                element.append(Punct::new(':', Spacing::Alone));
-                                namespacer("gears_traits", &mut element);
-                                namespacer("Format", &mut element);
-                                element.append(field.field_type.format());
-                                element.append(Punct::new(',', Spacing::Alone));
+                            namespacer("vk", &mut fields);
+                            namespacer("Format", &mut fields);
+                            fields.append(field.field_type.format());
+                            fields.append(Punct::new(',', Spacing::Alone));
 
-                                element.append(Ident::new("offset", Span::call_site()));
-                                element.append(Punct::new(':', Spacing::Alone));
-                                element.append(Literal::u32_unsuffixed(
-                                    (field.offset + i * field.field_type.format_offset()) as u32,
-                                ));
-                                element
-                            };
-                            fields.append(Group::new(Delimiter::Brace, element));
+                            fields.append(Ident::new("offset", Span::call_site()));
+                            fields.append(Punct::new(':', Spacing::Alone));
+                            fields.append(Literal::u32_unsuffixed(
+                                (field.offset + i * field.field_type.format_offset()) as u32,
+                            ));
 
-                            // AttributeDesc { ..., ... }
+                            // VertexInputAttributeDescription { ..., ... }
                             namespacer("gears_traits", &mut contents);
-                            contents.append(Ident::new("AttributeDesc", Span::call_site()));
+                            namespacer("vk", &mut contents);
+                            contents.append(Ident::new(
+                                "VertexInputAttributeDescription",
+                                Span::call_site(),
+                            ));
                             contents.append(Group::new(Delimiter::Brace, fields));
                             contents.append(Punct::new(',', Spacing::Alone));
                         }
@@ -570,11 +579,13 @@ impl BindgenStruct {
             impl_tokens.append(Punct::new(':', Spacing::Alone));
 
             namespacer("gears_traits", &mut impl_tokens);
+            namespacer("vk", &mut impl_tokens);
             impl_tokens.append(Ident::new("ShaderStageFlags", Span::call_site()));
 
             impl_tokens.append(Punct::new('=', Spacing::Alone));
 
             namespacer("gears_traits", &mut impl_tokens);
+            namespacer("vk", &mut impl_tokens);
             namespacer("ShaderStageFlags", &mut impl_tokens);
             impl_tokens.append(Ident::new(
                 match self.meta.in_module {

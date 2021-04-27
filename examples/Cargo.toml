@@ -12,31 +12,16 @@ path = "gear/main.rs"
 name = "voxel"
 path = "voxel/main.rs"
 
-[features]
-default = []
-metal = ["gears/metal"]
-gl = ["gears/gl"]
-dx11 = ["gears/dx11"]
-dx12 = ["gears/dx12"]
-vulkan = ["gears/vulkan"]
-
 [dependencies]
 # noise = "0.7.0"
 # rayon = "1.5.0"
-simdnoise = "3.1.6"
-rand = "0.8.3"
-instant = "0.1.9"
-cgmath = { version = "0.18.0", features = ["swizzle"] }
-winit = { version = "0.24.0", features = ["web-sys"] }
-gears = { path = "../gears" }
+
+simdnoise = "~3.1"
+log = "~0.4"
+rand = "~0.8"
+cgmath = { version = "~0.18", features = ["swizzle"] }
+env_logger = "~0.8"
+parking_lot = "~0.11"
+gears = { path = "../gears", features = [ "short_namespaces", "validation_panic" ] }
 gears-pipeline = { path = "../gears-pipeline" }
 gears-traits = { path = "../gears-traits/" }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-log = "0.4"
-wasm-bindgen = "0.2.71"
-console_error_panic_hook = "0.1.6"
-wasm-logger = "0.2.0"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-env_logger = "0.8"

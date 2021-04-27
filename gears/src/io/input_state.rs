@@ -1,42 +1,24 @@
 use std::collections::HashMap;
 
-use winit::{
-    dpi::{LogicalSize, PhysicalSize},
-    event::{ElementState, KeyboardInput, VirtualKeyCode, WindowEvent},
-    window::Window,
-};
+use winit::event::{ElementState, KeyboardInput, VirtualKeyCode, WindowEvent};
+
+use crate::EventLoopTarget;
 
 pub struct InputState {
     keymap: HashMap<VirtualKeyCode, bool>,
     window_focused: bool,
-    window_size: LogicalSize<u32>,
-    window_psize: PhysicalSize<u32>,
 }
 
 impl InputState {
-    pub fn new(
-        window_focused: bool,
-        window_size: LogicalSize<u32>,
-        window_psize: PhysicalSize<u32>,
-    ) -> Self {
+    pub fn new() -> Self {
         Self {
             keymap: HashMap::new(),
-            window_focused,
-            window_size,
-            window_psize,
+            window_focused: false,
         }
     }
 
     pub fn window_focused(&self) -> bool {
         self.window_focused
-    }
-
-    pub fn window_size(&self) -> LogicalSize<u32> {
-        self.window_size
-    }
-
-    pub fn window_physical_size(&self) -> PhysicalSize<u32> {
-        self.window_psize
     }
 
     pub fn key_held(&self, key: VirtualKeyCode) -> bool {
@@ -59,14 +41,17 @@ impl InputState {
         });
     }
 
-    pub fn update(&mut self, event: &WindowEvent, window: &Window) {
+    pub fn update(&mut self, event: &WindowEvent) {
         match event {
             WindowEvent::KeyboardInput { input, .. } => self.update_key(input),
             WindowEvent::Focused(f) => self.window_focused = *f,
-            WindowEvent::Resized(size) => {
-                self.window_size = size.clone().to_logical(window.scale_factor())
-            }
             _ => (),
         }
+    }
+}
+
+impl EventLoopTarget for InputState {
+    fn event(&mut self, event: &WindowEvent) {
+        self.update(event);
     }
 }

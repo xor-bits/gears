@@ -3,16 +3,16 @@ pub mod index;
 pub mod uniform;
 pub mod vertex;
 
+#[cfg(feature = "short_namespaces")]
 pub use image::*;
+#[cfg(feature = "short_namespaces")]
 pub use index::*;
+#[cfg(feature = "short_namespaces")]
 pub use uniform::*;
+#[cfg(feature = "short_namespaces")]
 pub use vertex::*;
 
-use gfx_hal::{
-    adapter::MemoryType,
-    memory::{Properties, Requirements},
-    MemoryTypeId,
-};
+use ash::vk;
 use log::warn;
 
 #[derive(Debug)]
@@ -23,28 +23,26 @@ pub enum BufferError {
 }
 
 fn find_mem_type(
-    available_memory_types: &Vec<MemoryType>,
-    requirements: &Requirements,
-    properties: Properties,
-) -> Option<MemoryTypeId> {
+    available_memory_types: &[vk::MemoryType],
+    requirements: &vk::MemoryRequirements,
+    properties: vk::MemoryPropertyFlags,
+) -> Option<u32> {
     available_memory_types
         .iter()
         .enumerate()
         .position(|(id, mem_type)| {
-            // type_mask is a bit field where each bit represents a memory type. If the bit is set
-            // to 1 it means we can use that type for our buffer. So this code finds the first
-            // memory type that has a `1` (or, is allowed), and is visible to the CPU.
-            requirements.type_mask & (1 << id) != 0 && mem_type.properties.contains(properties)
+            requirements.memory_type_bits & (1 << id) != 0
+                && mem_type.property_flags.contains(properties)
         })
-        .map(|id| id.into())
+        .map(|i| i as u32)
 }
 
 fn upload_type(
-    available_memory_types: &Vec<MemoryType>,
-    requirements: &Requirements,
-    properties: Properties,
-    fallback_properties: Properties,
-) -> MemoryTypeId {
+    available_memory_types: &[vk::MemoryType],
+    requirements: &vk::MemoryRequirements,
+    properties: vk::MemoryPropertyFlags,
+    fallback_properties: vk::MemoryPropertyFlags,
+) -> u32 {
     find_mem_type(available_memory_types, requirements, properties).unwrap_or_else(|| {
         warn!("Primary memory properties not available, using fallback memory properties");
         find_mem_type(available_memory_types, requirements, fallback_properties)

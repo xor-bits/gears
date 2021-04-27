@@ -1,75 +1,69 @@
-use std::{
-    iter,
-    mem::{self, ManuallyDrop},
-    ptr,
-    sync::Arc,
-};
+use ash::{version::DeviceV1_0, vk};
+use std::{mem, ptr, sync::Arc};
 
-use gfx_hal::{
-    adapter::MemoryType,
-    buffer::{SubRange, Usage},
-    command::CommandBuffer,
-    device::Device,
-    memory::{Properties, Segment},
-    Backend, IndexType,
-};
-
-use crate::{FrameCommands, GearsRenderer};
+use crate::{RenderRecordInfo, Renderer};
 
 use super::{upload_type, BufferError, VertexBuffer};
 
-pub struct IndexBuffer<B: Backend> {
-    device: Arc<B::Device>,
+pub struct IndexBuffer {
+    device: Arc<ash::Device>,
 
-    buffer: ManuallyDrop<B::Buffer>,
-    memory: ManuallyDrop<B::Memory>,
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
 
     // not bytes
     len: usize,
     capacity: usize,
 }
 
-impl<B: Backend> IndexBuffer<B> {
-    pub fn new(renderer: &GearsRenderer<B>, size: usize) -> Result<Self, BufferError> {
-        Self::new_with_device(renderer.device.clone(), &renderer.memory_types, size)
+impl IndexBuffer {
+    pub fn new(renderer: &Renderer, size: usize) -> Result<Self, BufferError> {
+        Self::new_with_device(
+            renderer.device.clone(),
+            &renderer.memory_properties.memory_types,
+            size,
+        )
     }
 
-    pub fn new_with_data(renderer: &GearsRenderer<B>, data: &[u32]) -> Result<Self, BufferError> {
+    pub fn new_with_data(renderer: &Renderer, data: &[u32]) -> Result<Self, BufferError> {
         let mut buffer = Self::new(renderer, data.len())?;
         buffer.write(0, data)?;
         Ok(buffer)
     }
 
     pub fn new_with_device(
-        device: Arc<B::Device>,
-        available_memory_types: &Vec<MemoryType>,
+        device: Arc<ash::Device>,
+        available_memory_types: &[vk::MemoryType],
         size: usize,
     ) -> Result<Self, BufferError> {
         if size == 0 {
             Err(BufferError::InvalidSize)
         } else {
             let byte_len = size * mem::size_of::<u32>();
-            let mut buffer = ManuallyDrop::new(
-                unsafe { device.create_buffer(byte_len as u64, Usage::INDEX) }
-                    .or(Err(BufferError::OutOfMemory))?,
-            );
-            let req = unsafe { device.get_buffer_requirements(&buffer) };
 
-            let memory = ManuallyDrop::new(
-                unsafe {
-                    device.allocate_memory(
-                        upload_type(
-                            available_memory_types,
-                            &req,
-                            Properties::CPU_VISIBLE | Properties::COHERENT,
-                            Properties::CPU_VISIBLE,
-                        ),
-                        req.size,
-                    )
-                }
-                .or(Err(BufferError::OutOfMemory))?,
-            );
-            unsafe { device.bind_buffer_memory(&memory, 0, &mut buffer) }
+            let buffer_info = vk::BufferCreateInfo::builder()
+                .size(byte_len as u64)
+                .usage(vk::BufferUsageFlags::INDEX_BUFFER)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+            let buffer = unsafe { device.create_buffer(&buffer_info, None) }
+                .or(Err(BufferError::OutOfMemory))?;
+
+            let req = unsafe { device.get_buffer_memory_requirements(buffer) };
+
+            let alloc_info = vk::MemoryAllocateInfo::builder()
+                .allocation_size(req.size)
+                .memory_type_index(upload_type(
+                    available_memory_types,
+                    &req,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE,
+                ));
+
+            let memory = unsafe { device.allocate_memory(&alloc_info, None) }
+                .or(Err(BufferError::OutOfMemory))?;
+
+            unsafe { device.bind_buffer_memory(buffer, memory, 0) }
                 .or(Err(BufferError::OutOfMemory))?;
 
             Ok(Self {
@@ -88,23 +82,30 @@ impl<B: Backend> IndexBuffer<B> {
             Err(BufferError::TriedToOverflow)
         } else {
             unsafe {
+                let memory_offset = mem::size_of::<u32>() * offset;
+                let memory_size = mem::size_of::<u32>() * data.len();
+
                 // map
                 let mapping = self
                     .device
-                    .map_memory(&mut self.memory, Segment::ALL)
+                    .map_memory(self.memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
                     .unwrap();
                 // write
                 ptr::copy_nonoverlapping(
-                    data.as_ptr() as *const u8,
-                    mapping.add(mem::size_of::<u32>() * offset),
-                    mem::size_of::<u32>() * data.len(),
+                    (data.as_ptr() as *const u8).add(memory_offset),
+                    mapping as *mut u8,
+                    memory_size,
                 );
                 // flush
                 self.device
-                    .flush_mapped_memory_ranges(iter::once((&*self.memory, Segment::ALL)))
+                    .flush_mapped_memory_ranges(&[vk::MappedMemoryRange::builder()
+                        .memory(self.memory)
+                        .offset(0)
+                        .size(vk::WHOLE_SIZE)
+                        .build()])
                     .unwrap();
                 // unmap
-                self.device.unmap_memory(&mut self.memory);
+                self.device.unmap_memory(self.memory);
             }
             Ok(())
         }
@@ -118,29 +119,33 @@ impl<B: Backend> IndexBuffer<B> {
         self.capacity
     }
 
-    pub fn bind(&self, command_buffer: &mut B::CommandBuffer) {
+    pub fn bind(&self, rri: &RenderRecordInfo) {
         unsafe {
-            command_buffer.bind_index_buffer(&self.buffer, SubRange::WHOLE, IndexType::U32);
+            self.device.cmd_bind_index_buffer(
+                rri.command_buffer,
+                self.buffer,
+                0,
+                vk::IndexType::UINT32,
+            );
         }
     }
 
-    pub fn draw<T>(&self, vertices: &VertexBuffer<T, B>, command_buffer: &mut FrameCommands<B>) {
-        self.bind(command_buffer);
+    pub fn draw<T>(&self, rri: &RenderRecordInfo, vertices: &VertexBuffer<T>) {
+        self.bind(rri);
+        vertices.bind(rri);
+
         unsafe {
-            vertices.bind(command_buffer);
-            command_buffer.draw_indexed(0..(self.len() as u32), 0, 0..1);
+            self.device
+                .cmd_draw_indexed(rri.command_buffer, self.len() as u32, 1, 0, 0, 0);
         }
     }
 }
 
-impl<B: Backend> Drop for IndexBuffer<B> {
+impl Drop for IndexBuffer {
     fn drop(&mut self) {
         unsafe {
-            let memory = ManuallyDrop::into_inner(ptr::read(&self.memory));
-            self.device.free_memory(memory);
-
-            let buffer = ManuallyDrop::into_inner(ptr::read(&self.buffer));
-            self.device.destroy_buffer(buffer);
+            self.device.free_memory(self.memory, None);
+            self.device.destroy_buffer(self.buffer, None);
         }
     }
 }

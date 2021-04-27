@@ -1,56 +1,38 @@
+use ash::{util::read_spv, version::DeviceV1_0, vk};
 use gears_traits::{Vertex, UBO};
 use parking_lot::Mutex;
 use std::{
-    any::{type_name, TypeId},
+    any::{type_name, Any, TypeId},
     collections::HashMap,
+    ffi::CStr,
     io::Cursor,
-    iter,
-    mem::{self, ManuallyDrop},
-    ptr,
     sync::Arc,
 };
 
-use gfx_hal::{
-    adapter::MemoryType,
-    buffer::SubRange,
-    command::CommandBuffer,
-    device::Device,
-    pass::Subpass,
-    pso::{
-        AttributeDesc, BlendState, BufferDescriptorFormat, BufferDescriptorType, ColorBlendDesc,
-        ColorMask, Comparison, DepthStencilDesc, DepthTest, Descriptor, DescriptorPool,
-        DescriptorPoolCreateFlags, DescriptorRangeDesc, DescriptorSetLayoutBinding,
-        DescriptorSetWrite, DescriptorType, EntryPoint, Face, FrontFace, GraphicsPipelineDesc,
-        InputAssemblerDesc, PolygonMode, Primitive, PrimitiveAssemblerDesc, Rasterizer,
-        ShaderStageFlags, Specialization, State, StencilTest, VertexBufferDesc,
-    },
-    Backend,
-};
+use crate::{ExpectLog, ImmediateFrameInfo, RenderRecordInfo, Renderer};
 
-use crate::GearsRenderer;
+use super::buffer::{BufferError, UniformBuffer};
 
-use super::buffer::{BufferError, GenericUniformBuffer, UniformBuffer};
-
-pub struct PipelineBuilder<'a, B: Backend> {
-    device: Arc<B::Device>,
-    render_pass: &'a B::RenderPass,
-    available_memory_types: &'a Vec<MemoryType>,
+pub struct PipelineBuilder<'a> {
+    device: Arc<ash::Device>,
+    render_pass: vk::RenderPass,
+    available_memory_types: &'a [vk::MemoryType],
     set_count: usize,
 
     ubos: HashMap<
         TypeId,
         (
-            ShaderStageFlags,
-            Result<Vec<Arc<Mutex<dyn GenericUniformBuffer<B> + Send>>>, BufferError>,
+            vk::ShaderStageFlags,
+            Result<Vec<(vk::Buffer, Arc<Mutex<dyn Any + Send>>)>, BufferError>,
         ),
     >,
 }
 
-pub struct GraphicsPipelineBuilder<'a, B: Backend> {
-    base: PipelineBuilder<'a, B>,
+pub struct GraphicsPipelineBuilder<'a> {
+    base: PipelineBuilder<'a>,
 
-    vert_input_binding: Vec<VertexBufferDesc>,
-    vert_input_attribute: Vec<AttributeDesc>,
+    vert_input_binding: Vec<vk::VertexInputBindingDescription>,
+    vert_input_attribute: Vec<vk::VertexInputAttributeDescription>,
 
     vert_spirv: &'a [u8],
     geom_spirv: Option<&'a [u8]>,
@@ -63,37 +45,37 @@ pub struct GraphicsPipelineBuilder<'a, B: Backend> {
     comp_spirv: &'a [u8],
 } */
 
-pub struct Pipeline<B: Backend> {
-    device: Arc<B::Device>,
+pub struct Pipeline {
+    device: Arc<ash::Device>,
 
-    desc_pool: Option<B::DescriptorPool>,
+    desc_pool: Option<vk::DescriptorPool>,
 
-    desc_set_layout: ManuallyDrop<B::DescriptorSetLayout>,
+    desc_set_layout: vk::DescriptorSetLayout,
     desc_sets: Vec<(
-        B::DescriptorSet,
-        HashMap<TypeId, Arc<Mutex<dyn GenericUniformBuffer<B> + Send>>>,
+        vk::DescriptorSet,
+        HashMap<TypeId, Arc<Mutex<dyn Any + Send>>>,
     )>,
 
-    pipeline_layout: ManuallyDrop<B::PipelineLayout>,
-    pipeline: ManuallyDrop<B::GraphicsPipeline>,
+    pipeline_layout: vk::PipelineLayout,
+    pipeline: vk::Pipeline,
 }
 
-impl<'a, B: Backend> PipelineBuilder<'a, B> {
-    pub fn new(renderer: &'a GearsRenderer<B>) -> Self {
+impl<'a> PipelineBuilder<'a> {
+    pub fn new(renderer: &'a Renderer) -> Self {
         Self {
             device: renderer.device.clone(),
-            render_pass: &renderer.render_pass,
-            available_memory_types: &renderer.memory_types,
-            set_count: renderer.frames_in_flight,
+            render_pass: renderer.render_pass,
+            available_memory_types: &renderer.memory_properties.memory_types,
+            set_count: renderer.target_images.len(),
 
             ubos: HashMap::new(),
         }
     }
 
     pub fn new_with_device(
-        device: Arc<B::Device>,
-        render_pass: &'a B::RenderPass,
-        available_memory_types: &'a Vec<MemoryType>,
+        device: Arc<ash::Device>,
+        render_pass: vk::RenderPass,
+        available_memory_types: &'a [vk::MemoryType],
         set_count: usize,
     ) -> Self {
         Self {
@@ -110,8 +92,8 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
         self,
         vert_spirv: &'a [u8],
         frag_spirv: &'a [u8],
-    ) -> GraphicsPipelineBuilder<'a, B> {
-        GraphicsPipelineBuilder::<'a, B> {
+    ) -> GraphicsPipelineBuilder<'a> {
+        GraphicsPipelineBuilder::<'a> {
             base: self,
 
             vert_input_binding: Vec::new(),
@@ -133,13 +115,13 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
     pub fn with_ubo<U: 'static + UBO + Default + Send>(mut self) -> Self {
         let buffers = (0..self.set_count)
             .map(
-                |_| -> Result<Arc<Mutex<dyn GenericUniformBuffer<B> + Send>>, BufferError> {
-                    let mut ubo = UniformBuffer::<U, B>::new_with_device(
+                |_| -> Result<(vk::Buffer, Arc<Mutex<dyn Any + Send>>), BufferError> {
+                    let ubo = UniformBuffer::<U>::new_with_device(
                         self.device.clone(),
                         self.available_memory_types,
                     )?;
                     ubo.write(&U::default());
-                    Ok(Arc::new(Mutex::new(ubo)))
+                    Ok((ubo.get(), Arc::new(Mutex::new(ubo))))
                 },
             )
             .collect::<Result<Vec<_>, BufferError>>();
@@ -150,7 +132,7 @@ impl<'a, B: Backend> PipelineBuilder<'a, B> {
     }
 }
 
-impl<'a, B: Backend> GraphicsPipelineBuilder<'a, B> {
+impl<'a> GraphicsPipelineBuilder<'a> {
     pub fn with_input<V: Vertex>(mut self) -> Self {
         self.vert_input_binding = V::binding_desc();
         self.vert_input_attribute = V::attribute_desc();
@@ -167,89 +149,77 @@ impl<'a, B: Backend> GraphicsPipelineBuilder<'a, B> {
         self
     }
 
-    pub fn build(self, debug: bool) -> Result<Pipeline<B>, BufferError> {
-        // vertex
-        let vert_module = {
-            let spirv = gfx_auxil::read_spirv(Cursor::new(&self.vert_spirv[..])).unwrap();
-            unsafe { self.base.device.create_shader_module(&spirv) }
-                .expect("Could not create a fragment shader module")
-        };
-        let vert_entry = EntryPoint::<B> {
-            entry: "main",
-            module: &vert_module,
-            specialization: Specialization::default(),
-        };
-
-        // geometry
-        let geom_module = self.geom_spirv.map(|geom_spirv| {
-            let spirv = gfx_auxil::read_spirv(Cursor::new(&geom_spirv[..])).unwrap();
-            unsafe { self.base.device.create_shader_module(&spirv) }
-                .expect("Could not create a fragment shader module")
-        });
-        let geom_entry = geom_module.as_ref().map(|module| EntryPoint::<B> {
-            entry: "main",
-            module,
-            specialization: Specialization::default(),
+    pub fn build(self, debug: bool) -> Result<Pipeline, BufferError> {
+        // modules
+        let vert = shader_module(
+            &self.base.device,
+            self.vert_spirv,
+            vk::ShaderStageFlags::VERTEX,
+        );
+        let frag = shader_module(
+            &self.base.device,
+            self.frag_spirv,
+            vk::ShaderStageFlags::FRAGMENT,
+        );
+        // optional module(s)
+        let geom = self.geom_spirv.map(|geom_spirv| {
+            shader_module(
+                &self.base.device,
+                geom_spirv,
+                vk::ShaderStageFlags::GEOMETRY,
+            )
         });
 
-        // fragment
-        let frag_module = {
-            let spirv = gfx_auxil::read_spirv(Cursor::new(&self.frag_spirv[..])).unwrap();
-            unsafe { self.base.device.create_shader_module(&spirv) }
-                .expect("Could not create a fragment shader module")
-        };
-        let frag_entry = EntryPoint::<B> {
-            entry: "main",
-            module: &frag_module,
-            specialization: Specialization::default(),
-        };
+        let mut stages = vec![vert.1, frag.1];
+        geom.map(|geom| stages.push(geom.1));
 
         let bindings = self
             .base
             .ubos
             .iter()
-            .map(|(_, (stage, _))| DescriptorSetLayoutBinding {
-                binding: 0,
-                ty: DescriptorType::Buffer {
-                    format: BufferDescriptorFormat::Structured {
-                        dynamic_offset: false,
-                    },
-                    ty: BufferDescriptorType::Uniform,
-                },
-                count: 1,
-                stage_flags: stage.clone(),
-                immutable_samplers: false,
+            .map(|(_, (stage, _))| {
+                vk::DescriptorSetLayoutBinding::builder()
+                    .binding(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .descriptor_count(1)
+                    .stage_flags(stage.clone())
+                    .build()
             })
             .collect::<Vec<_>>();
 
-        let descriptor_ranges = self.base.ubos.iter().map(|_| DescriptorRangeDesc {
-            ty: DescriptorType::Buffer {
-                format: BufferDescriptorFormat::Structured {
-                    dynamic_offset: false,
-                },
-                ty: BufferDescriptorType::Uniform,
-            },
-            count: 1,
-        });
+        let desc_set_layout_info =
+            vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings[..]);
 
-        let desc_set_layout = ManuallyDrop::new(
-            unsafe {
+        let desc_set_layout = unsafe {
+            self.base
+                .device
+                .create_descriptor_set_layout(&desc_set_layout_info, None)
+        }
+        .expect("Descriptor set layout creation failed");
+
+        let descriptor_sizes: Vec<vk::DescriptorPoolSize> = self
+            .base
+            .ubos
+            .iter()
+            .map(|_| {
+                vk::DescriptorPoolSize::builder()
+                    .descriptor_count(1)
+                    .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                    .build()
+            })
+            .collect();
+
+        let (desc_pool, desc_sets) = if descriptor_sizes.len() > 0 {
+            let desc_pool_info = vk::DescriptorPoolCreateInfo::builder()
+                .max_sets(self.base.set_count as u32)
+                .pool_sizes(&descriptor_sizes);
+
+            let desc_pool = unsafe {
                 self.base
                     .device
-                    .create_descriptor_set_layout(bindings.into_iter(), iter::empty())
+                    .create_descriptor_pool(&desc_pool_info, None)
             }
-            .expect("Could not create a descriptor set layout"),
-        );
-
-        let (desc_pool, desc_sets) = if descriptor_ranges.len() > 0 {
-            let mut desc_pool = unsafe {
-                self.base.device.create_descriptor_pool(
-                    self.base.set_count,
-                    descriptor_ranges.into_iter(),
-                    DescriptorPoolCreateFlags::empty(),
-                )
-            }
-            .expect("Could not create a descriptor pool");
+            .expect("Descriptor pool creation failed");
 
             let mut ubos = self
                 .base
@@ -264,26 +234,42 @@ impl<'a, B: Backend> GraphicsPipelineBuilder<'a, B> {
             let desc_sets = (0..self.base.set_count)
                 .into_iter()
                 .map(|_| {
-                    let mut desc_set = unsafe { desc_pool.allocate_one(&desc_set_layout) }.unwrap();
+                    let desc_set = unsafe {
+                        device.allocate_descriptor_sets(
+                            &vk::DescriptorSetAllocateInfo::builder()
+                                .descriptor_pool(desc_pool)
+                                .set_layouts(&[desc_set_layout]),
+                        )
+                    }
+                    .unwrap()[0];
                     let ubos = ubos
                         .iter_mut()
                         .map(|(id, (_, ubos))| (id.clone(), ubos.remove(0)))
-                        .collect::<HashMap<TypeId, Arc<Mutex<dyn GenericUniformBuffer<B> + Send>>>>(
-                        );
+                        .collect::<HashMap<TypeId, (vk::Buffer, Arc<Mutex<dyn Any + Send>>)>>();
 
-                    let first_ubo = ubos.iter().next().unwrap().1;
+                    let first_ubo = ubos.iter().next().unwrap().1 .0;
 
                     unsafe {
-                        device.write_descriptor_set(DescriptorSetWrite {
-                            set: &mut desc_set,
-                            descriptors: iter::once(Descriptor::Buffer(
-                                first_ubo.lock().get(),
-                                SubRange::WHOLE,
-                            )),
-                            array_offset: 0,
-                            binding: 0,
-                        });
+                        device.update_descriptor_sets(
+                            &[vk::WriteDescriptorSet::builder()
+                                .dst_array_element(0)
+                                .dst_binding(0)
+                                .dst_set(desc_set)
+                                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                                .buffer_info(&[vk::DescriptorBufferInfo::builder()
+                                    .offset(0)
+                                    .range(vk::WHOLE_SIZE)
+                                    .buffer(first_ubo)
+                                    .build()])
+                                .build()],
+                            &[],
+                        );
                     }
+
+                    let ubos = ubos
+                        .into_iter()
+                        .map(|(id, (_, ubos))| (id, ubos))
+                        .collect::<HashMap<TypeId, Arc<Mutex<dyn Any + Send>>>>();
 
                     (desc_set, ubos)
                 })
@@ -294,85 +280,122 @@ impl<'a, B: Backend> GraphicsPipelineBuilder<'a, B> {
             (None, Vec::new())
         };
 
-        let pipeline_layout = ManuallyDrop::new(
-            unsafe {
-                self.base
-                    .device
-                    .create_pipeline_layout(iter::once(&*desc_set_layout), iter::empty())
-            }
-            .expect("Could not create a pipeline layout"),
-        );
+        let set_layouts = [desc_set_layout];
+        let pipeline_layout_info =
+            vk::PipelineLayoutCreateInfo::builder().set_layouts(&set_layouts);
 
-        let subpass = Subpass {
-            index: 0,
-            main_pass: self.base.render_pass,
-        };
-
-        let mut pipeline_desc = GraphicsPipelineDesc::new(
-            PrimitiveAssemblerDesc::Vertex {
-                buffers: &self.vert_input_binding[..],
-                attributes: &self.vert_input_attribute[..],
-                input_assembler: InputAssemblerDesc {
-                    primitive: Primitive::TriangleList,
-                    with_adjacency: false,
-                    restart_index: None,
-                },
-                vertex: vert_entry,
-                geometry: geom_entry,
-                tessellation: None,
-            },
-            Rasterizer {
-                polygon_mode: if debug {
-                    PolygonMode::Line
-                } else {
-                    PolygonMode::Fill
-                },
-                cull_face: if debug { Face::NONE } else { Face::BACK },
-                front_face: FrontFace::Clockwise,
-                depth_clamping: false,
-                depth_bias: None,
-                conservative: false,
-                line_width: State::Static(1.0),
-            },
-            Some(frag_entry),
-            &*pipeline_layout,
-            subpass,
-        );
-
-        pipeline_desc.depth_stencil = DepthStencilDesc {
-            depth: Some(DepthTest {
-                fun: if debug {
-                    Comparison::Always
-                } else {
-                    Comparison::LessEqual
-                },
-                write: true,
-            }),
-            depth_bounds: false,
-            stencil: Some(StencilTest::default()),
-        };
-
-        pipeline_desc.blender.targets.push(ColorBlendDesc {
-            mask: ColorMask::ALL,
-            blend: Some(BlendState::ALPHA),
-        });
-
-        let pipeline = unsafe {
+        let pipeline_layout = unsafe {
             self.base
                 .device
-                .create_graphics_pipeline(&pipeline_desc, None)
+                .create_pipeline_layout(&pipeline_layout_info, None)
+        }
+        .expect("Pipeline layout creation failed");
+
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
+            .subpass(0)
+            .render_pass(self.base.render_pass)
+            .layout(pipeline_layout)
+            .vertex_input_state(
+                &vk::PipelineVertexInputStateCreateInfo::builder()
+                    .vertex_binding_descriptions(&self.vert_input_binding[..])
+                    .vertex_attribute_descriptions(&self.vert_input_attribute[..]),
+            )
+            .input_assembly_state(
+                &vk::PipelineInputAssemblyStateCreateInfo::builder()
+                    .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+                    .primitive_restart_enable(false),
+            )
+            .rasterization_state(
+                &vk::PipelineRasterizationStateCreateInfo::builder()
+                    .polygon_mode(if debug {
+                        vk::PolygonMode::LINE
+                    } else {
+                        vk::PolygonMode::FILL
+                    })
+                    .cull_mode(if debug {
+                        vk::CullModeFlags::NONE
+                    } else {
+                        vk::CullModeFlags::BACK
+                    })
+                    .front_face(vk::FrontFace::CLOCKWISE)
+                    .depth_clamp_enable(false)
+                    .depth_bias_enable(false)
+                    .depth_bias_constant_factor(0.0)
+                    .depth_bias_clamp(0.0)
+                    .depth_bias_slope_factor(0.0)
+                    .rasterizer_discard_enable(false)
+                    .line_width(1.0),
+            )
+            .multisample_state(
+                &vk::PipelineMultisampleStateCreateInfo::builder()
+                    .sample_shading_enable(false)
+                    .rasterization_samples(vk::SampleCountFlags::TYPE_1)
+                    .min_sample_shading(1.0)
+                    .sample_mask(&[])
+                    .alpha_to_coverage_enable(false)
+                    .alpha_to_one_enable(false),
+            )
+            .depth_stencil_state(
+                &vk::PipelineDepthStencilStateCreateInfo::builder()
+                    .stencil_test_enable(false)
+                    .depth_test_enable(true)
+                    .depth_write_enable(true)
+                    .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL)
+                    .depth_bounds_test_enable(false)
+                    .min_depth_bounds(0.0)
+                    .max_depth_bounds(1.0),
+            )
+            .color_blend_state(
+                &vk::PipelineColorBlendStateCreateInfo::builder().attachments(&[
+                    vk::PipelineColorBlendAttachmentState::builder()
+                        .color_write_mask(vk::ColorComponentFlags::all())
+                        .blend_enable(false)
+                        .build(),
+                ]),
+            )
+            .stages(&stages[..])
+            .viewport_state(
+                &vk::PipelineViewportStateCreateInfo::builder()
+                    .viewports(&[vk::Viewport::builder()
+                        .width(600.0)
+                        .height(600.0)
+                        .x(0.0)
+                        .y(0.0)
+                        .min_depth(0.0)
+                        .max_depth(1.0)
+                        .build()])
+                    .scissors(&[vk::Rect2D::builder()
+                        .offset(vk::Offset2D { x: 0, y: 0 })
+                        .extent(vk::Extent2D {
+                            width: 600,
+                            height: 600,
+                        })
+                        .build()]),
+            )
+            .dynamic_state(
+                &vk::PipelineDynamicStateCreateInfo::builder()
+                    .dynamic_states(&[vk::DynamicState::VIEWPORT]),
+            )
+            .build();
+
+        let pipeline = unsafe {
+            self.base.device.create_graphics_pipelines(
+                vk::PipelineCache::null(),
+                &[pipeline_info],
+                None,
+            )
         };
 
         unsafe {
             let device = &self.base.device;
-            device.destroy_shader_module(frag_module);
-            geom_module.map(|geom_module| device.destroy_shader_module(geom_module));
-            device.destroy_shader_module(vert_module);
+            device.destroy_shader_module(frag.0, None);
+            geom.map(|geom| device.destroy_shader_module(geom.0, None));
+            device.destroy_shader_module(vert.0, None);
         }
 
-        let pipeline = ManuallyDrop::new(pipeline.expect("Could not create a graphics pipeline"));
+        let pipeline = pipeline.expect("Graphics pipeline creation failed")[0];
 
-        Ok(Pipeline::<B> {
+        Ok(Pipeline {
             device: self.base.device,
             desc_pool,
             desc_sets,
@@ -383,61 +406,81 @@ impl<'a, B: Backend> GraphicsPipelineBuilder<'a, B> {
     }
 }
 
-impl<B: Backend> Pipeline<B> {
-    pub fn bind(&self, command_buffer: &mut B::CommandBuffer, set_index: usize) {
+impl Pipeline {
+    pub fn bind(&self, rri: &RenderRecordInfo) {
         unsafe {
-            command_buffer.bind_graphics_pipeline(&self.pipeline);
+            self.device.cmd_bind_pipeline(
+                rri.command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline,
+            );
 
-            if let Some((desc_set, _)) = self.desc_sets.get(set_index) {
-                command_buffer.bind_graphics_descriptor_sets(
-                    &self.pipeline_layout,
+            if let Some((desc_set, _)) = self.desc_sets.get(rri.image_index) {
+                self.device.cmd_bind_descriptor_sets(
+                    rri.command_buffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.pipeline_layout,
                     0,
-                    iter::once(desc_set),
-                    iter::empty(),
+                    &[*desc_set],
+                    &[],
                 );
             }
         }
     }
 
-    pub fn write_ubo<U: 'static + UBO>(&mut self, new_data: &U, set_index: usize) {
-        if let Some((set, ubo_set)) = self.desc_sets.get_mut(set_index) {
-            let mut ubo = ubo_set.get_mut(&TypeId::of::<U>()).unwrap().lock();
-            ubo.write_bytes(new_data as *const U as *const u8, mem::size_of::<U>());
+    pub fn write_ubo<'a, U: 'static + UBO>(&mut self, imfi: &ImmediateFrameInfo, new_data: &U) {
+        let (_, ubos) = &self.desc_sets[imfi.image_index];
 
-            unsafe {
-                self.device.write_descriptor_set(DescriptorSetWrite {
-                    set,
-                    descriptors: iter::once(Descriptor::Buffer(ubo.get(), SubRange::WHOLE)),
-                    array_offset: 0,
-                    binding: 0,
-                });
-            }
-        } else {
-            panic!(
-                "Type {:?} is not an UBO for tihs pipeline",
+        let ubo = ubos
+            .get(&TypeId::of::<U>())
+            .expect_log(&*format!(
+                "Type {:?} is not an UBO for this pipeline",
                 type_name::<U>()
-            );
-        }
+            ))
+            .lock();
+        let ubo = ubo.downcast_ref::<UniformBuffer<U>>().unwrap();
+
+        ubo.write(new_data);
     }
 }
 
-impl<B: Backend> Drop for Pipeline<B> {
+impl Drop for Pipeline {
     fn drop(&mut self) {
         self.desc_sets.clear();
 
         unsafe {
-            let pipeline_layout = ManuallyDrop::into_inner(ptr::read(&self.pipeline_layout));
-            self.device.destroy_pipeline_layout(pipeline_layout);
+            self.device
+                .destroy_pipeline_layout(self.pipeline_layout, None);
 
-            let pipeline = ManuallyDrop::into_inner(ptr::read(&self.pipeline));
-            self.device.destroy_graphics_pipeline(pipeline);
+            self.device.destroy_pipeline(self.pipeline, None);
 
-            let desc_set_layout = ManuallyDrop::into_inner(ptr::read(&self.desc_set_layout));
-            self.device.destroy_descriptor_set_layout(desc_set_layout);
+            self.device
+                .destroy_descriptor_set_layout(self.desc_set_layout, None);
 
             if let Some(desc_pool) = self.desc_pool.take() {
-                self.device.destroy_descriptor_pool(desc_pool);
+                self.device.destroy_descriptor_pool(desc_pool, None);
             }
         }
     }
+}
+
+fn shader_module(
+    device: &Arc<ash::Device>,
+    spirv: &[u8],
+    stage: vk::ShaderStageFlags,
+) -> (vk::ShaderModule, vk::PipelineShaderStageCreateInfo) {
+    let spirv = read_spv(&mut Cursor::new(&spirv[..])).expect("SPIR-V read failed");
+
+    let module_info = vk::ShaderModuleCreateInfo::builder().code(&spirv[..]);
+
+    let module = unsafe { device.create_shader_module(&module_info, None) }
+        .expect("Vertex shader module creation failed");
+
+    let stage = vk::PipelineShaderStageCreateInfo::builder()
+        .module(module)
+        .stage(stage)
+        .name(CStr::from_bytes_with_nul(b"main\0").unwrap())
+        .build();
+
+    (module, stage)
 }
