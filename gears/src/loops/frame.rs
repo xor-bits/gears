@@ -83,7 +83,7 @@ impl FrameLoop {
                         let gpu_ms = (avg_gpu_frametime.as_nanos() as f32) / frames as f32 * MICRO_EXP;
 						let fps = 1000.0 / cpu_ms;
 
-                        debug!("FPS: {} (real: {})\n - average CPU frametime: {} ms\n - average CPU frametime: {} ms", fps, frames / PERF_LOG_INTERVAL, cpu_ms, gpu_ms);
+                        debug!("FPS: {} (real: {})\n - average CPU frametime: {} ms\n - average GPU frametime: {} ms", fps, frames / PERF_LOG_INTERVAL, cpu_ms, gpu_ms);
 
                         avg_cpu_frametime = Duration::from_secs(0);
                         avg_gpu_frametime = Duration::from_secs(0);
