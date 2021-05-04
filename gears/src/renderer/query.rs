@@ -3,6 +3,8 @@ use std::{sync::Arc, time::Duration};
 
 use crate::RenderRecordInfo;
 
+use super::device::RenderDevice;
+
 const TIMESTAMP_STAGES: [vk::PipelineStageFlags; 2] = [
     vk::PipelineStageFlags::BOTTOM_OF_PIPE,
     vk::PipelineStageFlags::TOP_OF_PIPE,
@@ -15,49 +17,42 @@ pub enum PerfQueryError {
 }
 
 pub struct PerfQuery {
-    device: Arc<ash::Device>,
+    device: Arc<RenderDevice>,
     query_pool: vk::QueryPool,
 }
 
 impl PerfQuery {
-    pub fn new_with_device(device: Arc<ash::Device>) -> Self {
+    pub fn new_with_device(device: Arc<RenderDevice>) -> Self {
         let query_pool_info = vk::QueryPoolCreateInfo::builder()
             .query_type(vk::QueryType::TIMESTAMP)
             .query_count(TIMESTAMP_COUNT);
 
+        // Unsafe: device must be valid
         let query_pool = unsafe { device.create_query_pool(&query_pool_info, None) }
             .expect("Could not create a query pool");
 
         Self { device, query_pool }
     }
 
-    fn query(&self, rri: &RenderRecordInfo, id: u32) {
-        unsafe {
-            self.device.cmd_write_timestamp(
-                rri.command_buffer,
-                TIMESTAMP_STAGES[id as usize],
-                self.query_pool,
-                id,
-            );
-        }
+    unsafe fn query(&self, rri: &RenderRecordInfo, id: u32) {
+        self.device.cmd_write_timestamp(
+            rri.command_buffer,
+            TIMESTAMP_STAGES[id as usize],
+            self.query_pool,
+            id,
+        );
     }
 
-    pub fn reset(&self, rri: &RenderRecordInfo) {
-        unsafe {
-            self.device.cmd_reset_query_pool(
-                rri.command_buffer,
-                self.query_pool,
-                0,
-                TIMESTAMP_COUNT,
-            );
-        }
+    pub unsafe fn reset(&self, rri: &RenderRecordInfo) {
+        self.device
+            .cmd_reset_query_pool(rri.command_buffer, self.query_pool, 0, TIMESTAMP_COUNT);
     }
 
-    pub fn begin(&self, rri: &RenderRecordInfo) {
+    pub unsafe fn begin(&self, rri: &RenderRecordInfo) {
         self.query(rri, 0)
     }
 
-    pub fn end(&self, rri: &RenderRecordInfo) {
+    pub unsafe fn end(&self, rri: &RenderRecordInfo) {
         self.query(rri, 1)
     }
 

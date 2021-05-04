@@ -1,63 +1,45 @@
 use ash::{version::DeviceV1_0, vk};
-use std::{marker::PhantomData, mem, ptr, sync::Arc};
+use std::{mem, sync::Arc};
 
-use crate::Renderer;
+use crate::{
+    renderer::device::RenderDevice, Buffer, Renderer, StageBuffer, UpdateQuery, UpdateRecordInfo,
+    WriteType,
+};
 
-use super::{upload_type, BufferError};
+use super::{create_buffer, BufferError};
 
 pub struct UniformBuffer<T> {
-    device: Arc<ash::Device>,
+    device: Arc<RenderDevice>,
 
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
 
-    _p: PhantomData<T>,
+    requested_copy: bool,
+    stage: StageBuffer<T>,
 }
 
 impl<T> UniformBuffer<T> {
     pub fn new(renderer: &Renderer) -> Result<Self, BufferError> {
-        Self::new_with_device(
-            renderer.device.clone(),
-            &renderer.memory_properties.memory_types,
-        )
+        Self::new_with_device(renderer.rdevice.clone())
     }
 
     pub fn new_with_data(renderer: &Renderer, data: &T) -> Result<Self, BufferError> {
-        let buffer = Self::new(renderer)?;
-        buffer.write(data);
+        let mut buffer = Self::new(renderer)?;
+        buffer.write(data)?;
         Ok(buffer)
     }
 
-    pub fn new_with_device(
-        device: Arc<ash::Device>,
-        available_memory_types: &[vk::MemoryType],
-    ) -> Result<Self, BufferError> {
+    pub fn new_with_device(device: Arc<RenderDevice>) -> Result<Self, BufferError> {
         let byte_len = mem::size_of::<T>();
+        let (buffer, memory) = create_buffer(
+            &device,
+            byte_len,
+            vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::UNIFORM_BUFFER,
+            vk::SharingMode::EXCLUSIVE,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
 
-        let buffer_info = vk::BufferCreateInfo::builder()
-            .size(byte_len as u64)
-            .usage(vk::BufferUsageFlags::UNIFORM_BUFFER)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-        let buffer = unsafe { device.create_buffer(&buffer_info, None) }
-            .or(Err(BufferError::OutOfMemory))?;
-
-        let req = unsafe { device.get_buffer_memory_requirements(buffer) };
-
-        let alloc_info = vk::MemoryAllocateInfo::builder()
-            .allocation_size(req.size)
-            .memory_type_index(upload_type(
-                available_memory_types,
-                &req,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                vk::MemoryPropertyFlags::HOST_VISIBLE,
-            ));
-
-        let memory = unsafe { device.allocate_memory(&alloc_info, None) }
-            .or(Err(BufferError::OutOfMemory))?;
-
-        unsafe { device.bind_buffer_memory(buffer, memory, 0) }
-            .or(Err(BufferError::OutOfMemory))?;
+        let stage = StageBuffer::new_with_device(device.clone(), 1, true)?;
 
         Ok(Self {
             device,
@@ -65,35 +47,33 @@ impl<T> UniformBuffer<T> {
             buffer,
             memory,
 
-            _p: PhantomData::default(),
+            requested_copy: false,
+            stage,
         })
     }
 
-    pub fn write(&self, data: &T) {
-        let data_size = mem::size_of::<T>();
+    pub fn write(&mut self, data: &T) -> Result<WriteType, BufferError> {
+        let result = self.stage.write_single(0, data);
+        if let Ok(WriteType::Write) = result {
+            self.requested_copy = true
+        }
+        result
+    }
+}
 
-        unsafe {
-            // map
-            let mapping = self
-                .device
-                .map_memory(self.memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
-                .unwrap();
-            // write
-            ptr::copy_nonoverlapping(data as *const T as *const u8, mapping as *mut u8, data_size);
-            // flush
-            self.device
-                .flush_mapped_memory_ranges(&[vk::MappedMemoryRange::builder()
-                    .memory(self.memory)
-                    .offset(0)
-                    .size(vk::WHOLE_SIZE)
-                    .build()])
-                .unwrap();
-            // unmap
-            self.device.unmap_memory(self.memory);
+impl<T> Buffer for UniformBuffer<T> {
+    fn updates(&self, _: &UpdateQuery) -> bool {
+        self.requested_copy
+    }
+
+    unsafe fn update(&mut self, uri: &UpdateRecordInfo) {
+        if self.requested_copy {
+            self.requested_copy = false;
+            self.stage.copy_to(uri, self);
         }
     }
 
-    pub fn get(&self) -> vk::Buffer {
+    fn get(&self) -> vk::Buffer {
         self.buffer
     }
 }

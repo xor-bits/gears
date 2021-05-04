@@ -19,9 +19,10 @@ use gears::{
         buffer::{IndexBuffer, VertexBuffer},
         pipeline::{Pipeline, PipelineBuilder},
     },
-    Context, CursorController, ElementState, EventLoopTarget, Frame, FrameLoop, FrameLoopTarget,
+    Buffer, CursorController, ElementState, EventLoopTarget, Frame, FrameLoop, FrameLoopTarget,
     HideMode, ImmediateFrameInfo, RenderRecordInfo, Renderer, RendererRecord, UpdateLoop,
-    UpdateLoopTarget, UpdateRate, VSync, VirtualKeyCode, WindowEvent,
+    UpdateLoopTarget, UpdateQuery, UpdateRate, UpdateRecordInfo, VSync, VirtualKeyCode,
+    WindowEvent,
 };
 use marching_cubes::generate_marching_cubes;
 use parking_lot::Mutex;
@@ -73,7 +74,7 @@ struct App {
     renderer: Box<Option<Renderer>>,
 
     vb: VertexBuffer<shader::VertexData>,
-    ib: IndexBuffer,
+    ib: IndexBuffer<u32>,
     shaders: (Pipeline, Pipeline),
 
     cursor_controller: CursorController,
@@ -124,12 +125,7 @@ fn point_to_index(x: usize, y: usize, z: usize) -> usize {
 }
 
 impl App {
-    fn init(frame: Frame, context: Context, input: Arc<Mutex<InputState>>) -> Self {
-        let renderer = Renderer::new()
-            .with_vsync(VSync::Off)
-            .build(context)
-            .unwrap();
-
+    fn init(frame: Frame, renderer: Renderer, input: Arc<Mutex<InputState>>) -> Self {
         let voxels = generate_voxels(0);
         let (vertices, indices) = generate_cubes(&voxels);
 
@@ -229,17 +225,35 @@ impl RendererRecord for App {
                 * Matrix4::from_scale(1.0),
         };
 
-        self.shaders.0.write_ubo(imfi, &ubo);
-        self.shaders.1.write_ubo(imfi, &ubo);
+        self.shaders.0.write_ubo(imfi, &ubo).unwrap();
+        self.shaders.1.write_ubo(imfi, &ubo).unwrap();
+    }
+
+    fn updates(&mut self, uq: &UpdateQuery) -> bool {
+        self.shaders.0.updates(uq)
+            || self.shaders.1.updates(uq)
+            || self.ib.updates(uq)
+            || self.vb.updates(uq)
+    }
+
+    fn update(&mut self, uri: &UpdateRecordInfo) {
+        unsafe {
+            self.shaders.0.update(uri);
+            self.shaders.1.update(uri);
+            self.ib.update(uri);
+            self.vb.update(uri);
+        }
     }
 
     fn record(&mut self, rri: &RenderRecordInfo) {
-        if self.debug {
-            self.shaders.0.bind(rri);
-        } else {
-            self.shaders.1.bind(rri);
+        unsafe {
+            if self.debug {
+                self.shaders.0.bind(rri);
+            } else {
+                self.shaders.1.bind(rri);
+            }
+            self.ib.draw(rri, &self.vb);
         }
-        self.ib.draw(rri, &self.vb);
     }
 }
 
@@ -366,10 +380,15 @@ fn main() {
         // TODO: .with_multisamples(4)
         .build();
 
-    let context = frame.context().unwrap();
+    let context = frame.context_auto_pick().unwrap();
+
+    let renderer = Renderer::new()
+        .with_vsync(VSync::Off)
+        .build(context)
+        .unwrap();
 
     let input = Arc::new(Mutex::new(InputState::new()));
-    let app = Arc::new(Mutex::new(App::init(frame, context, input.clone())));
+    let app = Arc::new(Mutex::new(App::init(frame, renderer, input.clone())));
 
     let frame_loop = FrameLoop::new()
         .with_event_loop(event_loop)

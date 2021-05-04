@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use ash::{
     extensions::khr::Surface,
     version::{DeviceV1_0, InstanceV1_0},
@@ -12,6 +10,7 @@ const PRIORITY: [f32; 1] = [1.0];
 pub struct QueueFamilies {
     pub present: Option<usize>,
     pub graphics: Option<usize>,
+    pub transfer: Option<usize>,
 }
 
 pub struct Queues {
@@ -19,10 +18,12 @@ pub struct Queues {
     pub present_family: usize,
     pub graphics: vk::Queue,
     pub graphics_family: usize,
+    pub transfer: vk::Queue,
+    pub transfer_family: usize,
 }
 
 impl QueueFamilies {
-    pub fn new(
+    pub unsafe fn new(
         instance: &ash::Instance,
         surface_loader: &Surface,
         surface: vk::SurfaceKHR,
@@ -31,30 +32,36 @@ impl QueueFamilies {
         let mut queue_families = Self {
             present: None,
             graphics: None,
+            transfer: None,
         };
 
-        let queue_family_properties =
-            unsafe { instance.get_physical_device_queue_family_properties(pdevice) };
+        let queue_family_properties = instance.get_physical_device_queue_family_properties(pdevice);
 
         for (index, queue_family_property) in queue_family_properties.into_iter().enumerate() {
-            let present_support = unsafe {
-                surface_loader.get_physical_device_surface_support(pdevice, index as u32, surface)
-            }
-            .map_err_log(
-                "Physical device surface support query failed",
-                ContextError::OutOfMemory,
-            )?;
+            let present_support = surface_loader
+                .get_physical_device_surface_support(pdevice, index as u32, surface)
+                .map_err_log(
+                    "Physical device surface support query failed",
+                    ContextError::OutOfMemory,
+                )?;
 
             let graphics_support = queue_family_property
                 .queue_flags
                 .contains(vk::QueueFlags::GRAPHICS);
 
-            if present_support {
+            /* let transfer_support = queue_family_property
+            .queue_flags
+            .contains(vk::QueueFlags::TRANSFER); */
+
+            if present_support && queue_families.present.is_none() {
                 queue_families.present = Some(index);
             }
-            if graphics_support {
+            if graphics_support && queue_families.graphics.is_none() {
                 queue_families.graphics = Some(index);
             }
+            /* if transfer_support && queue_families.transfer.is_none() {
+                queue_families.transfer = Some(index);
+            } */
 
             if queue_families.finished() {
                 break;
@@ -65,11 +72,13 @@ impl QueueFamilies {
     }
 
     pub fn finished(&self) -> bool {
-        self.present.is_some() && self.graphics.is_some()
+        self.present.is_some() && self.graphics.is_some() /* && self.transfer.is_some() */
     }
 
     pub fn same(&self) -> Option<bool> {
-        Some(self.present? == self.graphics?)
+        Some(
+            self.present? == self.graphics?, /* && self.graphics? == self.transfer? */
+        )
     }
 
     pub fn get_vec(&self) -> Option<Vec<vk::DeviceQueueCreateInfo>> {
@@ -92,25 +101,26 @@ impl QueueFamilies {
         }
     }
 
-    pub fn get_queues(&self, device: Arc<ash::Device>) -> Option<Queues> {
-        if self.same()? {
-            let queue = unsafe { device.get_device_queue(self.present.unwrap() as u32, 0) };
-
-            Some(Queues {
-                present: queue,
-                present_family: self.present.unwrap(),
-                graphics: queue,
-                graphics_family: self.present.unwrap(),
-            })
+    pub unsafe fn get_queues(&self, device: &ash::Device) -> Option<Queues> {
+        if !self.finished() {
+            None
         } else {
-            let present = unsafe { device.get_device_queue(self.present.unwrap() as u32, 0) };
-            let graphics = unsafe { device.get_device_queue(self.graphics.unwrap() as u32, 0) };
+            let present_family = self.present.unwrap();
+            let present = device.get_device_queue(present_family as u32, 0);
+
+            let graphics_family = self.graphics.unwrap();
+            let graphics = device.get_device_queue(graphics_family as u32, 0);
+
+            let transfer_family = graphics_family; //
+            let transfer = device.get_device_queue(transfer_family as u32, 0);
 
             Some(Queues {
+                present_family,
                 present,
-                present_family: self.present.unwrap(),
+                graphics_family,
                 graphics,
-                graphics_family: self.graphics.unwrap(),
+                transfer_family,
+                transfer,
             })
         }
     }

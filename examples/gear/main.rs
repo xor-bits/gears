@@ -5,9 +5,10 @@ use std::{
 
 use cgmath::{perspective, Deg, InnerSpace, Matrix4, Point3, Rad, Vector3};
 use gears::{
-    load_obj, EventLoopTarget, Frame, FrameLoopTarget, ImmediateFrameInfo, InputState,
-    KeyboardInput, Pipeline, PipelineBuilder, RenderRecordInfo, Renderer, RendererRecord,
-    VertexBuffer, VirtualKeyCode, WindowEvent,
+    load_obj, Buffer, EventLoopTarget, Frame, FrameLoop, FrameLoopTarget, ImmediateFrameInfo,
+    InputState, KeyboardInput, Pipeline, PipelineBuilder, RenderRecordInfo, Renderer,
+    RendererRecord, UpdateQuery, UpdateRecordInfo, VSync, VertexBuffer, VirtualKeyCode,
+    WindowEvent,
 };
 use parking_lot::Mutex;
 
@@ -35,12 +36,7 @@ struct App {
 }
 
 impl App {
-    fn init(frame: gears::Frame, context: gears::Context, input: Arc<Mutex<InputState>>) -> Self {
-        let renderer = gears::Renderer::new()
-            .with_vsync(gears::VSync::Off)
-            .build(context)
-            .unwrap();
-
+    fn init(frame: Frame, renderer: Renderer, input: Arc<Mutex<InputState>>) -> Self {
         let vb = VertexBuffer::new(&renderer, MAX_VBO_LEN).unwrap();
         let shader = PipelineBuilder::new(&renderer)
             .with_graphics_modules(shader::VERT_SPIRV, shader::FRAG_SPIRV)
@@ -128,12 +124,25 @@ impl RendererRecord for App {
             light_dir: Vector3::new(0.2, 2.0, 0.5).normalize(),
         };
 
-        self.shader.write_ubo(imfi, &ubo);
+        self.shader.write_ubo(imfi, &ubo).unwrap();
+    }
+
+    fn updates(&mut self, uq: &UpdateQuery) -> bool {
+        self.shader.updates(uq) || self.vb.updates(uq)
+    }
+
+    fn update(&mut self, uri: &UpdateRecordInfo) {
+        unsafe {
+            self.shader.update(uri);
+            self.vb.update(uri);
+        }
     }
 
     fn record(&mut self, rri: &RenderRecordInfo) {
-        self.shader.bind(rri);
-        self.vb.draw(rri);
+        unsafe {
+            self.shader.bind(rri);
+            self.vb.draw(rri);
+        }
     }
 }
 
@@ -168,17 +177,26 @@ impl FrameLoopTarget for App {
 fn main() {
     env_logger::init();
 
-    let (frame, event_loop) = gears::Frame::new()
+    let (frame, event_loop) = Frame::new()
         .with_title("Simple Example")
         .with_size(600, 600)
         .build();
 
-    let context = frame.context().unwrap();
+    let context = frame
+        //.context_auto_pick()
+        .context_manual_pick()
+        .unwrap();
+
+    let renderer = Renderer::new()
+        .with_vsync(VSync::Off)
+        .with_frames_in_flight(3)
+        .build(context)
+        .unwrap();
 
     let input = Arc::new(Mutex::new(InputState::new()));
-    let app = Arc::new(Mutex::new(App::init(frame, context, input.clone())));
+    let app = Arc::new(Mutex::new(App::init(frame, renderer, input.clone())));
 
-    gears::FrameLoop::new()
+    FrameLoop::new()
         .with_event_loop(event_loop)
         .with_event_target(input)
         .with_event_target(app.clone())

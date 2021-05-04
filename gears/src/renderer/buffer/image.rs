@@ -3,9 +3,9 @@ use bitflags::bitflags;
 use log::*;
 use std::{marker::PhantomData, sync::Arc};
 
-use crate::Renderer;
+use crate::{renderer::device::RenderDevice, Renderer};
 
-use super::{upload_type, BufferError};
+use super::{find_mem_type, BufferError};
 
 pub trait BaseFormat {
     fn format(&self) -> vk::Format;
@@ -29,31 +29,30 @@ pub enum ImageFormat<T> {
     _P(PhantomData<T>),
 }
 
-pub struct ImageBuilder<'a> {
-    device: Arc<ash::Device>,
-    available_memory_types: &'a [vk::MemoryType],
+pub struct ImageBuilder {
+    device: Arc<RenderDevice>,
 }
 
-pub struct ImageBuilder1D<'a> {
-    base: ImageBuilder<'a>,
+pub struct ImageBuilder1D {
+    base: ImageBuilder,
     width: u32,
 }
 
-pub struct ImageBuilder2D<'a> {
-    base: ImageBuilder<'a>,
+pub struct ImageBuilder2D {
+    base: ImageBuilder,
     width: u32,
     height: u32,
 }
 
-pub struct ImageBuilder3D<'a> {
-    base: ImageBuilder<'a>,
+pub struct ImageBuilder3D {
+    base: ImageBuilder,
     width: u32,
     height: u32,
     depth: u32,
 }
 
 pub struct Image {
-    device: Arc<ash::Device>,
+    device: Arc<RenderDevice>,
 
     image: vk::Image,
     image_view: vk::ImageView,
@@ -169,26 +168,19 @@ impl BaseFormat for ImageFormat<i32> {
     }
 }
 
-impl<'a> ImageBuilder<'a> {
-    pub fn new(renderer: &'a Renderer) -> Self {
+impl ImageBuilder {
+    pub fn new(renderer: &Renderer) -> Self {
         Self {
-            device: renderer.device.clone(),
-            available_memory_types: &renderer.memory_properties.memory_types,
+            device: renderer.rdevice.clone(),
         }
     }
 
-    pub fn new_with_device(
-        device: Arc<ash::Device>,
-        available_memory_types: &'a [vk::MemoryType],
-    ) -> Self {
-        Self {
-            device,
-            available_memory_types,
-        }
+    pub fn new_with_device(device: Arc<RenderDevice>) -> Self {
+        Self { device }
     }
 
-    pub fn with_width(self, width: u32) -> ImageBuilder1D<'a> {
-        ImageBuilder1D::<'a> { base: self, width }
+    pub fn with_width(self, width: u32) -> ImageBuilder1D {
+        ImageBuilder1D { base: self, width }
     }
 
     fn get(
@@ -239,7 +231,6 @@ impl<'a> ImageBuilder<'a> {
 
         Image::new_with_image(
             self.device,
-            &self.available_memory_types,
             image,
             format,
             aspects,
@@ -249,9 +240,9 @@ impl<'a> ImageBuilder<'a> {
     }
 }
 
-impl<'a> ImageBuilder1D<'a> {
-    pub fn with_height(self, height: u32) -> ImageBuilder2D<'a> {
-        ImageBuilder2D::<'a> {
+impl ImageBuilder1D {
+    pub fn with_height(self, height: u32) -> ImageBuilder2D {
+        ImageBuilder2D {
             base: self.base,
             width: self.width,
             height,
@@ -275,7 +266,6 @@ impl<'a> ImageBuilder1D<'a> {
 
             Image::new(
                 self.base.device,
-                &self.base.available_memory_types,
                 format,
                 usage,
                 aspects,
@@ -286,9 +276,9 @@ impl<'a> ImageBuilder1D<'a> {
     }
 }
 
-impl<'a> ImageBuilder2D<'a> {
-    pub fn with_depth(self, depth: u32) -> ImageBuilder3D<'a> {
-        ImageBuilder3D::<'a> {
+impl ImageBuilder2D {
+    pub fn with_depth(self, depth: u32) -> ImageBuilder3D {
+        ImageBuilder3D {
             base: self.base,
             width: self.width,
             height: self.height,
@@ -313,7 +303,6 @@ impl<'a> ImageBuilder2D<'a> {
 
             Image::new(
                 self.base.device,
-                &self.base.available_memory_types,
                 format,
                 usage,
                 aspects,
@@ -324,7 +313,7 @@ impl<'a> ImageBuilder2D<'a> {
     }
 }
 
-impl<'a> ImageBuilder3D<'a> {
+impl ImageBuilder3D {
     pub fn build<T>(self, image_usage: ImageUsage, image_format: T) -> Result<Image, BufferError>
     where
         T: Into<vk::Format>,
@@ -342,7 +331,6 @@ impl<'a> ImageBuilder3D<'a> {
 
             Image::new(
                 self.base.device,
-                &self.base.available_memory_types,
                 format,
                 usage,
                 aspects,
@@ -355,8 +343,7 @@ impl<'a> ImageBuilder3D<'a> {
 
 impl Image {
     fn new(
-        device: Arc<ash::Device>,
-        available_memory_types: &[vk::MemoryType],
+        device: Arc<RenderDevice>,
         format: vk::Format,
         usage: vk::ImageUsageFlags,
         aspects: vk::ImageAspectFlags,
@@ -381,20 +368,11 @@ impl Image {
             Err(BufferError::OutOfMemory)
         })?;
 
-        Self::new_with_image(
-            device,
-            available_memory_types,
-            image,
-            format,
-            aspects,
-            image_type,
-            true,
-        )
+        Self::new_with_image(device, image, format, aspects, image_type, true)
     }
 
     fn new_with_image(
-        device: Arc<ash::Device>,
-        available_memory_types: &[vk::MemoryType],
+        device: Arc<RenderDevice>,
         image: vk::Image,
         format: vk::Format,
         aspects: vk::ImageAspectFlags,
@@ -404,14 +382,18 @@ impl Image {
         let memory = if owns_image {
             let req = unsafe { device.get_image_memory_requirements(image) };
 
+            let mem_type = find_mem_type(
+                &device.memory_types,
+                &req,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )
+            .ok_or(BufferError::NoMemoryType(
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ))?;
+
             let memory_info = vk::MemoryAllocateInfo::builder()
                 .allocation_size(req.size)
-                .memory_type_index(upload_type(
-                    available_memory_types,
-                    &req,
-                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                ));
+                .memory_type_index(mem_type);
 
             let memory = unsafe { device.allocate_memory(&memory_info, None) }
                 .or(Err(BufferError::OutOfMemory))?;

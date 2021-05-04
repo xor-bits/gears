@@ -7,7 +7,10 @@ use ash::{
 };
 use colored::Colorize;
 use log::{debug, error, info, warn};
-use std::ffi::CStr;
+use std::{
+    ffi::CStr,
+    io::{self, Write},
+};
 use winit::window::Window;
 
 #[derive(Debug)]
@@ -44,7 +47,7 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn new(window: &Window, size: (u32, u32)) -> Result<Self, ContextError> {
+    pub fn new(window: &Window, size: (u32, u32), ask_gpu: bool) -> Result<Self, ContextError> {
         let entry = unsafe { ash::Entry::new() }
             .map_err_log("Ash entry creation failed", ContextError::MissingVulkan)?;
 
@@ -187,14 +190,16 @@ impl Context {
                 .map_err_log("Physical device query failed", ContextError::OutOfMemory)?
                 .into_iter()
                 .filter_map(|pdevice| {
-                    let queue_families =
-                        QueueFamilies::new(&instance, &surface_loader, surface, pdevice).ok()?;
+                    let queue_families = unsafe {
+                        QueueFamilies::new(&instance, &surface_loader, surface, pdevice).ok()?
+                    };
 
                     let (pdevice_name, pdevice_type) = pdevice_name_and_type(&instance, pdevice);
+                    let finished = queue_families.finished();
 
-                    pdevice_names.push(pdevice_name);
+                    pdevice_names.push((pdevice_name, pdevice_type, finished));
 
-                    if !queue_families.finished() {
+                    if !finished {
                         None
                     } else {
                         Some((
@@ -212,10 +217,53 @@ impl Context {
                 })
                 .collect::<Vec<_>>();
 
-            suitable_pdevices.sort_by(|lhs, rhs| rhs.2.cmp(&lhs.2));
             if suitable_pdevices.len() == 0 {
                 None
+            } else if ask_gpu {
+                println!("Pick a GPU:");
+                for (i, (name, pdevice_type, suitable)) in pdevice_names.iter().enumerate() {
+                    println!(
+                        " - {}: [{}] {} ({:?})",
+                        i,
+                        if *suitable {
+                            "\u{221a}".green()
+                        } else {
+                            " ".white()
+                        },
+                        name,
+                        pdevice_type
+                    );
+                }
+
+                let stdin = io::stdin();
+                let mut stdout = io::stdout();
+                let i = loop {
+                    print!("Number: ");
+                    stdout.flush().unwrap();
+                    let mut buf = String::new();
+                    stdin.read_line(&mut buf).unwrap();
+
+                    match buf.trim_end().parse::<usize>() {
+                        Ok(i) => {
+                            if i >= suitable_pdevices.len() {
+                                println!(
+                                    "{} is not a valid GPU index between 0 and {}",
+                                    i,
+                                    suitable_pdevices.len()
+                                );
+                            } else {
+                                break i;
+                            }
+                        }
+                        Err(_) => {
+                            println!("'{}' is not a valid GPU index", buf);
+                        }
+                    }
+                };
+
+                Some(suitable_pdevices.remove(i))
             } else {
+                suitable_pdevices.sort_by(|lhs, rhs| rhs.2.cmp(&lhs.2));
                 Some(suitable_pdevices.remove(0))
             }
         };
