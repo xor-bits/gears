@@ -1,6 +1,6 @@
 use winit::{dpi::PhysicalPosition, event::WindowEvent};
 
-use crate::Frame;
+use crate::frame::Frame;
 
 pub enum HideMode {
     None,

@@ -4,7 +4,7 @@ use ash::{
     vk,
 };
 
-use crate::{ContextError, MapErrorLog};
+use crate::{context::ContextError, MapErrorLog};
 
 const PRIORITY: [f32; 1] = [1.0];
 pub struct QueueFamilies {

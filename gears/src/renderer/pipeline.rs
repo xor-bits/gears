@@ -10,12 +10,12 @@ use std::{
 };
 
 use crate::{
-    Buffer, ExpectLog, ImmediateFrameInfo, RenderRecordInfo, Renderer, UpdateQuery,
-    UpdateRecordInfo, WriteType,
+    renderer::buffer::Buffer, renderer::ImmediateFrameInfo, renderer::RenderRecordInfo,
+    renderer::Renderer, renderer::UpdateQuery, renderer::UpdateRecordInfo, ExpectLog,
 };
 
 use super::{
-    buffer::{BufferError, UniformBuffer},
+    buffer::{uniform::UniformBuffer, BufferError, WriteType},
     device::RenderDevice,
 };
 

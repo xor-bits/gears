@@ -1,4 +1,4 @@
-use super::{debug::Debugger, queue::QueueFamilies, MapErrorLog};
+use super::{debug::Debugger, renderer::queue::QueueFamilies, MapErrorLog};
 
 use ash::{
     extensions::{ext, khr},

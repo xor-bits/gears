@@ -1,12 +1,11 @@
 use ash::{version::DeviceV1_0, vk};
 use std::{mem, sync::Arc};
 
-use crate::{
-    renderer::device::RenderDevice, Buffer, RenderRecordInfo, Renderer, StageBuffer, UpdateQuery,
-    UpdateRecordInfo, WriteType,
+use crate::renderer::{
+    device::RenderDevice, RenderRecordInfo, Renderer, UpdateQuery, UpdateRecordInfo,
 };
 
-use super::{create_buffer, BufferError};
+use super::{create_buffer, stage::StageBuffer, Buffer, BufferError, WriteType};
 
 pub struct VertexBuffer<T> {
     device: Arc<RenderDevice>,

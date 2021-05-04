@@ -1,12 +1,12 @@
 use ash::{version::DeviceV1_0, vk};
 use std::{mem, sync::Arc};
 
-use crate::{
-    renderer::device::RenderDevice, Buffer, RenderRecordInfo, Renderer, StageBuffer, UpdateQuery,
-    UpdateRecordInfo, WriteType,
+use super::{
+    create_buffer, stage::StageBuffer, vertex::VertexBuffer, Buffer, BufferError, WriteType,
 };
-
-use super::{create_buffer, BufferError, VertexBuffer};
+use crate::renderer::{
+    device::RenderDevice, RenderRecordInfo, Renderer, UpdateQuery, UpdateRecordInfo,
+};
 
 pub trait UInt {
     fn get() -> vk::IndexType;

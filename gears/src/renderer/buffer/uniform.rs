@@ -1,12 +1,8 @@
 use ash::{version::DeviceV1_0, vk};
 use std::{mem, sync::Arc};
 
-use crate::{
-    renderer::device::RenderDevice, Buffer, Renderer, StageBuffer, UpdateQuery, UpdateRecordInfo,
-    WriteType,
-};
-
-use super::{create_buffer, BufferError};
+use crate::renderer::{device::RenderDevice, Renderer, UpdateQuery, UpdateRecordInfo};
+use super::{create_buffer, stage::StageBuffer, Buffer, BufferError, WriteType};
 
 pub struct UniformBuffer<T> {
     device: Arc<RenderDevice>,

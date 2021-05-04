@@ -2,7 +2,13 @@ use ash::{extensions::khr, version::InstanceV1_0, vk};
 use log::{debug, error};
 use std::{ffi::CStr, ops, sync::Arc};
 
-use crate::{debug::Debugger, queue::Queues, Context, ContextError, MapErrorLog, QueueFamilies};
+use crate::{
+    context::{Context, ContextError},
+    debug::Debugger,
+    MapErrorLog,
+};
+
+use super::queue::{QueueFamilies, Queues};
 
 pub struct ReducedContext {
     pub debugger: Debugger,

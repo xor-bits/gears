@@ -1,7 +1,7 @@
 use ash::{version::DeviceV1_0, vk};
 use std::{sync::Arc, time::Duration};
 
-use crate::RenderRecordInfo;
+use crate::renderer::RenderRecordInfo;
 
 use super::device::RenderDevice;
 

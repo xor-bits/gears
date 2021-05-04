@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use winit::event::{ElementState, KeyboardInput, VirtualKeyCode, WindowEvent};
 
-use crate::EventLoopTarget;
+use crate::loops::frame::EventLoopTarget;
 
 pub struct InputState {
     keymap: HashMap<VirtualKeyCode, bool>,

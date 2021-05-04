@@ -19,9 +19,13 @@ use ash::{version::DeviceV1_0, vk};
 use log::warn;
 use std::sync::Arc;
 
-use crate::{UpdateQuery, UpdateRecordInfo};
+use super::{device::RenderDevice, UpdateQuery, UpdateRecordInfo};
 
-use super::device::RenderDevice;
+#[derive(Debug)]
+pub enum WriteType {
+    NoWrite,
+    Write,
+}
 
 #[derive(Debug)]
 pub enum BufferError {

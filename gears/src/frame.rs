@@ -4,7 +4,10 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-use crate::{context::Context, ContextError, ExpectLog};
+use crate::{
+    context::{Context, ContextError},
+    ExpectLog,
+};
 
 pub struct Frame {
     window: Window,

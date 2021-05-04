@@ -3,7 +3,7 @@ use bitflags::bitflags;
 use log::*;
 use std::{marker::PhantomData, sync::Arc};
 
-use crate::{renderer::device::RenderDevice, Renderer};
+use crate::renderer::{device::RenderDevice, Renderer};
 
 use super::{find_mem_type, BufferError};
 

@@ -21,11 +21,11 @@ use crate::{
 };
 
 use ash::{extensions::khr, version::DeviceV1_0, vk};
-use buffer::{Image, ImageBuilder, ImageFormat, ImageUsage};
+use buffer::{image::Image, image::ImageBuilder, image::ImageFormat, image::ImageUsage};
 use log::{debug, error};
 use std::{sync::Arc, time::Duration};
 
-use self::{device::RenderDevice, query::PerfQuery};
+use self::{buffer::image::BaseFormat, device::RenderDevice, query::PerfQuery};
 
 struct TargetImage {
     rerecord_requested: bool,

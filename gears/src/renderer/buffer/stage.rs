@@ -4,14 +4,8 @@ use std::{
 
 use ash::{version::DeviceV1_0, vk};
 
-use crate::{renderer::device::RenderDevice, Buffer, BufferError, UpdateRecordInfo};
-
-use super::create_buffer_with_fallback;
-
-pub enum WriteType {
-    NoWrite,
-    Write,
-}
+use super::{create_buffer_with_fallback, Buffer, BufferError, WriteType};
+use crate::renderer::{device::RenderDevice, UpdateRecordInfo};
 
 pub struct StageBuffer<T> {
     device: Arc<RenderDevice>,
