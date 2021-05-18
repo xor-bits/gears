@@ -8,6 +8,7 @@ use ash::{
 use colored::Colorize;
 use log::{debug, error, warn};
 use std::{
+    env,
     ffi::CStr,
     io::{self, Write},
 };
@@ -15,7 +16,10 @@ use winit::window::Window;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum ContextGPUPick {
+    /// Automatically picks the GPU, or asks if environment value 'GEARS_GPU' is set to 'pick'
     Automatic,
+
+    /// Pick the GPU with the commandline
     Manual,
 }
 
@@ -257,8 +261,13 @@ impl Context {
 
             if suitable_pdevices.len() == 0 {
                 None
-            } else if pick == ContextGPUPick::Manual {
-                println!("Pick a GPU: {}", all_pdevices_to_string(&pdevice_names));
+            } else if pick == ContextGPUPick::Manual
+                || env::var("GEARS_GPU").map_or(false, |value| value.to_lowercase() == "pick")
+            {
+                println!(
+                    "Pick a GPU: {}",
+                    all_pdevices_to_string(&pdevice_names, true)
+                );
 
                 let stdin = io::stdin();
                 let mut stdout = io::stdout();
@@ -274,7 +283,7 @@ impl Context {
                                 println!(
                                     "{} is not a valid GPU index between 0 and {}",
                                     i,
-                                    suitable_pdevices.len()
+                                    suitable_pdevices.len() + 1
                                 );
                             } else {
                                 break i;
@@ -296,14 +305,14 @@ impl Context {
         let (pdevice, queue_families, _) = pdevice.ok_or_else(|| {
             error!(
                 "None of the GPUs (bellow) are suitable: {}",
-                all_pdevices_to_string(&pdevice_names)
+                all_pdevices_to_string(&pdevice_names, false)
             );
             ContextError::NoSuitableGPUs
         })?;
         debug!(
             "GPU chosen: {} from: {}",
             pdevice_to_string(&instance, pdevice),
-            all_pdevices_to_string(&pdevice_names)
+            all_pdevices_to_string(&pdevice_names, false)
         );
 
         Ok(Self {
@@ -348,14 +357,21 @@ fn pdevice_to_string(instance: &ash::Instance, pdevice: vk::PhysicalDevice) -> S
     )
 }
 
-fn all_pdevices_to_string(pdevice_names: &Vec<(String, vk::PhysicalDeviceType, bool)>) -> String {
+fn all_pdevices_to_string(
+    pdevice_names: &Vec<(String, vk::PhysicalDeviceType, bool)>,
+    ignore_invalid: bool,
+) -> String {
     let mut len = 0;
     for (name, _, _) in pdevice_names.iter() {
         len += name.len();
     }
 
     let mut buf = String::with_capacity(len);
-    for (i, (name, pdevice_type, suitable)) in pdevice_names.iter().enumerate() {
+    for (i, (name, pdevice_type, suitable)) in pdevice_names
+        .iter()
+        .filter(|(_, _, s)| if ignore_invalid { *s } else { true })
+        .enumerate()
+    {
         buf.push_str(
             format!(
                 "\n - {}: [{}] {} (type:{})",
