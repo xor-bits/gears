@@ -6,14 +6,20 @@ use ash::{
     vk, Entry,
 };
 use colored::Colorize;
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use std::{
     ffi::CStr,
     io::{self, Write},
 };
 use winit::window::Window;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+pub enum ContextGPUPick {
+    Automatic,
+    Manual,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum ContextError {
     MissingVulkan,
     MissingInstanceExtensions,
@@ -46,8 +52,18 @@ pub struct Context {
     pub entry: Entry,
 }
 
+impl Default for ContextGPUPick {
+    fn default() -> Self {
+        ContextGPUPick::Automatic
+    }
+}
+
 impl Context {
-    pub fn new(window: &Window, size: (u32, u32), ask_gpu: bool) -> Result<Self, ContextError> {
+    pub fn new(
+        window: &Window,
+        size: (u32, u32),
+        pick: ContextGPUPick,
+    ) -> Result<Self, ContextError> {
         let entry = unsafe { ash::Entry::new() }
             .map_err_log("Ash entry creation failed", ContextError::MissingVulkan)?;
 
@@ -87,8 +103,12 @@ impl Context {
             .enumerate_instance_layer_properties()
             .map_err_log("Could not query instance layers", ContextError::OutOfMemory)?;
 
-        let mut requested_layers =
+        #[cfg(feature = "validation")]
+        let mut requested_layers: Vec<&CStr> =
             vec![CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0").unwrap()];
+        #[cfg(not(feature = "validation"))]
+        let mut requested_layers: Vec<&CStr> = vec![];
+
         let mut requested_layers_raw: Vec<*const i8> = requested_layers
             .iter()
             .map(|raw_name| raw_name.as_ptr())
@@ -219,21 +239,8 @@ impl Context {
 
             if suitable_pdevices.len() == 0 {
                 None
-            } else if ask_gpu {
-                println!("Pick a GPU:");
-                for (i, (name, pdevice_type, suitable)) in pdevice_names.iter().enumerate() {
-                    println!(
-                        " - {}: [{}] {} ({:?})",
-                        i,
-                        if *suitable {
-                            "\u{221a}".green()
-                        } else {
-                            " ".white()
-                        },
-                        name,
-                        pdevice_type
-                    );
-                }
+            } else if pick == ContextGPUPick::Manual {
+                println!("Pick a GPU: {}", all_pdevices_to_string(&pdevice_names));
 
                 let stdin = io::stdin();
                 let mut stdout = io::stdout();
@@ -268,11 +275,18 @@ impl Context {
             }
         };
 
-        let (pdevice, queue_families, _) = pdevice.map_err_log(
-            &*format!("None of the GPUs ({:?}) are suitable", pdevice_names),
-            ContextError::NoSuitableGPUs,
-        )?;
-        info!("Selected GPU: {}", pdevice_to_string(&instance, pdevice));
+        let (pdevice, queue_families, _) = pdevice.ok_or_else(|| {
+            error!(
+                "None of the GPUs (bellow) are suitable: {}",
+                all_pdevices_to_string(&pdevice_names)
+            );
+            ContextError::NoSuitableGPUs
+        })?;
+        debug!(
+            "GPU chosen: {} from: {}",
+            pdevice_to_string(&instance, pdevice),
+            all_pdevices_to_string(&pdevice_names)
+        );
 
         Ok(Self {
             entry,
@@ -314,4 +328,30 @@ fn pdevice_to_string(instance: &ash::Instance, pdevice: vk::PhysicalDevice) -> S
         pdevice_name.cyan(),
         format!("{:?}", pdevice_type).green(),
     )
+}
+
+fn all_pdevices_to_string(pdevice_names: &Vec<(String, vk::PhysicalDeviceType, bool)>) -> String {
+    let mut len = 0;
+    for (name, _, _) in pdevice_names.iter() {
+        len += name.len();
+    }
+
+    let mut buf = String::with_capacity(len);
+    for (i, (name, pdevice_type, suitable)) in pdevice_names.iter().enumerate() {
+        buf.push_str(
+            format!(
+                "\n - {}: [{}] {} (type:{})",
+                i,
+                if *suitable {
+                    "\u{221a}".green()
+                } else {
+                    " ".white()
+                },
+                name.cyan(),
+                format!("{:?}", pdevice_type).green()
+            )
+            .as_str(),
+        );
+    }
+    buf
 }

@@ -1,12 +1,16 @@
 use ash::{version::DeviceV1_0, vk};
-use std::{mem, sync::Arc};
+use std::{
+    mem,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use super::{
     create_buffer, stage::StageBuffer, vertex::VertexBuffer, Buffer, BufferError, WriteType,
 };
-use crate::renderer::{
-    device::RenderDevice, RenderRecordInfo, Renderer, UpdateQuery, UpdateRecordInfo,
-};
+use crate::renderer::{device::RenderDevice, RenderRecordInfo, Renderer, UpdateRecordInfo};
 
 pub trait UInt {
     fn get() -> vk::IndexType;
@@ -29,7 +33,7 @@ pub struct IndexBuffer<I: UInt> {
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
 
-    requested_copy: bool,
+    requested_copy: AtomicBool,
     stage: StageBuffer<I>,
 }
 
@@ -62,7 +66,7 @@ impl<I: UInt> IndexBuffer<I> {
             buffer,
             memory,
 
-            requested_copy: false,
+            requested_copy: AtomicBool::new(false),
             stage,
         })
     }
@@ -70,7 +74,7 @@ impl<I: UInt> IndexBuffer<I> {
     pub fn write(&mut self, offset: usize, data: &[I]) -> Result<WriteType, BufferError> {
         let result = self.stage.write_slice(offset, data);
         if let Ok(WriteType::Write) = result {
-            self.requested_copy = true
+            self.requested_copy.store(true, Ordering::SeqCst);
         }
         result
     }
@@ -92,21 +96,22 @@ impl<I: UInt> IndexBuffer<I> {
         self.bind(rri);
         vertices.bind(rri);
 
+        rri.triangles.fetch_add(self.len() / 3, Ordering::SeqCst);
+
         self.device
             .cmd_draw_indexed(rri.command_buffer, self.len() as u32, 1, 0, 0, 0);
     }
 }
 
 impl<I: UInt> Buffer for IndexBuffer<I> {
-    fn updates(&self, _: &UpdateQuery) -> bool {
-        self.requested_copy
-    }
+    unsafe fn update(&self, uri: &UpdateRecordInfo) -> bool {
+        let requested_copy = self.requested_copy.swap(false, Ordering::SeqCst);
 
-    unsafe fn update(&mut self, uri: &UpdateRecordInfo) {
-        if self.requested_copy {
-            self.requested_copy = false;
+        if requested_copy {
             self.stage.copy_to(uri, self);
         }
+
+        requested_copy
     }
 
     fn get(&self) -> vk::Buffer {

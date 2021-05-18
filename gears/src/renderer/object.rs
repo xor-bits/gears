@@ -1,4 +1,4 @@
-use cgmath::Vector3;
+use cgmath::{InnerSpace, Vector3};
 use wavefront_obj::obj::Primitive;
 
 pub fn load_obj<V>(
@@ -35,7 +35,30 @@ pub fn load_obj<V>(
                 ) => {
                     let id_to_vertex = |vert: usize, norm: Option<usize>| -> V {
                         let vert = obj.vertices[vert];
-                        let norm = obj.normals[norm.unwrap()];
+
+                        let norm = if let Some(norm_id) = norm {
+                            Vector3::new(
+                                obj.normals[norm_id].x,
+                                obj.normals[norm_id].y,
+                                obj.normals[norm_id].z,
+                            )
+                            .cast::<f32>()
+                            .unwrap()
+                        } else {
+                            let ab = Vector3::new(
+                                obj.vertices[b_vert_id].x - obj.vertices[a_vert_id].x,
+                                obj.vertices[b_vert_id].y - obj.vertices[a_vert_id].y,
+                                obj.vertices[b_vert_id].z - obj.vertices[a_vert_id].z,
+                            );
+
+                            let ac = Vector3::new(
+                                obj.vertices[c_vert_id].x - obj.vertices[a_vert_id].x,
+                                obj.vertices[c_vert_id].y - obj.vertices[a_vert_id].y,
+                                obj.vertices[c_vert_id].z - obj.vertices[a_vert_id].z,
+                            );
+
+                            ab.normalize().cross(ac.normalize()).cast::<f32>().unwrap()
+                        };
 
                         construct_vertex(
                             Vector3::new(vert.x as f32, vert.y as f32, vert.z as f32),

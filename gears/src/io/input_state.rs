@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
+use parking_lot::RwLock;
 use winit::event::{ElementState, KeyboardInput, VirtualKeyCode, WindowEvent};
 
 use crate::loops::frame::EventLoopTarget;
@@ -10,11 +11,11 @@ pub struct InputState {
 }
 
 impl InputState {
-    pub fn new() -> Self {
-        Self {
+    pub fn new() -> Arc<RwLock<Self>> {
+        Arc::new(RwLock::new(Self {
             keymap: HashMap::new(),
             window_focused: false,
-        }
+        }))
     }
 
     pub fn window_focused(&self) -> bool {

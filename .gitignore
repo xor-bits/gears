@@ -3,3 +3,4 @@
 /.vscode
 Cargo.lock
 expand.rs
+callgrind.out.*

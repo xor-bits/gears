@@ -32,5 +32,10 @@ void main() {
 	vert_out.exposure = exposure; */
 
 	gl_Position = ubo.mvp * vec4(vert_in.position, 1.0);
+
+#if defined(DEBUGGING)
+	vert_out.exposure = (gl_Position.z) * 0.002;
+#else
 	vert_out.exposure = vert_in.exposure;
+#endif
 }

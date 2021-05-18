@@ -1,5 +1,5 @@
 use log::warn;
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 use std::{
     any,
     sync::mpsc,
@@ -21,7 +21,7 @@ pub struct UpdateLoop {
 
 pub struct UpdateLoopBuilder {
     rate: UpdateRate,
-    targets: Vec<Arc<Mutex<dyn UpdateLoopTarget + Send>>>,
+    targets: Vec<Arc<RwLock<dyn UpdateLoopTarget + Send + Sync>>>,
 }
 
 pub struct UpdateLoopStopper {
@@ -60,7 +60,7 @@ impl UpdateLoop {
                 // thread_tps.lock().insert(u, begin);
 
                 for target in targets.iter() {
-                    target.lock().update(&interval);
+                    target.write().update(&interval);
                 }
 
                 let update_time = begin.elapsed();
@@ -105,7 +105,7 @@ impl UpdateLoopBuilder {
         self
     }
 
-    pub fn with_target(mut self, target: Arc<Mutex<dyn UpdateLoopTarget + Send>>) -> Self {
+    pub fn with_target(mut self, target: Arc<RwLock<dyn UpdateLoopTarget + Send + Sync>>) -> Self {
         self.targets.push(target);
         self
     }

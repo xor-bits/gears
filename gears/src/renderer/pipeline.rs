@@ -11,7 +11,7 @@ use std::{
 
 use crate::{
     renderer::buffer::Buffer, renderer::ImmediateFrameInfo, renderer::RenderRecordInfo,
-    renderer::Renderer, renderer::UpdateQuery, renderer::UpdateRecordInfo, ExpectLog,
+    renderer::Renderer, renderer::UpdateRecordInfo, ExpectLog,
 };
 
 use super::{
@@ -20,17 +20,12 @@ use super::{
 };
 
 trait UniformBufferT {
-    fn updates_t(&self, uq: &UpdateQuery) -> bool;
-    unsafe fn update_t(&mut self, uri: &UpdateRecordInfo);
+    unsafe fn update_t(&self, uri: &UpdateRecordInfo) -> bool;
     fn as_any(&mut self) -> &mut dyn Any;
 }
 
 impl<U: 'static> UniformBufferT for UniformBuffer<U> {
-    fn updates_t(&self, uq: &UpdateQuery) -> bool {
-        self.updates(uq)
-    }
-
-    unsafe fn update_t(&mut self, uri: &UpdateRecordInfo) {
+    unsafe fn update_t(&self, uri: &UpdateRecordInfo) -> bool {
         self.update(uri)
     }
 
@@ -88,8 +83,8 @@ impl PipelineBuilder {
     pub fn new(renderer: &Renderer) -> Self {
         Self {
             device: renderer.rdevice.clone(),
-            render_pass: renderer.render_pass,
-            set_count: renderer.target_images.len(),
+            render_pass: renderer.data.read().swapchain_objects.read().render_pass,
+            set_count: renderer.data.read().render_objects.len(),
 
             ubos: HashMap::new(),
         }
@@ -360,8 +355,8 @@ impl<'a> GraphicsPipelineBuilder<'a> {
             vk::PipelineColorBlendStateCreateInfo::builder().attachments(&color_blend_attachment);
 
         let tmp_viewport = [vk::Viewport::builder()
-            .width(600.0)
-            .height(600.0)
+            .width(32.0)
+            .height(32.0)
             .x(0.0)
             .y(0.0)
             .min_depth(0.0)
@@ -370,15 +365,15 @@ impl<'a> GraphicsPipelineBuilder<'a> {
         let tmp_scissors = [vk::Rect2D::builder()
             .offset(vk::Offset2D { x: 0, y: 0 })
             .extent(vk::Extent2D {
-                width: 600,
-                height: 600,
+                width: 32,
+                height: 32,
             })
             .build()];
         let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
             .viewports(&tmp_viewport)
             .scissors(&tmp_scissors);
 
-        let viewport_dynamic_state = [vk::DynamicState::VIEWPORT];
+        let viewport_dynamic_state = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
         let dynamic_state =
             vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(&viewport_dynamic_state);
 
@@ -426,22 +421,17 @@ impl<'a> GraphicsPipelineBuilder<'a> {
 }
 
 impl Pipeline {
-    pub fn updates(&self, uq: &UpdateQuery) -> bool {
-        let (_, ubos) = &self.desc_sets[uq.image_index];
-
-        ubos.iter().any(|(_, ubo)| {
-            let ubo_lock = ubo.lock();
-            ubo_lock.updates_t(uq)
-        })
-    }
-
-    pub unsafe fn update(&self, uri: &UpdateRecordInfo) {
+    pub unsafe fn update(&self, uri: &UpdateRecordInfo) -> bool {
         let (_, ubos) = &self.desc_sets[uri.image_index];
 
+        let mut updates = false;
+
         for (_, ubo) in ubos {
-            let mut ubo_lock = ubo.lock();
-            ubo_lock.update_t(uri);
+            let ubo_lock = ubo.lock();
+            updates = updates || ubo_lock.update_t(uri);
         }
+
+        updates
     }
 
     pub unsafe fn bind(&self, rri: &RenderRecordInfo) {
@@ -465,7 +455,7 @@ impl Pipeline {
     }
 
     pub fn write_ubo<'a, U: 'static + UBO>(
-        &mut self,
+        &self,
         imfi: &ImmediateFrameInfo,
         new_data: &U,
     ) -> Result<WriteType, BufferError> {

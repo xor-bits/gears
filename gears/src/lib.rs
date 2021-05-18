@@ -19,17 +19,61 @@ pub use loops::*;
 #[cfg(feature = "short_namespaces")]
 pub use renderer::*;
 
-#[derive(Debug)]
-pub enum VSync {
-    Off,
-    On,
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+pub enum SyncMode {
+    /// Immediate: no sync
+    ///
+    /// Pros:
+    /// + Minimal input delay
+    ///
+    /// Cons:
+    /// - Will result screen tearing
+    /// - Consumes more power
+    /// - Might not be supported (unlikely) (fallback to Fifo)
+    Immediate,
+
+    /// FIFO: sync with no discards (VSync)
+    ///
+    /// Pros:
+    /// + Eliminates screen tearing
+    /// + Consumes less power
+    /// + Always supported
+    ///
+    /// Cons:
+    /// - Increased input delay
+    Fifo,
+
+    /// Mailbox: sync with discards
+    ///
+    /// Pros:
+    /// + Eliminates screen tearing
+    /// + Minimal input delay
+    ///
+    /// Cons:
+    /// - Consumes more power
+    /// - Might not be supported (fallback to Fifo)
+    Mailbox,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum UpdateRate {
+    /// _n_ updates per second with even intervals
+    /// Ex: Update 60 times every second = ```UpdateRate::PerSecond::(60)```
     PerSecond(u32),
+
+    /// _n_ updates per minute with even intervals
+    /// Ex: Update 2 times every minute = ```UpdateRate::PerMinute::(2)```
     PerMinute(u32),
+
+    /// _t_ update interval
+    /// Ex: Update every 2 seconds = ```UpdateRate::Interval::(Duration::from_secs(2))```
     Interval(time::Duration),
+}
+
+impl Default for SyncMode {
+    fn default() -> Self {
+        SyncMode::Fifo
+    }
 }
 
 impl UpdateRate {
@@ -41,6 +85,8 @@ impl UpdateRate {
         }
     }
 }
+
+// Internal helper traits:
 
 trait ExpectLog<T> {
     fn expect_log<'a, S: Into<&'a str>>(self, message: S) -> T;

@@ -11,7 +11,8 @@ license = "MIT"
 [features]
 default = []
 short_namespaces = []
-validation_panic = []
+validation = []
+validation_panic = ["validation"]
 
 [dependencies]
 log = "~0.4"

@@ -4,14 +4,16 @@ use std::{
 };
 
 use log::debug;
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 pub use winit::event::*;
 use winit::event_loop::EventLoop;
+
+use crate::FramePerfReport;
 
 const PERF_LOG_INTERVAL: usize = 5;
 
 pub trait FrameLoopTarget {
-    fn frame(&mut self) -> Option<Duration>;
+    fn frame(&self) -> FramePerfReport;
 }
 
 pub trait EventLoopTarget {
@@ -25,8 +27,8 @@ pub struct FrameLoop {
 
 pub struct FrameLoopBuilder {
     event_loop: EventLoop<()>,
-    frame_targets: Vec<Arc<Mutex<dyn FrameLoopTarget + Send>>>,
-    event_targets: Vec<Arc<Mutex<dyn EventLoopTarget + Send>>>,
+    frame_targets: Vec<Arc<RwLock<dyn FrameLoopTarget + Send + Sync>>>,
+    event_targets: Vec<Arc<RwLock<dyn EventLoopTarget + Send + Sync>>>,
 }
 
 impl FrameLoop {
@@ -40,13 +42,12 @@ impl FrameLoop {
 
     pub fn run(self) -> ! {
         let event_loop = self.base.event_loop;
-        let frame_targets = self.base.frame_targets;
+        let frame_targets = self.base.frame_targets.clone();
         let event_targets = self.base.event_targets;
 
-        let mut frames = 0usize;
         let mut frame_count_check_tp = Instant::now();
-        let mut avg_cpu_frametime = Duration::from_secs(0);
-        let mut avg_gpu_frametime = Duration::from_secs(0);
+        let mut frames: usize = 0;
+        let mut avg_perf = FramePerfReport::default();
 
         event_loop.run(move |event, _, control_flow| {
             *control_flow = winit::event_loop::ControlFlow::Poll;
@@ -55,7 +56,7 @@ impl FrameLoop {
             match event {
                 Event::WindowEvent { event, .. } => {
                     for target in event_targets.iter() {
-                        target.lock().event(&event);
+                        target.write().event(&event);
                     }
 
                     match event {
@@ -66,28 +67,44 @@ impl FrameLoop {
                     }
                 }
                 Event::RedrawEventsCleared => {
-                    let cpu_frametime = Instant::now();
                     for target in frame_targets.iter() {
-                        if let Some(ft) = target.lock().frame() {
-                            avg_gpu_frametime += ft;
-                        }
+                        let ft = target.read().frame();
+                        avg_perf.cpu_frametime += ft.cpu_frametime;
+                        avg_perf.gpu_frametime += ft.gpu_frametime;
+                        avg_perf.rerecord = avg_perf.rerecord || ft.rerecord;
+                        avg_perf.updates = avg_perf.updates || ft.updates;
+                        avg_perf.triangles = ft.triangles;
                     }
-                    avg_cpu_frametime += cpu_frametime.elapsed();
                     frames += 1;
 
-                    if frame_count_check_tp.elapsed() > Duration::from_secs(PERF_LOG_INTERVAL as u64) {
+                    if frame_count_check_tp.elapsed()
+                        > Duration::from_secs(PERF_LOG_INTERVAL as u64)
+                    {
                         frame_count_check_tp = Instant::now();
 
-                        const MICRO_EXP: f32 = 1.0e-6_f32;
-                        let cpu_ms = (avg_cpu_frametime.as_nanos() as f32) / frames as f32 * MICRO_EXP;
-                        let gpu_ms = (avg_gpu_frametime.as_nanos() as f32) / frames as f32 * MICRO_EXP;
-						let fps = 1000.0 / cpu_ms;
+                        let cpu_ms =
+                            print_nanos(avg_perf.cpu_frametime.as_nanos() / frames as u128);
+                        let gpu_whole_ms = print_nanos(
+                            avg_perf.gpu_frametime.whole_pipeline.as_nanos() / frames as u128,
+                        );
+                        let gpu_vert_ms =
+                            print_nanos(avg_perf.gpu_frametime.vertex.as_nanos() / frames as u128);
+                        let gpu_frag_ms = print_nanos(
+                            avg_perf.gpu_frametime.fragment.as_nanos() / frames as u128,
+                        );
 
-                        debug!("FPS: {} (real: {})\n - average CPU frametime: {} ms\n - average GPU frametime: {} ms", fps, frames / PERF_LOG_INTERVAL, cpu_ms, gpu_ms);
+                        debug!("Performance report (last {} seconds):", PERF_LOG_INTERVAL);
+                        debug!(" - real FPS: {}", frames / PERF_LOG_INTERVAL);
+                        debug!(" - latest triangles: {}", avg_perf.triangles);
+                        debug!(" - any updates: {}", avg_perf.updates);
+                        debug!(" - any rerecords: {}", avg_perf.rerecord);
+                        debug!(" - average CPU frametime: {}", cpu_ms);
+                        debug!(" - average GPU frametime: {}", gpu_whole_ms);
+                        debug!("   - vertex: {}", gpu_vert_ms);
+                        debug!("   - fragment: {}", gpu_frag_ms);
 
-                        avg_cpu_frametime = Duration::from_secs(0);
-                        avg_gpu_frametime = Duration::from_secs(0);
                         frames = 0;
+                        avg_perf = FramePerfReport::default();
                     }
                 }
                 _ => (),
@@ -97,12 +114,18 @@ impl FrameLoop {
 }
 
 impl FrameLoopBuilder {
-    pub fn with_frame_target(mut self, target: Arc<Mutex<dyn FrameLoopTarget + Send>>) -> Self {
+    pub fn with_frame_target(
+        mut self,
+        target: Arc<RwLock<dyn FrameLoopTarget + Send + Sync>>,
+    ) -> Self {
         self.frame_targets.push(target);
         self
     }
 
-    pub fn with_event_target(mut self, target: Arc<Mutex<dyn EventLoopTarget + Send>>) -> Self {
+    pub fn with_event_target(
+        mut self,
+        target: Arc<RwLock<dyn EventLoopTarget + Send + Sync>>,
+    ) -> Self {
         self.event_targets.push(target);
         self
     }
@@ -114,5 +137,17 @@ impl FrameLoopBuilder {
 
     pub fn build(self) -> FrameLoop {
         FrameLoop { base: self }
+    }
+}
+
+fn print_nanos(nanos: u128) -> String {
+    if nanos > 1_000_000_000 {
+        format!("{} seconds", nanos / 1_000_000_000)
+    } else if nanos > 1_000_000 {
+        format!("{} milliseconds", nanos / 1_000_000)
+    } else if nanos > 1_000 {
+        format!("{} microseconds", nanos / 1_000)
+    } else {
+        format!("{} nanoseconds", nanos)
     }
 }

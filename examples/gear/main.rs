@@ -1,21 +1,20 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{sync::Arc, time::Instant};
 
 use cgmath::{perspective, Deg, InnerSpace, Matrix4, Point3, Rad, Vector3};
 use gears::{
-    load_obj, Buffer, EventLoopTarget, Frame, FrameLoop, FrameLoopTarget, ImmediateFrameInfo,
-    InputState, KeyboardInput, Pipeline, PipelineBuilder, RenderRecordInfo, Renderer,
-    RendererRecord, UpdateQuery, UpdateRecordInfo, VSync, VertexBuffer, VirtualKeyCode,
+    load_obj, Buffer, ContextGPUPick, EventLoopTarget, Frame, FrameLoop, FrameLoopTarget,
+    FramePerfReport, ImmediateFrameInfo, InputState, KeyboardInput, Pipeline, RenderRecordInfo,
+    Renderer, RendererRecord, SyncMode, UpdateRecordInfo, VertexBuffer, VirtualKeyCode,
     WindowEvent,
 };
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 
 mod shader {
     gears_pipeline::pipeline! {
-        vs: { path: "gear/res/default.vert.glsl" }
-        fs: { path: "gear/res/default.frag.glsl" }
+        vert: { path: "gear/res/default.vert.glsl" }
+        frag: { path: "gear/res/default.frag.glsl" }
+
+        builders
     }
 }
 
@@ -23,45 +22,38 @@ const MAX_VBO_LEN: usize = 50_000;
 
 struct App {
     frame: Frame,
-    renderer: Box<Option<Renderer>>,
+    renderer: Renderer,
+    input: Arc<RwLock<InputState>>,
 
     vb: VertexBuffer<shader::VertexData>,
     shader: Pipeline,
 
-    input: Arc<Mutex<InputState>>,
-    delta_time: Instant,
-
-    position: Vector3<f32>,
-    velocity: Vector3<f32>,
+    delta_time: Mutex<Instant>,
+    distance: Mutex<f32>,
+    position: Mutex<Vector3<f32>>,
 }
 
 impl App {
-    fn init(frame: Frame, renderer: Renderer, input: Arc<Mutex<InputState>>) -> Self {
+    fn init(frame: Frame, renderer: Renderer, input: Arc<RwLock<InputState>>) -> Arc<RwLock<Self>> {
         let vb = VertexBuffer::new(&renderer, MAX_VBO_LEN).unwrap();
-        let shader = PipelineBuilder::new(&renderer)
-            .with_graphics_modules(shader::VERT_SPIRV, shader::FRAG_SPIRV)
-            .with_input::<shader::VertexData>()
-            .with_ubo::<shader::UBO>()
-            .build(false)
-            .unwrap();
+        let shader = shader::build(&renderer);
 
         let mut app = Self {
             frame,
-            renderer: Box::new(Some(renderer)),
+            renderer,
+            input,
 
             vb,
             shader,
 
-            input,
-            delta_time: Instant::now(),
-
-            position: Vector3::new(0.0, 0.0, 0.0),
-            velocity: Vector3::new(0.0, 0.0, 0.0),
+            delta_time: Mutex::new(Instant::now()),
+            distance: Mutex::new(2.5),
+            position: Mutex::new(Vector3::new(0.0, 0.0, 0.0)),
         };
 
         app.reload_mesh();
 
-        app
+        Arc::new(RwLock::new(app))
     }
 
     fn reload_mesh(&mut self) {
@@ -79,66 +71,80 @@ impl App {
 }
 
 impl RendererRecord for App {
-    fn immediate(&mut self, imfi: &ImmediateFrameInfo) {
-        let dt_s = self.delta_time.elapsed().as_secs_f32();
-        self.delta_time = Instant::now();
+    fn immediate(&self, imfi: &ImmediateFrameInfo) {
+        let dt_s = {
+            let mut delta_time = self.delta_time.lock();
+            let dt_s = delta_time.elapsed().as_secs_f32();
+            *delta_time = Instant::now();
+            dt_s
+        };
         let aspect = self.frame.aspect();
 
-        self.velocity = Vector3::new(0.0, 0.0, 0.0);
+        let mut distance_delta = 0.0;
+        let mut velocity = Vector3::new(0.0, 0.0, 0.0);
         {
-            let input = self.input.lock();
+            let input = self.input.read();
+            if input.key_held(VirtualKeyCode::E) {
+                distance_delta += 1.0;
+            }
+            if input.key_held(VirtualKeyCode::Q) {
+                distance_delta -= 1.0;
+            }
             if input.key_held(VirtualKeyCode::A) {
-                self.velocity.x += 1.0;
+                velocity.x += 1.0;
             }
             if input.key_held(VirtualKeyCode::D) {
-                self.velocity.x -= 1.0;
+                velocity.x -= 1.0;
             }
             if input.key_held(VirtualKeyCode::W) {
-                self.velocity.y += 1.0;
+                velocity.y += 1.0;
             }
             if input.key_held(VirtualKeyCode::S) {
-                self.velocity.y -= 1.0;
+                velocity.y -= 1.0;
             }
             if input.key_held(VirtualKeyCode::Space) {
-                self.velocity.z += 2.0;
+                velocity.z += 2.0;
             }
         }
-        self.position += self.velocity * 3.0 * dt_s;
-        self.position.y = self
-            .position
-            .y
-            .min(std::f32::consts::PI / 2.0 - 0.0001)
-            .max(-std::f32::consts::PI / 2.0 + 0.0001);
+        let distance = {
+            let mut distance = self.distance.lock();
+            *distance += distance_delta * 3.0 * dt_s;
+            *distance
+        };
+        let position = {
+            let mut position = self.position.lock();
+
+            *position += velocity * 3.0 * dt_s;
+            position.y = position
+                .y
+                .min(std::f32::consts::PI / 2.0 - 0.0001)
+                .max(-std::f32::consts::PI / 2.0 + 0.0001);
+
+            *position
+        };
 
         let eye = Point3::new(
-            self.position.x.sin() * self.position.y.cos(),
-            self.position.y.sin(),
-            self.position.x.cos() * self.position.y.cos(),
-        ) * 2.5;
+            position.x.sin() * position.y.cos(),
+            position.y.sin(),
+            position.x.cos() * position.y.cos(),
+        ) * distance;
         let focus = Point3::new(0.0, 0.0, 0.0);
 
         let ubo = shader::UBO {
-            model_matrix: Matrix4::from_angle_x(Rad { 0: self.position.z }),
+            model_matrix: Matrix4::from_angle_x(Rad { 0: position.z }),
             view_matrix: Matrix4::look_at_rh(eye, focus, Vector3::new(0.0, -1.0, 0.0)),
-            projection_matrix: perspective(Deg { 0: 60.0 }, aspect, 0.01, 5.0),
+            projection_matrix: perspective(Deg { 0: 60.0 }, aspect, 0.01, 100.0),
             light_dir: Vector3::new(0.2, 2.0, 0.5).normalize(),
         };
 
         self.shader.write_ubo(imfi, &ubo).unwrap();
     }
 
-    fn updates(&mut self, uq: &UpdateQuery) -> bool {
-        self.shader.updates(uq) || self.vb.updates(uq)
+    fn update(&self, uri: &UpdateRecordInfo) -> bool {
+        unsafe { self.shader.update(uri) || self.vb.update(uri) }
     }
 
-    fn update(&mut self, uri: &UpdateRecordInfo) {
-        unsafe {
-            self.shader.update(uri);
-            self.vb.update(uri);
-        }
-    }
-
-    fn record(&mut self, rri: &RenderRecordInfo) {
+    fn record(&self, rri: &RenderRecordInfo) {
         unsafe {
             self.shader.bind(rri);
             self.vb.draw(rri);
@@ -165,12 +171,8 @@ impl EventLoopTarget for App {
 }
 
 impl FrameLoopTarget for App {
-    fn frame(&mut self) -> Option<Duration> {
-        let mut renderer = self.renderer.take().unwrap();
-        let result = renderer.frame(self);
-        *self.renderer.as_mut() = Some(renderer);
-
-        result
+    fn frame(&self) -> FramePerfReport {
+        self.renderer.frame(self)
     }
 }
 
@@ -182,19 +184,15 @@ fn main() {
         .with_size(600, 600)
         .build();
 
-    let context = frame
-        //.context_auto_pick()
-        .context_manual_pick()
-        .unwrap();
+    let context = frame.context(ContextGPUPick::Automatic).unwrap();
 
     let renderer = Renderer::new()
-        .with_vsync(VSync::Off)
-        .with_frames_in_flight(3)
+        .with_sync(SyncMode::Immediate)
         .build(context)
         .unwrap();
 
-    let input = Arc::new(Mutex::new(InputState::new()));
-    let app = Arc::new(Mutex::new(App::init(frame, renderer, input.clone())));
+    let input = InputState::new();
+    let app = App::init(frame, renderer, input.clone());
 
     FrameLoop::new()
         .with_event_loop(event_loop)

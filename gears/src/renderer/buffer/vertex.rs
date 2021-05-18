@@ -1,9 +1,13 @@
 use ash::{version::DeviceV1_0, vk};
-use std::{mem, sync::Arc};
-
-use crate::renderer::{
-    device::RenderDevice, RenderRecordInfo, Renderer, UpdateQuery, UpdateRecordInfo,
+use std::{
+    mem,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
+
+use crate::renderer::{device::RenderDevice, RenderRecordInfo, Renderer, UpdateRecordInfo};
 
 use super::{create_buffer, stage::StageBuffer, Buffer, BufferError, WriteType};
 
@@ -13,7 +17,7 @@ pub struct VertexBuffer<T> {
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
 
-    requested_copy: bool,
+    requested_copy: AtomicBool,
     stage: StageBuffer<T>,
 }
 
@@ -46,7 +50,7 @@ impl<T> VertexBuffer<T> {
             buffer,
             memory,
 
-            requested_copy: false,
+            requested_copy: AtomicBool::new(false),
             stage,
         })
     }
@@ -54,7 +58,7 @@ impl<T> VertexBuffer<T> {
     pub fn write(&mut self, offset: usize, data: &[T]) -> Result<WriteType, BufferError> {
         let result = self.stage.write_slice(offset, data);
         if let Ok(WriteType::Write) = result {
-            self.requested_copy = true
+            self.requested_copy.store(true, Ordering::SeqCst);
         }
         result
     }
@@ -78,21 +82,22 @@ impl<T> VertexBuffer<T> {
     pub unsafe fn draw(&self, rri: &RenderRecordInfo) {
         self.bind(rri);
 
+        rri.triangles.fetch_add(self.len() / 3, Ordering::SeqCst);
+
         self.device
             .cmd_draw(rri.command_buffer, self.len() as u32, 1, 0, 0);
     }
 }
 
 impl<T> Buffer for VertexBuffer<T> {
-    fn updates(&self, _: &UpdateQuery) -> bool {
-        self.requested_copy
-    }
+    unsafe fn update(&self, uri: &UpdateRecordInfo) -> bool {
+        let requested_copy = self.requested_copy.swap(false, Ordering::SeqCst);
 
-    unsafe fn update(&mut self, uri: &UpdateRecordInfo) {
-        if self.requested_copy {
-            self.requested_copy = false;
+        if requested_copy {
             self.stage.copy_to(uri, self);
         }
+
+        requested_copy
     }
 
     fn get(&self) -> vk::Buffer {

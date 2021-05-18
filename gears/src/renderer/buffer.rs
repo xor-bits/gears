@@ -19,7 +19,7 @@ use ash::{version::DeviceV1_0, vk};
 use log::warn;
 use std::sync::Arc;
 
-use super::{device::RenderDevice, UpdateQuery, UpdateRecordInfo};
+use super::{device::RenderDevice, UpdateRecordInfo};
 
 #[derive(Debug)]
 pub enum WriteType {
@@ -36,8 +36,7 @@ pub enum BufferError {
 }
 
 pub trait Buffer {
-    fn updates(&self, uq: &UpdateQuery) -> bool;
-    unsafe fn update(&mut self, uri: &UpdateRecordInfo);
+    unsafe fn update(&self, uri: &UpdateRecordInfo) -> bool;
     fn get(&self) -> vk::Buffer;
 }
 

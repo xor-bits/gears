@@ -6,7 +6,7 @@ use winit::{
 
 use crate::{
     context::{Context, ContextError},
-    ExpectLog,
+    ContextGPUPick, ExpectLog,
 };
 
 pub struct Frame {
@@ -30,12 +30,8 @@ impl Frame {
         }
     }
 
-    pub fn context_manual_pick(&self) -> Result<Context, ContextError> {
-        Context::new(&self.window, self.size(), true)
-    }
-
-    pub fn context_auto_pick(&self) -> Result<Context, ContextError> {
-        Context::new(&self.window, self.size(), false)
+    pub fn context(&self, pick: ContextGPUPick) -> Result<Context, ContextError> {
+        Context::new(&self.window, self.size(), pick)
     }
 
     pub fn size(&self) -> (u32, u32) {

@@ -1,5 +1,5 @@
 use std::{
-    collections::hash_map::DefaultHasher, hash::Hasher, marker::PhantomData, mem, sync::Arc,
+    collections::hash_map::DefaultHasher, hash::Hasher, marker::PhantomData, mem, slice, sync::Arc,
 };
 
 use ash::{version::DeviceV1_0, vk};
@@ -30,11 +30,25 @@ impl<T> StageBuffer<T> {
         size: usize,
         write_optimize: bool,
     ) -> Result<Self, BufferError> {
+        Self::new_with_usage(
+            device,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            size,
+            write_optimize,
+        )
+    }
+
+    pub fn new_with_usage(
+        device: Arc<RenderDevice>,
+        usage: vk::BufferUsageFlags,
+        size: usize,
+        write_optimize: bool,
+    ) -> Result<Self, BufferError> {
         let byte_len = size * mem::size_of::<T>();
         let (buffer, memory, non_coherent) = create_buffer_with_fallback(
             &device,
             byte_len,
-            vk::BufferUsageFlags::TRANSFER_SRC,
+            usage,
             vk::SharingMode::EXCLUSIVE,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             vk::MemoryPropertyFlags::HOST_VISIBLE,
@@ -71,7 +85,7 @@ impl<T> StageBuffer<T> {
 
             if self.write_optimize {
                 let mut hasher = DefaultHasher::new();
-                hash_from_ptr(&mut hasher, bytes_in_cpu, memory_size);
+                hasher.write(slice::from_raw_parts(bytes_in_cpu, memory_size));
                 let new_hash = hasher.finish();
 
                 if self.last_hash == new_hash {
@@ -137,8 +151,12 @@ impl<T> StageBuffer<T> {
     }
 }
 
-unsafe fn hash_from_ptr(hasher: &mut dyn Hasher, ptr: *const u8, len: usize) {
-    for i in 0..len {
-        hasher.write_u8(*ptr.add(i));
+impl<T> Buffer for StageBuffer<T> {
+    unsafe fn update(&self, _: &UpdateRecordInfo) -> bool {
+        false
+    }
+
+    fn get(&self) -> vk::Buffer {
+        self.buffer
     }
 }

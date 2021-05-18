@@ -2,34 +2,71 @@ pub mod buffer;
 mod device;
 pub mod object;
 pub mod pipeline;
-mod query;
+pub mod query;
 pub mod queue;
 
 #[cfg(feature = "short_namespaces")]
 pub use buffer::*;
 #[cfg(feature = "short_namespaces")]
 pub use object::*;
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 #[cfg(feature = "short_namespaces")]
 pub use pipeline::*;
+#[cfg(feature = "short_namespaces")]
+pub use query::*;
 #[cfg(feature = "short_namespaces")]
 pub use queue::*;
 
 use crate::{
     context::{Context, ContextError},
     renderer::device::ReducedContext,
-    MapErrorElseLogResult, MapErrorLog, VSync,
+    MapErrorElseLogResult, MapErrorLog, SyncMode,
 };
 
 use ash::{extensions::khr, version::DeviceV1_0, vk};
 use buffer::{image::Image, image::ImageBuilder, image::ImageFormat, image::ImageUsage};
 use log::{debug, error};
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
 
-use self::{buffer::image::BaseFormat, device::RenderDevice, query::PerfQuery};
+use self::{
+    buffer::image::BaseFormat,
+    device::RenderDevice,
+    query::{PerfQuery, PerfQueryResult},
+};
 
-struct TargetImage {
+pub struct FramePerfReport {
+    pub cpu_frametime: Duration,
+    pub gpu_frametime: PerfQueryResult,
+
+    pub rerecord: bool,
+    pub updates: bool,
+    pub triangles: usize,
+}
+
+struct SwapchainObjects {
+    extent: vk::Extent2D,
+    format: vk::SurfaceFormatKHR,
+    present: vk::PresentModeKHR,
+    viewport: vk::Viewport,
+    scissor: vk::Rect2D,
+
+    render_pass: vk::RenderPass,
+
+    swapchain_loader: khr::Swapchain,
+    swapchain: vk::SwapchainKHR,
+
+    surface_loader: khr::Surface,
+    surface: vk::SurfaceKHR,
+}
+
+struct RenderObject {
     rerecord_requested: bool,
-
     image_in_use_fence: vk::Fence,
 
     _color_image: Image,
@@ -38,17 +75,26 @@ struct TargetImage {
 
     render_cb: vk::CommandBuffer,
     update_cb: vk::CommandBuffer,
+    update_cb_recording: bool,
     update_cb_pending: bool,
     command_pool: vk::CommandPool,
     perf: PerfQuery,
+    triangles: usize,
 }
 
-struct FrameObject {
+struct ConcurrentRenderObject {
     frame_fence: vk::Fence,
     image_semaphore: vk::Semaphore,
     update_semaphore: vk::Semaphore,
     render_semaphore: vk::Semaphore,
 }
+
+/* enum PresentThreadEvent {
+    // 0 = frame, 1 = image_index
+    // todo: typesafe this
+    PresentImage(u32, u32),
+    Stop,
+} */
 
 pub struct ImmediateFrameInfo {
     pub image_index: usize,
@@ -57,6 +103,7 @@ pub struct ImmediateFrameInfo {
 pub struct RenderRecordInfo {
     command_buffer: vk::CommandBuffer,
     image_index: usize,
+    triangles: AtomicUsize,
 }
 
 pub struct UpdateRecordInfo {
@@ -64,56 +111,58 @@ pub struct UpdateRecordInfo {
     image_index: usize,
 }
 
-pub struct UpdateQuery {
-    image_index: usize,
-}
-
 pub trait RendererRecord {
     #[allow(unused_variables)]
-    fn immediate(&mut self, imfi: &ImmediateFrameInfo) {}
+    fn immediate(&self, imfi: &ImmediateFrameInfo) {}
 
     #[allow(unused_variables)]
-    fn updates(&mut self, uq: &UpdateQuery) -> bool {
+    fn update(&self, uri: &UpdateRecordInfo) -> bool {
+        // 'any' all object updates and return the result of that
         false
     }
 
     #[allow(unused_variables)]
-    fn update(&mut self, uri: &UpdateRecordInfo) {}
+    fn record(&self, rri: &RenderRecordInfo) {}
+}
 
-    #[allow(unused_variables)]
-    fn record(&mut self, rri: &RenderRecordInfo) {}
+pub struct RendererData {
+    swapchain_objects: RwLock<SwapchainObjects>,
+    render_objects: Vec<RwLock<RenderObject>>,
+    crender_objects: Vec<RwLock<ConcurrentRenderObject>>,
 }
 
 pub struct Renderer {
-    extent: vk::Extent2D,
-    format: vk::SurfaceFormatKHR,
-    present: vk::PresentModeKHR,
-    viewport: vk::Viewport,
-    scissor: vk::Rect2D,
+    /* present_thread_join: Option<JoinHandle<()>>,
+    main_thread_tx: Mutex<mpsc::Sender<PresentThreadEvent>>,
+    main_thread_rx: Mutex<mpsc::Receiver<bool>>, */
+    data: Arc<RwLock<RendererData>>,
 
-    render_pass: vk::RenderPass,
-    target_images: Vec<TargetImage>,
-
-    frame: usize,
+    frame: AtomicUsize,
     frames_in_flight: usize,
-    frame_objects: Vec<FrameObject>,
-
-    // all following need to be destroyed manually, in order and the last
-    swapchain_loader: khr::Swapchain,
-    swapchain: vk::SwapchainKHR,
-
-    surface_loader: khr::Surface,
-    surface: vk::SurfaceKHR,
 
     rdevice: Arc<RenderDevice>,
 }
 
 pub struct RendererBuilder {
-    vsync: VSync,
+    sync: SyncMode,
     frames_in_flight: usize,
 }
 
-impl TargetImage {
+impl Default for FramePerfReport {
+    fn default() -> Self {
+        Self {
+            cpu_frametime: Duration::from_secs(0),
+            gpu_frametime: PerfQueryResult::default(),
+
+            rerecord: false,
+            updates: false,
+
+            triangles: 0,
+        }
+    }
+}
+
+impl RenderObject {
     fn new(
         rdevice: Arc<RenderDevice>,
         render_pass: vk::RenderPass,
@@ -170,7 +219,6 @@ impl TargetImage {
 
         Ok(Self {
             rerecord_requested: true,
-
             image_in_use_fence: vk::Fence::null(),
 
             _color_image: color_image,
@@ -179,166 +227,191 @@ impl TargetImage {
 
             render_cb,
             update_cb,
+            update_cb_recording: false,
             update_cb_pending: false,
             command_pool,
             perf: PerfQuery::new_with_device(rdevice),
+            triangles: 0,
         })
     }
 }
 
-impl FrameObject {
-    fn new(device: &Arc<RenderDevice>) -> Self {
+impl ConcurrentRenderObject {
+    fn new(device: &Arc<RenderDevice>) -> Result<Self, ContextError> {
         let semaphore_info = vk::SemaphoreCreateInfo::builder();
         let fence_info = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
 
-        Self {
+        Ok(Self {
             frame_fence: unsafe { device.create_fence(&fence_info, None) }
-                .expect("Fence creation failed"),
+                .map_err_log("Fence creation failed", ContextError::OutOfMemory)?,
             image_semaphore: unsafe { device.create_semaphore(&semaphore_info, None) }
-                .expect("Semaphore creation failed"),
+                .map_err_log("Semaphore creation failed", ContextError::OutOfMemory)?,
             update_semaphore: unsafe { device.create_semaphore(&semaphore_info, None) }
-                .expect("Semaphore creation failed"),
+                .map_err_log("Semaphore creation failed", ContextError::OutOfMemory)?,
             render_semaphore: unsafe { device.create_semaphore(&semaphore_info, None) }
-                .expect("Semaphore creation failed"),
-        }
+                .map_err_log("Semaphore creation failed", ContextError::OutOfMemory)?,
+        })
     }
-}
-
-impl RendererRecord for () {
-    fn record(&mut self, _: &RenderRecordInfo) {}
 }
 
 impl Renderer {
     pub fn new() -> RendererBuilder {
         RendererBuilder {
-            vsync: VSync::On,
-            frames_in_flight: 2,
+            sync: SyncMode::default(),
+            frames_in_flight: 3,
         }
     }
 
-    pub fn frame<T: RendererRecord>(&mut self, recorder: &mut T) -> Option<Duration> {
-        let frame = self.frame;
-        self.frame = (self.frame + 1) % self.frames_in_flight;
-        let frame_objects = &self.frame_objects[frame];
-
+    fn wait_in_use_render_object(&self, crender_object: &RwLockReadGuard<ConcurrentRenderObject>) {
         unsafe {
-            let fence = [frame_objects.frame_fence];
+            let fence = [crender_object.frame_fence];
             self.rdevice
                 .wait_for_fences(&fence, true, !0)
                 .expect("Failed to wait for fence");
         }
+    }
 
-        // aquire image
-        let image_index = match unsafe {
-            self.swapchain_loader.acquire_next_image(
-                self.swapchain,
-                !0,
-                frame_objects.image_semaphore,
+    fn acquire_image(&self, crender_object: &RwLockReadGuard<ConcurrentRenderObject>) -> usize {
+        let data = self.data.read();
+        let swapchain_objects = data.swapchain_objects.read();
+
+        match unsafe {
+            swapchain_objects.swapchain_loader.acquire_next_image(
+                swapchain_objects.swapchain,
+                1_000_000_000_000_000,
+                crender_object.image_semaphore,
                 vk::Fence::null(),
             )
         } {
-            Ok((image_index, false)) => image_index as usize,
-            Ok((_, true)) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                self.recreate_swapchain();
-                return None;
-            }
+            Ok((image_index, _)) => image_index as usize,
             Err(err) => panic!("Failed to aquire image from swapchain: {:?}", err),
-        };
-        let target_image = &mut self.target_images[image_index];
+        }
+    }
 
-        if target_image.image_in_use_fence != vk::Fence::null() {
+    pub fn frame<T: RendererRecord>(&self, recorder: &T) -> FramePerfReport {
+        let cpu_frametime = Instant::now();
+
+        // thread::sleep(Duration::from_millis(15));
+
+        let data = self.data.read();
+
+        // increment and get the next frame object index
+        let frame = self.frame.fetch_add(1, Ordering::SeqCst) % self.frames_in_flight;
+        let crender_object = data.crender_objects[frame].read();
+
+        self.wait_in_use_render_object(&crender_object);
+
+        // aquire image
+        let image_index = self.acquire_image(&crender_object);
+
+        let mut render_object = data.render_objects[image_index].write();
+        if render_object.image_in_use_fence != vk::Fence::null() {
             unsafe {
-                let fence = [target_image.image_in_use_fence];
+                let fence = [render_object.image_in_use_fence];
                 self.rdevice
                     .wait_for_fences(&fence, true, !0)
                     .expect("Failed to wait for fence");
             }
         }
-        target_image.image_in_use_fence = frame_objects.frame_fence;
+        render_object.image_in_use_fence = crender_object.frame_fence;
         unsafe {
-            let fence = [frame_objects.frame_fence];
+            let fence = [crender_object.frame_fence];
             self.rdevice
                 .reset_fences(&fence)
                 .expect("Failed to reset fence");
         }
 
         // update buffers
-        let rerecord = target_image.rerecord_requested;
-        self.update(recorder, image_index);
+        self.update(recorder, &mut render_object, image_index);
         self.immediate(recorder, image_index);
+        let rerecord = render_object.rerecord_requested;
         if rerecord {
-            self.record(recorder, image_index);
+            self.record(recorder, &mut render_object, image_index);
+            render_object.rerecord_requested = false;
         }
-        let frame_objects = &self.frame_objects[frame];
-        let target_image = &mut self.target_images[image_index];
-        let gpu_frametime = target_image.perf.get();
+        let gpu_frametime = render_object
+            .perf
+            .get()
+            .unwrap_or(PerfQueryResult::default());
 
         // submit
         unsafe {
-            let update_cb = [target_image.update_cb];
-            let update_wait = [frame_objects.image_semaphore];
-            let update_signal = [frame_objects.update_semaphore];
-            let update_stage = [vk::PipelineStageFlags::ALL_COMMANDS];
-
-            let render_cb = [target_image.render_cb];
-            let render_wait = [frame_objects.update_semaphore];
-            let render_signal = [frame_objects.render_semaphore];
+            let render_cb = [render_object.render_cb];
+            let image_wait = [crender_object.image_semaphore];
+            let update_wait = [crender_object.update_semaphore];
+            let render_wait = [crender_object.render_semaphore];
             let render_stage = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
 
-            let submit_both = [
-                vk::SubmitInfo::builder()
+            let submit_render = if render_object.update_cb_pending {
+                let update_cb = [render_object.update_cb];
+                let update_stage = [vk::PipelineStageFlags::ALL_COMMANDS];
+
+                let submit_update = [vk::SubmitInfo::builder()
                     .command_buffers(&update_cb)
-                    .wait_semaphores(&update_wait)
-                    .signal_semaphores(&update_signal)
+                    .wait_semaphores(&image_wait)
+                    .signal_semaphores(&update_wait)
                     .wait_dst_stage_mask(&update_stage)
-                    .build(),
-                vk::SubmitInfo::builder()
+                    .build()];
+
+                self.rdevice
+                    .queue_submit(
+                        self.rdevice.queues.graphics,
+                        &submit_update,
+                        vk::Fence::null(),
+                    )
+                    .expect("Transfer queue submit failed");
+
+                [vk::SubmitInfo::builder()
                     .command_buffers(&render_cb)
-                    .wait_semaphores(&render_wait)
-                    .signal_semaphores(&render_signal)
+                    .wait_semaphores(&update_wait)
+                    .signal_semaphores(&render_wait)
                     .wait_dst_stage_mask(&render_stage)
-                    .build(),
-            ];
-
-            let submit_render = [vk::SubmitInfo::builder()
-                .command_buffers(&render_cb)
-                .wait_semaphores(&update_wait)
-                .signal_semaphores(&render_signal)
-                .wait_dst_stage_mask(&render_stage)
-                .build()];
-
-            let submits = if target_image.update_cb_pending {
-                &submit_both[..]
+                    .build()]
             } else {
-                &submit_render[..]
+                [vk::SubmitInfo::builder()
+                    .command_buffers(&render_cb)
+                    .wait_semaphores(&image_wait)
+                    .signal_semaphores(&render_wait)
+                    .wait_dst_stage_mask(&render_stage)
+                    .build()]
             };
 
             self.rdevice
                 .queue_submit(
                     self.rdevice.queues.graphics,
-                    &submits,
-                    frame_objects.frame_fence,
+                    &submit_render,
+                    crender_object.frame_fence,
                 )
                 .expect("Graphics queue submit failed");
         }
 
+        let updates = render_object.update_cb_pending;
+        let triangles = render_object.triangles;
+        drop(render_object);
+
         // present
-        let suboptimal = unsafe {
-            let wait = [frame_objects.render_semaphore];
-            let swapchain = [self.swapchain];
+        let suboptimal = {
+            let swapchain_objects = data.swapchain_objects.read();
+            let crender_object = data.crender_objects[frame as usize].read();
+            let wait = [crender_object.render_semaphore];
+            let swapchain = [swapchain_objects.swapchain];
             let image_index = [image_index as u32];
 
-            // present
-            match self.swapchain_loader.queue_present(
-                self.rdevice.queues.present,
-                &vk::PresentInfoKHR::builder()
-                    .wait_semaphores(&wait)
-                    .swapchains(&swapchain)
-                    .image_indices(&image_index),
-            ) {
-                Ok(o) => o,
-                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => true,
-                Err(e) => panic!("Present queue submit failed: {:?}", e),
+            let submit_present = vk::PresentInfoKHR::builder()
+                .wait_semaphores(&wait)
+                .swapchains(&swapchain)
+                .image_indices(&image_index);
+
+            unsafe {
+                // present
+                let result = swapchain_objects
+                    .swapchain_loader
+                    .queue_present(self.rdevice.queues.present, &submit_present);
+                match result {
+                    Ok(o) => o,
+                    Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => true,
+                    Err(e) => panic!("Present queue submit failed: {:?}", e),
+                }
             }
         };
 
@@ -347,159 +420,221 @@ impl Renderer {
             self.recreate_swapchain();
         }
 
-        gpu_frametime.ok()
-    }
-
-    fn update<T: RendererRecord>(&mut self, recorder: &mut T, image_index: usize) {
-        let target_image = &mut self.target_images[image_index];
-
-        unsafe {
-            self.rdevice
-                .reset_command_buffer(target_image.update_cb, vk::CommandBufferResetFlags::empty())
-                .expect("Command buffer reset failed");
+        /* // recreate swapchain if needed
+        let suboptimal = self
+            .main_thread_rx
+            .lock()
+            .try_recv()
+            .map_or(false, |suboptimal| suboptimal);
+        if suboptimal {
+            self.recreate_swapchain();
         }
 
-        let uq = UpdateQuery { image_index };
-        target_image.update_cb_pending = recorder.updates(&uq);
-        if target_image.update_cb_pending {
+        // present
+        self.main_thread_tx
+            .lock()
+            .send(PresentThreadEvent::PresentImage(
+                frame as u32,
+                image_index as u32,
+            ))
+            .unwrap(); */
+
+        FramePerfReport {
+            cpu_frametime: cpu_frametime.elapsed(),
+            gpu_frametime: gpu_frametime,
+
+            rerecord,
+            updates,
+            triangles,
+        }
+    }
+
+    fn update<T: RendererRecord>(
+        &self,
+        recorder: &T,
+        render_object: &mut RwLockWriteGuard<RenderObject>,
+        image_index: usize,
+    ) {
+        if render_object.update_cb_recording == false {
             unsafe {
-                self.rdevice
-                    .begin_command_buffer(
-                        target_image.update_cb,
-                        &vk::CommandBufferBeginInfo::builder(),
-                    )
-                    .expect("Command buffer begin failed");
-
-                let uri = UpdateRecordInfo {
-                    command_buffer: target_image.update_cb,
-                    image_index,
-                };
-                recorder.update(&uri);
-
-                self.rdevice
-                    .end_command_buffer(target_image.update_cb)
-                    .expect("Command buffer end failed");
+                self.rdevice.reset_command_buffer(
+                    render_object.update_cb,
+                    vk::CommandBufferResetFlags::empty(),
+                )
             }
-        }
-    }
-
-    fn immediate<T: RendererRecord>(&mut self, recorder: &mut T, image_index: usize) {
-        let imfi = ImmediateFrameInfo { image_index };
-        recorder.immediate(&imfi)
-    }
-
-    fn record<T: RendererRecord>(&mut self, recorder: &mut T, image_index: usize) {
-        let target_image = &mut self.target_images[image_index];
-
-        unsafe {
-            self.rdevice
-                .reset_command_buffer(target_image.render_cb, vk::CommandBufferResetFlags::empty())
-                .expect("Command buffer reset failed");
-
-            self.rdevice
-                .begin_command_buffer(
-                    target_image.render_cb,
+            .expect("Command buffer reset failed");
+            unsafe {
+                self.rdevice.begin_command_buffer(
+                    render_object.update_cb,
                     &vk::CommandBufferBeginInfo::builder(),
                 )
-                .expect("Command buffer begin failed");
+            }
+            .expect("Command buffer begin failed");
 
-            let rri = RenderRecordInfo {
-                command_buffer: target_image.render_cb,
-                image_index,
-            };
-            target_image.perf.reset(&rri);
+            render_object.update_cb_recording = true;
+        }
 
-            let viewport = [self.viewport];
-            self.rdevice
-                .cmd_set_viewport(target_image.render_cb, 0, &viewport);
+        let uri = UpdateRecordInfo {
+            command_buffer: render_object.update_cb,
+            image_index,
+        };
+        render_object.update_cb_pending = recorder.update(&uri);
 
-            let scissor = [self.scissor];
-            self.rdevice
-                .cmd_set_scissor(target_image.render_cb, 0, &scissor);
-
-            let clear_values = [
-                vk::ClearValue {
-                    color: vk::ClearColorValue {
-                        float32: [0.18, 0.18, 0.2, 1.0],
-                    },
-                },
-                vk::ClearValue {
-                    depth_stencil: vk::ClearDepthStencilValue {
-                        depth: 1.0,
-                        stencil: 0,
-                    },
-                },
-            ];
-            let render_pass_begin_info = vk::RenderPassBeginInfo::builder()
-                .clear_values(&clear_values)
-                .framebuffer(target_image.framebuffer)
-                .render_pass(self.render_pass)
-                .render_area(self.scissor);
-
-            self.rdevice.cmd_begin_render_pass(
-                target_image.render_cb,
-                &render_pass_begin_info,
-                vk::SubpassContents::INLINE,
-            );
-
-            target_image.perf.begin(&rri);
-            recorder.record(&rri);
-            target_image.perf.end(&rri);
-
-            self.rdevice.cmd_end_render_pass(target_image.render_cb);
-
-            self.rdevice
-                .end_command_buffer(target_image.render_cb)
+        if render_object.update_cb_pending {
+            render_object.update_cb_recording = false;
+            unsafe { self.rdevice.end_command_buffer(render_object.update_cb) }
                 .expect("Command buffer end failed");
         }
     }
 
-    pub fn request_rerecord(&mut self) {
-        for target in self.target_images.iter_mut() {
-            target.rerecord_requested = true;
+    fn immediate<T: RendererRecord>(&self, recorder: &T, image_index: usize) {
+        let imfi = ImmediateFrameInfo { image_index };
+        recorder.immediate(&imfi)
+    }
+
+    fn record<T: RendererRecord>(
+        &self,
+        recorder: &T,
+        render_object: &mut RwLockWriteGuard<RenderObject>,
+        image_index: usize,
+    ) {
+        let data = self.data.read();
+        let swapchain_objects = data.swapchain_objects.read();
+        let rri = RenderRecordInfo {
+            command_buffer: render_object.render_cb,
+            image_index,
+            triangles: AtomicUsize::new(0),
+        };
+
+        let viewport = [swapchain_objects.viewport];
+        let scissor = [swapchain_objects.scissor];
+        let clear_values = [
+            vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.18, 0.18, 0.2, 1.0],
+                },
+            },
+            vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: 1.0,
+                    stencil: 0,
+                },
+            },
+        ];
+        let render_pass_begin_info = vk::RenderPassBeginInfo::builder()
+            .clear_values(&clear_values)
+            .framebuffer(render_object.framebuffer)
+            .render_pass(swapchain_objects.render_pass)
+            .render_area(swapchain_objects.scissor);
+
+        unsafe {
+            self.rdevice
+                .reset_command_buffer(
+                    render_object.render_cb,
+                    vk::CommandBufferResetFlags::empty(),
+                )
+                .expect("Command buffer reset failed");
+
+            self.rdevice
+                .begin_command_buffer(
+                    render_object.render_cb,
+                    &vk::CommandBufferBeginInfo::builder(),
+                )
+                .expect("Command buffer begin failed");
+
+            render_object.perf.reset(&rri);
+
+            self.rdevice
+                .cmd_set_viewport(render_object.render_cb, 0, &viewport);
+
+            self.rdevice
+                .cmd_set_scissor(render_object.render_cb, 0, &scissor);
+
+            drop(swapchain_objects);
+
+            self.rdevice.cmd_begin_render_pass(
+                render_object.render_cb,
+                &render_pass_begin_info,
+                vk::SubpassContents::INLINE,
+            );
+
+            recorder.record(&rri);
+            render_object.perf.bind(&rri);
+            render_object.triangles = rri.triangles.load(Ordering::SeqCst);
+
+            self.rdevice.cmd_end_render_pass(render_object.render_cb);
+
+            self.rdevice
+                .end_command_buffer(render_object.render_cb)
+                .expect("Command buffer end failed");
         }
     }
 
-    pub fn recreate_swapchain(&mut self) {
+    pub fn request_rerecord(&self) {
+        let data = self.data.read();
+
+        for target in data.render_objects.iter() {
+            target.write().rerecord_requested = true;
+        }
+    }
+
+    pub fn recreate_swapchain(&self) {
+        let data = self.data.read();
+
+        let mut render_objects = data
+            .render_objects
+            .iter()
+            .map(|render_object| render_object.write())
+            .collect::<Vec<_>>();
+
+        let mut swapchain_objects = data.swapchain_objects.write();
+
         self.wait();
 
-        self.frame = 0;
+        self.frame.store(0, Ordering::SeqCst);
 
         unsafe {
-            self.swapchain_loader
-                .destroy_swapchain(self.swapchain, None)
+            swapchain_objects
+                .swapchain_loader
+                .destroy_swapchain(swapchain_objects.swapchain, None)
         };
-        let (swapchain, viewport, scissor) = RendererBuilder::swapchain(
+        let (swapchain, extent, viewport, scissor) = RendererBuilder::swapchain(
             self.rdevice.pdevice,
-            self.surface,
-            &self.surface_loader,
-            &self.swapchain_loader,
-            self.format,
-            self.present,
-            &mut self.extent,
+            swapchain_objects.surface,
+            &swapchain_objects.surface_loader,
+            &swapchain_objects.swapchain_loader,
+            swapchain_objects.format,
+            swapchain_objects.present,
+            swapchain_objects.extent,
         )
         .unwrap();
 
-        self.swapchain = swapchain;
-        self.viewport = viewport;
-        self.scissor = scissor;
+        swapchain_objects.extent = extent;
+        swapchain_objects.swapchain = swapchain;
+        swapchain_objects.viewport = viewport;
+        swapchain_objects.scissor = scissor;
 
         let color_images =
-            RendererBuilder::swapchain_images(&self.swapchain_loader, swapchain).unwrap();
+            RendererBuilder::swapchain_images(&swapchain_objects.swapchain_loader, swapchain)
+                .unwrap();
 
-        for (i, swapchain_objects) in self.target_images.iter_mut().enumerate() {
+        for (i, render_objects) in render_objects.iter_mut().enumerate() {
             unsafe {
                 self.rdevice
-                    .destroy_framebuffer(swapchain_objects.framebuffer, None);
+                    .destroy_framebuffer(render_objects.framebuffer, None);
             }
 
             let color_image = ImageBuilder::new_with_device(self.rdevice.clone())
-                .build_with_image(color_images[i], ImageUsage::WRITE, self.format.format)
+                .build_with_image(
+                    color_images[i],
+                    ImageUsage::WRITE,
+                    swapchain_objects.format.format,
+                )
                 .expect("Color image creation failed");
 
             let depth_image = ImageBuilder::new_with_device(self.rdevice.clone())
-                .with_width(self.extent.width)
-                .with_height(self.extent.height)
+                .with_width(swapchain_objects.extent.width)
+                .with_height(swapchain_objects.extent.height)
                 .build(ImageUsage::WRITE, ImageFormat::<f32>::D)
                 .expect("Depth image creation failed");
 
@@ -507,20 +642,24 @@ impl Renderer {
 
             let framebuffer_info = vk::FramebufferCreateInfo::builder()
                 .attachments(&attachments)
-                .render_pass(self.render_pass)
-                .width(self.extent.width)
-                .height(self.extent.height)
+                .render_pass(swapchain_objects.render_pass)
+                .width(swapchain_objects.extent.width)
+                .height(swapchain_objects.extent.height)
                 .layers(1);
 
-            swapchain_objects.framebuffer =
+            render_objects.framebuffer =
                 unsafe { self.rdevice.create_framebuffer(&framebuffer_info, None) }
                     .expect("Framebuffer creation failed");
 
-            swapchain_objects._color_image = color_image;
-            swapchain_objects._depth_image = depth_image;
+            render_objects._color_image = color_image;
+            render_objects._depth_image = depth_image;
         }
 
         self.request_rerecord();
+    }
+
+    pub fn frames_in_flight(&self) -> usize {
+        self.frames_in_flight
     }
 
     pub fn wait(&self) {
@@ -541,9 +680,10 @@ impl Renderer {
 
 impl RendererBuilder {
     /// Limits the framerate to usually 60 depending on the display settings.
+    ///
     /// Eliminates screen tearing.
-    pub fn with_vsync(mut self, vsync: VSync) -> Self {
-        self.vsync = vsync;
+    pub fn with_sync(mut self, sync: SyncMode) -> Self {
+        self.sync = sync;
         self
     }
 
@@ -591,7 +731,7 @@ impl RendererBuilder {
         pdevice: vk::PhysicalDevice,
         surface: vk::SurfaceKHR,
         surface_loader: &khr::Surface,
-        vsync: VSync,
+        vsync: SyncMode,
     ) -> Result<vk::PresentModeKHR, ContextError> {
         let available =
             unsafe { surface_loader.get_physical_device_surface_present_modes(pdevice, surface) }
@@ -606,8 +746,13 @@ impl RendererBuilder {
         }
 
         let mode = match vsync {
-            VSync::Off => vk::PresentModeKHR::IMMEDIATE,
-            VSync::On => available
+            SyncMode::Fifo => vk::PresentModeKHR::FIFO,
+            SyncMode::Immediate => available
+                .iter()
+                .find(|&&present| present == vk::PresentModeKHR::IMMEDIATE)
+                .unwrap_or(&vk::PresentModeKHR::FIFO)
+                .clone(),
+            SyncMode::Mailbox => available
                 .iter()
                 .find(|&&present| present == vk::PresentModeKHR::MAILBOX)
                 .unwrap_or(&vk::PresentModeKHR::FIFO)
@@ -622,6 +767,36 @@ impl RendererBuilder {
         Ok(mode)
     }
 
+    fn swapchain_len(surface_caps: &vk::SurfaceCapabilitiesKHR) -> u32 {
+        let preferred = surface_caps.min_image_count + 1;
+
+        if surface_caps.max_image_count != 0 {
+            preferred.min(surface_caps.max_image_count)
+        } else {
+            preferred
+        }
+    }
+
+    fn swapchain_extent(
+        initial_extent: vk::Extent2D,
+        surface_caps: &vk::SurfaceCapabilitiesKHR,
+    ) -> vk::Extent2D {
+        if surface_caps.current_extent.width != u32::MAX {
+            surface_caps.current_extent
+        } else {
+            vk::Extent2D {
+                width: initial_extent
+                    .width
+                    .max(surface_caps.min_image_extent.width)
+                    .min(surface_caps.max_image_extent.width),
+                height: initial_extent
+                    .height
+                    .max(surface_caps.min_image_extent.height)
+                    .min(surface_caps.max_image_extent.height),
+            }
+        }
+    }
+
     fn swapchain(
         pdevice: vk::PhysicalDevice,
         surface: vk::SurfaceKHR,
@@ -629,8 +804,8 @@ impl RendererBuilder {
         swapchain_loader: &khr::Swapchain,
         format: vk::SurfaceFormatKHR,
         present: vk::PresentModeKHR,
-        extent: &mut vk::Extent2D,
-    ) -> Result<(vk::SwapchainKHR, vk::Viewport, vk::Rect2D), ContextError> {
+        initial_extent: vk::Extent2D,
+    ) -> Result<(vk::SwapchainKHR, vk::Extent2D, vk::Viewport, vk::Rect2D), ContextError> {
         let surface_caps =
             unsafe { surface_loader.get_physical_device_surface_capabilities(pdevice, surface) }
                 .map_err_else_log("Surface capability query failed", |err| match err {
@@ -638,23 +813,9 @@ impl RendererBuilder {
                     _ => ContextError::OutOfMemory,
                 })?;
 
-        let mut min_swapchain_len = surface_caps.min_image_count + 1;
-        if surface_caps.max_image_count > 0 && min_swapchain_len > surface_caps.max_image_count {
-            min_swapchain_len = surface_caps.max_image_count;
-        }
+        let min_swapchain_len = Self::swapchain_len(&surface_caps);
 
-        if surface_caps.current_extent.width != u32::MAX {
-            *extent = surface_caps.current_extent
-        } else {
-            (*extent).width = (*extent)
-                .width
-                .max(surface_caps.min_image_extent.width)
-                .min(surface_caps.max_image_extent.width);
-            (*extent).height = (*extent)
-                .height
-                .max(surface_caps.min_image_extent.height)
-                .min(surface_caps.max_image_extent.height);
-        };
+        let extent = Self::swapchain_extent(initial_extent, &surface_caps);
 
         let transform = if surface_caps
             .supported_transforms
@@ -670,7 +831,7 @@ impl RendererBuilder {
             .min_image_count(min_swapchain_len)
             .image_color_space(format.color_space)
             .image_format(format.format)
-            .image_extent(*extent)
+            .image_extent(extent)
             .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .pre_transform(transform)
@@ -678,6 +839,11 @@ impl RendererBuilder {
             .present_mode(present)
             .clipped(true)
             .image_array_layers(1);
+
+        debug!(
+            "Swapchain images: {} - Swapchain format: {:?}",
+            min_swapchain_len, format
+        );
 
         let swapchain = unsafe { swapchain_loader.create_swapchain(&swapchain_create_info, None) }
             .map_err_else_log("Swapchain creation failed", |err| match err {
@@ -699,13 +865,10 @@ impl RendererBuilder {
 
         let scissor = vk::Rect2D {
             offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-                width: extent.width,
-                height: extent.height,
-            },
+            extent: extent.clone(),
         };
 
-        Ok((swapchain, viewport, scissor))
+        Ok((swapchain, extent, viewport, scissor))
     }
 
     fn swapchain_images(
@@ -794,38 +957,45 @@ impl RendererBuilder {
         // swapchain
         let format = Self::pick_surface_format(rdevice.pdevice, surface, &surface_loader)?;
         let present =
-            Self::pick_surface_present_mode(rdevice.pdevice, surface, &surface_loader, self.vsync)?;
+            Self::pick_surface_present_mode(rdevice.pdevice, surface, &surface_loader, self.sync)?;
 
         let swapchain_loader = khr::Swapchain::new(&rdevice.instance, &**rdevice);
 
-        let (swapchain, viewport, scissor) = Self::swapchain(
+        let (swapchain, new_extent, viewport, scissor) = Self::swapchain(
             rdevice.pdevice,
             surface,
             &surface_loader,
             &swapchain_loader,
             format,
             present,
-            &mut extent,
+            extent,
         )?;
+        extent = new_extent;
 
         let color_images = Self::swapchain_images(&swapchain_loader, swapchain)?;
 
         // main render pass
         let render_pass = Self::render_pass(rdevice.clone(), format.format)?;
 
-        let target_images: Vec<TargetImage> = color_images
+        let render_objects = color_images
             .into_iter()
             .map(|image| {
-                TargetImage::new(rdevice.clone(), render_pass, image, format.format, extent)
+                Ok(RwLock::new(RenderObject::new(
+                    rdevice.clone(),
+                    render_pass,
+                    image,
+                    format.format,
+                    extent,
+                )?))
             })
             .collect::<Result<_, _>>()?;
 
         let frames_in_flight = self.frames_in_flight;
-        let frame_objects = (0..frames_in_flight)
-            .map(|_| FrameObject::new(&rdevice))
-            .collect();
+        let crender_objects = (0..frames_in_flight)
+            .map(|_| Ok(RwLock::new(ConcurrentRenderObject::new(&rdevice)?)))
+            .collect::<Result<_, _>>()?;
 
-        Ok(Renderer {
+        let swapchain_objects = RwLock::new(SwapchainObjects {
             extent,
             format,
             present,
@@ -833,17 +1003,77 @@ impl RendererBuilder {
             scissor,
 
             render_pass,
-            target_images,
-
-            frame: 0,
-            frames_in_flight,
-            frame_objects,
 
             swapchain_loader,
             swapchain,
 
             surface_loader,
             surface,
+        });
+
+        let data = Arc::new(RwLock::new(RendererData {
+            swapchain_objects,
+            render_objects,
+            crender_objects,
+        }));
+
+        /* let (main_thread_tx, present_thread_rx) = mpsc::channel();
+        let (present_thread_tx, main_thread_rx) = mpsc::channel();
+        let main_thread_tx = Mutex::new(main_thread_tx);
+        let main_thread_rx = Mutex::new(main_thread_rx);
+
+        let present_thread_join = {
+            let data = data.clone();
+            let rdevice = rdevice.clone();
+
+            Some(thread::spawn(move || loop {
+                let event = present_thread_rx.recv().unwrap();
+
+                match event {
+                    PresentThreadEvent::Stop => {
+                        break;
+                    }
+                    PresentThreadEvent::PresentImage(frame, image_index) => {
+                        let data = data.read();
+                        let swapchain_objects = data.swapchain_objects.read();
+                        let crender_object = data.crender_objects[frame as usize].read();
+                        let wait = [crender_object.render_semaphore];
+                        let swapchain = [swapchain_objects.swapchain];
+                        let image_index = [image_index];
+
+                        let submit_present = vk::PresentInfoKHR::builder()
+                            .wait_semaphores(&wait)
+                            .swapchains(&swapchain)
+                            .image_indices(&image_index);
+
+                        let result = unsafe {
+                            // present
+                            let result = swapchain_objects
+                                .swapchain_loader
+                                .queue_present(rdevice.queues.present, &submit_present);
+                            let current = data.images.fetch_sub(1, Ordering::SeqCst);
+                            debug!("queue_present result: {:?}, {}", result, current);
+                            match result {
+                                Ok(o) => o,
+                                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => true,
+                                Err(e) => panic!("Present queue submit failed: {:?}", e),
+                            }
+                        };
+
+                        present_thread_tx.send(result).unwrap();
+                    }
+                }
+            }))
+        }; */
+
+        Ok(Renderer {
+            /* present_thread_join,
+            main_thread_tx,
+            main_thread_rx, */
+            data,
+
+            frame: AtomicUsize::new(0),
+            frames_in_flight,
 
             rdevice,
         })
@@ -852,34 +1082,49 @@ impl RendererBuilder {
 
 impl Drop for Renderer {
     fn drop(&mut self) {
+        /* self.main_thread_tx
+            .lock()
+            .send(PresentThreadEvent::Stop)
+            .unwrap();
+        self.present_thread_join.take().unwrap().join().unwrap(); */
+        let mut data = self.data.write();
+
         self.wait();
 
         unsafe {
-            for frame_objects in self.frame_objects.drain(..) {
-                self.rdevice.destroy_fence(frame_objects.frame_fence, None);
+            for crender_object in data.crender_objects.drain(..) {
+                let crender_object = crender_object.write();
+
+                self.rdevice.destroy_fence(crender_object.frame_fence, None);
                 self.rdevice
-                    .destroy_semaphore(frame_objects.image_semaphore, None);
+                    .destroy_semaphore(crender_object.image_semaphore, None);
                 self.rdevice
-                    .destroy_semaphore(frame_objects.update_semaphore, None);
+                    .destroy_semaphore(crender_object.update_semaphore, None);
                 self.rdevice
-                    .destroy_semaphore(frame_objects.render_semaphore, None);
+                    .destroy_semaphore(crender_object.render_semaphore, None);
             }
 
-            for target_image in self.target_images.drain(..) {
+            for render_object in data.render_objects.drain(..) {
+                let render_object = render_object.write();
+
                 self.rdevice
-                    .destroy_framebuffer(target_image.framebuffer, None);
-                let cbs = [target_image.render_cb, target_image.update_cb];
+                    .destroy_framebuffer(render_object.framebuffer, None);
+                let cbs = [render_object.render_cb, render_object.update_cb];
                 self.rdevice
-                    .free_command_buffers(target_image.command_pool, &cbs);
+                    .free_command_buffers(render_object.command_pool, &cbs);
                 self.rdevice
-                    .destroy_command_pool(target_image.command_pool, None);
+                    .destroy_command_pool(render_object.command_pool, None);
             }
 
-            self.rdevice.destroy_render_pass(self.render_pass, None);
-            self.swapchain_loader
-                .destroy_swapchain(self.swapchain, None);
-
-            self.surface_loader.destroy_surface(self.surface, None);
+            let swapchain_objects = data.swapchain_objects.write();
+            self.rdevice
+                .destroy_render_pass(swapchain_objects.render_pass, None);
+            swapchain_objects
+                .swapchain_loader
+                .destroy_swapchain(swapchain_objects.swapchain, None);
+            swapchain_objects
+                .surface_loader
+                .destroy_surface(swapchain_objects.surface, None);
         }
         debug!("Renderer dropped");
     }

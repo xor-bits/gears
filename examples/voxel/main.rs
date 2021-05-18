@@ -17,15 +17,15 @@ use gears::{
     input_state::InputState,
     renderer::{
         buffer::{IndexBuffer, VertexBuffer},
-        pipeline::{Pipeline, PipelineBuilder},
+        pipeline::Pipeline,
     },
-    Buffer, CursorController, ElementState, EventLoopTarget, Frame, FrameLoop, FrameLoopTarget,
-    HideMode, ImmediateFrameInfo, RenderRecordInfo, Renderer, RendererRecord, UpdateLoop,
-    UpdateLoopTarget, UpdateQuery, UpdateRate, UpdateRecordInfo, VSync, VirtualKeyCode,
-    WindowEvent,
+    Buffer, ContextGPUPick, CursorController, ElementState, EventLoopTarget, Frame, FrameLoop,
+    FrameLoopTarget, FramePerfReport, HideMode, ImmediateFrameInfo, PipelineBuilder,
+    RenderRecordInfo, Renderer, RendererRecord, SyncMode, UpdateLoop, UpdateLoopTarget, UpdateRate,
+    UpdateRecordInfo, VirtualKeyCode, WindowEvent,
 };
 use marching_cubes::generate_marching_cubes;
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 use simdnoise::NoiseBuilder;
 
 mod cubes;
@@ -33,15 +33,16 @@ mod marching_cubes;
 
 mod shader {
     gears_pipeline::pipeline! {
-        vs: { path: "voxel/res/default.vert.glsl" }
-        ge: { path: "voxel/res/default.geom.glsl" }
-        fs: { path: "voxel/res/default.frag.glsl" }
+        vert: { path: "voxel/res/default.vert.glsl" }
+        frag: { path: "voxel/res/default.frag.glsl" }
+        builders
     }
 }
 
 mod debug_shader {
     gears_pipeline::pipeline! {
-        fs: { path: "voxel/res/default.frag.glsl" define: ["DEBUGGING"] }
+        vert: { path: "voxel/res/default.vert.glsl" define: ["DEBUGGING"] }
+        geom: { path: "voxel/res/default.geom.glsl" }
     }
 }
 
@@ -71,14 +72,14 @@ impl MeshMode {
 
 struct App {
     frame: Frame,
-    renderer: Box<Option<Renderer>>,
+    renderer: Renderer,
 
     vb: VertexBuffer<shader::VertexData>,
     ib: IndexBuffer<u32>,
     shaders: (Pipeline, Pipeline),
 
     cursor_controller: CursorController,
-    input: Arc<Mutex<InputState>>,
+    input: Arc<RwLock<InputState>>,
 
     look_dir: Vector2<f32>,
     position: Point3<f32>,
@@ -88,6 +89,7 @@ struct App {
     voxels: Vec<f32>,
     mesh: MeshMode,
 
+    updaterate: Duration,
     delta_time: Instant,
 }
 
@@ -125,32 +127,27 @@ fn point_to_index(x: usize, y: usize, z: usize) -> usize {
 }
 
 impl App {
-    fn init(frame: Frame, renderer: Renderer, input: Arc<Mutex<InputState>>) -> Self {
+    fn init(frame: Frame, renderer: Renderer, input: Arc<RwLock<InputState>>) -> Arc<RwLock<Self>> {
         let voxels = generate_voxels(0);
         let (vertices, indices) = generate_cubes(&voxels);
 
         let vb = VertexBuffer::new_with_data(&renderer, &vertices[..]).unwrap();
         let ib = IndexBuffer::new_with_data(&renderer, &indices[..]).unwrap();
 
-        let fill_shader = PipelineBuilder::new(&renderer)
-            .with_ubo::<shader::UBO>()
-            .with_graphics_modules(shader::VERT_SPIRV, shader::FRAG_SPIRV)
-            .with_input::<shader::VertexData>()
-            .build(false)
-            .unwrap();
+        let fill_shader = shader::build(&renderer);
         let line_shader = PipelineBuilder::new(&renderer)
             .with_ubo::<shader::UBO>()
-            .with_graphics_modules(shader::VERT_SPIRV, debug_shader::FRAG_SPIRV)
-            .with_geometry_module(shader::GEOM_SPIRV)
+            .with_graphics_modules(debug_shader::VERT_SPIRV_REF, shader::FRAG_SPIRV_REF)
+            .with_geometry_module(debug_shader::GEOM_SPIRV_REF)
             .with_input::<shader::VertexData>()
             .build(false)
             .unwrap();
 
         let cursor_controller = CursorController::new().with_hide_mode(HideMode::GrabCursor);
 
-        Self {
+        Arc::new(RwLock::new(Self {
             frame,
-            renderer: Box::new(Some(renderer)),
+            renderer,
 
             vb,
             ib,
@@ -170,8 +167,9 @@ impl App {
             voxels,
             mesh: MeshMode::MarchingCubes,
 
+            updaterate: UpdateRate::PerSecond(UPDATES_PER_SECOND).to_interval(),
             delta_time: Instant::now(),
-        }
+        }))
     }
 
     fn remesh(&mut self) {
@@ -181,18 +179,14 @@ impl App {
         let vb_resize = self.vb.len() < vertices.len();
         let ib_resize = self.ib.len() < indices.len();
         if vb_resize || ib_resize {
-            let mut renderer = self.renderer.take().unwrap();
-
-            renderer.wait();
+            self.renderer.wait();
             if vb_resize {
-                self.vb = VertexBuffer::new_with_data(&renderer, &vertices[..]).unwrap();
+                self.vb = VertexBuffer::new_with_data(&self.renderer, &vertices[..]).unwrap();
             }
             if ib_resize {
-                self.ib = IndexBuffer::new_with_data(&renderer, &indices[..]).unwrap();
+                self.ib = IndexBuffer::new_with_data(&self.renderer, &indices[..]).unwrap();
             }
-            renderer.request_rerecord();
-
-            *self.renderer.as_mut() = Some(renderer);
+            self.renderer.request_rerecord();
         }
 
         if !vb_resize {
@@ -205,8 +199,8 @@ impl App {
 }
 
 impl RendererRecord for App {
-    fn immediate(&mut self, imfi: &ImmediateFrameInfo) {
-        let dt_s = self.delta_time.elapsed().as_secs_f32();
+    fn immediate(&self, imfi: &ImmediateFrameInfo) {
+        let dt_s = self.delta_time.elapsed().as_secs_f32() / self.updaterate.as_secs_f32();
         let aspect = self.frame.aspect();
 
         let dir = Vector3::new(
@@ -229,23 +223,16 @@ impl RendererRecord for App {
         self.shaders.1.write_ubo(imfi, &ubo).unwrap();
     }
 
-    fn updates(&mut self, uq: &UpdateQuery) -> bool {
-        self.shaders.0.updates(uq)
-            || self.shaders.1.updates(uq)
-            || self.ib.updates(uq)
-            || self.vb.updates(uq)
-    }
-
-    fn update(&mut self, uri: &UpdateRecordInfo) {
+    fn update(&self, uri: &UpdateRecordInfo) -> bool {
         unsafe {
-            self.shaders.0.update(uri);
-            self.shaders.1.update(uri);
-            self.ib.update(uri);
-            self.vb.update(uri);
+            self.shaders.0.update(uri)
+                || self.shaders.1.update(uri)
+                || self.ib.update(uri)
+                || self.vb.update(uri)
         }
     }
 
-    fn record(&mut self, rri: &RenderRecordInfo) {
+    fn record(&self, rri: &RenderRecordInfo) {
         unsafe {
             if self.debug {
                 self.shaders.0.bind(rri);
@@ -258,12 +245,8 @@ impl RendererRecord for App {
 }
 
 impl FrameLoopTarget for App {
-    fn frame(&mut self) -> Option<Duration> {
-        let mut renderer = self.renderer.take().unwrap();
-        let result = renderer.frame(self);
-        *self.renderer.as_mut() = Some(renderer);
-
-        result
+    fn frame(&self) -> FramePerfReport {
+        self.renderer.frame(self)
     }
 }
 
@@ -272,9 +255,7 @@ impl EventLoopTarget for App {
         if let WindowEvent::KeyboardInput { input, .. } = event {
             match (input.virtual_keycode, input.state) {
                 (Some(VirtualKeyCode::Tab), ElementState::Pressed) => {
-                    let mut renderer = self.renderer.take().unwrap();
-                    renderer.request_rerecord();
-                    *self.renderer.as_mut() = Some(renderer);
+                    self.renderer.request_rerecord();
                     self.debug = !self.debug;
                 }
                 (Some(VirtualKeyCode::R), ElementState::Pressed) => {
@@ -321,7 +302,7 @@ impl UpdateLoopTarget for App {
         let dt_s = delta_time.as_secs_f32();
         self.delta_time = Instant::now();
 
-        let dir = Vector3::new(
+        let look_dir = Vector3::new(
             self.look_dir.y.cos() * self.look_dir.x.sin(),
             self.look_dir.y.sin(),
             self.look_dir.y.cos() * self.look_dir.x.cos(),
@@ -329,7 +310,7 @@ impl UpdateLoopTarget for App {
         let up = Vector3::new(0.0, 1.0, 0.0);
 
         {
-            let input = self.input.lock();
+            let input = self.input.read();
             let speed = {
                 let mut speed = 10.0 * dt_s;
                 if input.key_held(VirtualKeyCode::LShift) {
@@ -341,33 +322,32 @@ impl UpdateLoopTarget for App {
                 speed
             };
             let dir = {
-                let mut dir = dir;
+                let mut dir = look_dir;
                 dir.y = 0.0;
                 dir.normalize() * speed
             };
 
-            self.velocity = self.position.to_vec();
+            self.velocity = Vector3::new(0.0, 0.0, 0.0);
             if input.key_held(VirtualKeyCode::W) {
-                self.position -= dir;
+                self.velocity -= dir;
             }
             if input.key_held(VirtualKeyCode::S) {
-                self.position += dir;
+                self.velocity += dir;
             }
             if input.key_held(VirtualKeyCode::A) {
-                self.position += dir.cross(up);
+                self.velocity += dir.cross(up);
             }
             if input.key_held(VirtualKeyCode::D) {
-                self.position -= dir.cross(up);
+                self.velocity -= dir.cross(up);
             }
             if input.key_held(VirtualKeyCode::Space) {
-                self.position.y -= speed;
+                self.velocity.y -= speed;
             }
             if input.key_held(VirtualKeyCode::C) {
-                self.position.y += speed;
+                self.velocity.y += speed;
             }
+            self.position += self.velocity;
         }
-
-        self.velocity = (self.position.to_vec() - self.velocity) / dt_s;
     }
 }
 
@@ -380,15 +360,15 @@ fn main() {
         // TODO: .with_multisamples(4)
         .build();
 
-    let context = frame.context_auto_pick().unwrap();
+    let context = frame.context(ContextGPUPick::Automatic).unwrap();
 
     let renderer = Renderer::new()
-        .with_vsync(VSync::Off)
+        .with_sync(SyncMode::Immediate)
         .build(context)
         .unwrap();
 
-    let input = Arc::new(Mutex::new(InputState::new()));
-    let app = Arc::new(Mutex::new(App::init(frame, renderer, input.clone())));
+    let input = InputState::new();
+    let app = App::init(frame, renderer, input.clone());
 
     let frame_loop = FrameLoop::new()
         .with_event_loop(event_loop)
