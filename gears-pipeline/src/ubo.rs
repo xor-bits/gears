@@ -7,12 +7,7 @@ use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenS
 use quote::{ToTokens, TokenStreamExt};
 use syn::{ext::IdentExt, parse::ParseStream, Error, Token};
 
-#[derive(PartialEq, Eq, Hash, Clone, Copy)]
-pub enum ModuleType {
-    Vertex,
-    Fragment,
-    Geometry,
-}
+use crate::module::ModuleType;
 
 #[derive(Debug)]
 enum BindingLocation {
