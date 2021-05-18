@@ -6,7 +6,7 @@ use winit::{
 
 use crate::{
     context::{Context, ContextError},
-    ContextGPUPick, ExpectLog,
+    ContextGPUPick, ContextValidation, ExpectLog,
 };
 
 pub struct Frame {
@@ -30,8 +30,21 @@ impl Frame {
         }
     }
 
-    pub fn context(&self, pick: ContextGPUPick) -> Result<Context, ContextError> {
-        Context::new(&self.window, self.size(), pick)
+    pub fn default_context(&self) -> Result<Context, ContextError> {
+        Context::new(
+            &self.window,
+            self.size(),
+            ContextGPUPick::default(),
+            ContextValidation::default(),
+        )
+    }
+
+    pub fn context(
+        &self,
+        pick: ContextGPUPick,
+        valid: ContextValidation,
+    ) -> Result<Context, ContextError> {
+        Context::new(&self.window, self.size(), pick, valid)
     }
 
     pub fn size(&self) -> (u32, u32) {

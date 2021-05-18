@@ -20,6 +20,17 @@ pub enum ContextGPUPick {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+pub enum ContextValidation {
+    /// No vulkan validation layers: greatly increased performance, but reduced debug output
+    /// Used when testing performance or when exporting release builds in production
+    NoValidation,
+
+    /// Vulkan validation: Sacrafice the performance for vulkan API usage validity.
+    /// Should be used almost always.
+    WithValidation,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum ContextError {
     MissingVulkan,
     MissingInstanceExtensions,
@@ -58,11 +69,18 @@ impl Default for ContextGPUPick {
     }
 }
 
+impl Default for ContextValidation {
+    fn default() -> Self {
+        ContextValidation::WithValidation
+    }
+}
+
 impl Context {
     pub fn new(
         window: &Window,
         size: (u32, u32),
         pick: ContextGPUPick,
+        valid: ContextValidation,
     ) -> Result<Self, ContextError> {
         let entry = unsafe { ash::Entry::new() }
             .map_err_log("Ash entry creation failed", ContextError::MissingVulkan)?;
@@ -103,11 +121,11 @@ impl Context {
             .enumerate_instance_layer_properties()
             .map_err_log("Could not query instance layers", ContextError::OutOfMemory)?;
 
-        #[cfg(feature = "validation")]
-        let mut requested_layers: Vec<&CStr> =
-            vec![CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0").unwrap()];
-        #[cfg(not(feature = "validation"))]
-        let mut requested_layers: Vec<&CStr> = vec![];
+        let mut requested_layers = if valid == ContextValidation::WithValidation {
+            vec![CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0").unwrap()]
+        } else {
+            vec![]
+        };
 
         let mut requested_layers_raw: Vec<*const i8> = requested_layers
             .iter()

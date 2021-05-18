@@ -19,10 +19,10 @@ use gears::{
         buffer::{IndexBuffer, VertexBuffer},
         pipeline::Pipeline,
     },
-    Buffer, ContextGPUPick, CursorController, ElementState, EventLoopTarget, Frame, FrameLoop,
-    FrameLoopTarget, FramePerfReport, HideMode, ImmediateFrameInfo, PipelineBuilder,
-    RenderRecordInfo, Renderer, RendererRecord, SyncMode, UpdateLoop, UpdateLoopTarget, UpdateRate,
-    UpdateRecordInfo, VirtualKeyCode, WindowEvent,
+    Buffer, ContextGPUPick, ContextValidation, CursorController, ElementState, EventLoopTarget,
+    Frame, FrameLoop, FrameLoopTarget, FramePerfReport, HideMode, ImmediateFrameInfo,
+    PipelineBuilder, RenderRecordInfo, Renderer, RendererRecord, SyncMode, UpdateLoop,
+    UpdateLoopTarget, UpdateRate, UpdateRecordInfo, VirtualKeyCode, WindowEvent,
 };
 use marching_cubes::generate_marching_cubes;
 use parking_lot::RwLock;
@@ -360,7 +360,9 @@ fn main() {
         // TODO: .with_multisamples(4)
         .build();
 
-    let context = frame.context(ContextGPUPick::Automatic).unwrap();
+    let context = frame
+        .context(ContextGPUPick::Automatic, ContextValidation::WithValidation)
+        .unwrap();
 
     let renderer = Renderer::new()
         .with_sync(SyncMode::Immediate)

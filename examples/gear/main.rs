@@ -2,10 +2,10 @@ use std::{sync::Arc, time::Instant};
 
 use cgmath::{perspective, Deg, InnerSpace, Matrix4, Point3, Rad, Vector3};
 use gears::{
-    load_obj, Buffer, ContextGPUPick, EventLoopTarget, Frame, FrameLoop, FrameLoopTarget,
-    FramePerfReport, ImmediateFrameInfo, InputState, KeyboardInput, Pipeline, RenderRecordInfo,
-    Renderer, RendererRecord, SyncMode, UpdateRecordInfo, VertexBuffer, VirtualKeyCode,
-    WindowEvent,
+    load_obj, Buffer, ContextGPUPick, ContextValidation, EventLoopTarget, Frame, FrameLoop,
+    FrameLoopTarget, FramePerfReport, ImmediateFrameInfo, InputState, KeyboardInput, Pipeline,
+    RenderRecordInfo, Renderer, RendererRecord, SyncMode, UpdateRecordInfo, VertexBuffer,
+    VirtualKeyCode, WindowEvent,
 };
 use parking_lot::{Mutex, RwLock};
 
@@ -184,7 +184,9 @@ fn main() {
         .with_size(600, 600)
         .build();
 
-    let context = frame.context(ContextGPUPick::Automatic).unwrap();
+    let context = frame
+        .context(ContextGPUPick::Automatic, ContextValidation::WithValidation)
+        .unwrap();
 
     let renderer = Renderer::new()
         .with_sync(SyncMode::Immediate)
