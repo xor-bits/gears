@@ -435,23 +435,23 @@ impl Pipeline {
     }
 
     pub unsafe fn bind(&self, rri: &RenderRecordInfo) {
-        let (desc_set, _) = &self.desc_sets[rri.image_index];
-
         self.device.cmd_bind_pipeline(
             rri.command_buffer,
             vk::PipelineBindPoint::GRAPHICS,
             self.pipeline,
         );
 
-        let desc_set = [*desc_set];
-        self.device.cmd_bind_descriptor_sets(
-            rri.command_buffer,
-            vk::PipelineBindPoint::GRAPHICS,
-            self.pipeline_layout,
-            0,
-            &desc_set,
-            &[],
-        );
+        if let Some((desc_set, _)) = self.desc_sets.get(rri.image_index) {
+            let desc_set = [*desc_set];
+            self.device.cmd_bind_descriptor_sets(
+                rri.command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline_layout,
+                0,
+                &desc_set,
+                &[],
+            );
+        }
     }
 
     pub fn write_ubo<'a, U: 'static + UBO>(
