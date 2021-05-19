@@ -606,7 +606,7 @@ impl Renderer {
         }
     }
 
-    pub fn recreate_swapchain(&self) {
+    fn recreate_swapchain_silent(&self) {
         let data = self.data.read();
 
         let mut render_objects = data
@@ -682,7 +682,10 @@ impl Renderer {
             render_objects._color_image = color_image;
             render_objects._depth_image = depth_image;
         }
+    }
 
+    pub fn recreate_swapchain(&self) {
+        self.recreate_swapchain_silent();
         self.request_rerecord();
     }
 
