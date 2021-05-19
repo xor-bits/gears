@@ -279,12 +279,9 @@ impl Renderer {
     }
 
     fn wait_in_use_render_object(&self, crender_object: &RwLockReadGuard<ConcurrentRenderObject>) {
-        unsafe {
-            let fence = [crender_object.frame_fence];
-            self.rdevice
-                .wait_for_fences(&fence, true, !0)
-                .expect("Failed to wait for fence");
-        }
+        let fence = [crender_object.frame_fence];
+        unsafe { self.rdevice.wait_for_fences(&fence, true, !0) }
+            .expect("Failed to wait for fence");
     }
 
     fn acquire_image(&self, crender_object: &RwLockReadGuard<ConcurrentRenderObject>) -> usize {
@@ -294,7 +291,7 @@ impl Renderer {
         match unsafe {
             swapchain_objects.swapchain_loader.acquire_next_image(
                 swapchain_objects.swapchain,
-                1_000_000_000_000_000,
+                !0,
                 crender_object.image_semaphore,
                 vk::Fence::null(),
             )
@@ -322,20 +319,13 @@ impl Renderer {
 
         let mut render_object = data.render_objects[image_index].write();
         if render_object.image_in_use_fence != vk::Fence::null() {
-            unsafe {
-                let fence = [render_object.image_in_use_fence];
-                self.rdevice
-                    .wait_for_fences(&fence, true, !0)
-                    .expect("Failed to wait for fence");
-            }
+            let fence = [render_object.image_in_use_fence];
+            unsafe { self.rdevice.wait_for_fences(&fence, true, !0) }
+                .expect("Failed to wait for fence");
         }
         render_object.image_in_use_fence = crender_object.frame_fence;
-        unsafe {
-            let fence = [crender_object.frame_fence];
-            self.rdevice
-                .reset_fences(&fence)
-                .expect("Failed to reset fence");
-        }
+        let fence = [crender_object.frame_fence];
+        unsafe { self.rdevice.reset_fences(&fence) }.expect("Failed to reset fence");
 
         // update buffers
         self.update(recorder, &mut render_object, image_index);
@@ -351,55 +341,56 @@ impl Renderer {
             .unwrap_or(PerfQueryResult::default());
 
         // submit
-        unsafe {
-            let render_cb = [render_object.render_cb];
-            let image_wait = [crender_object.image_semaphore];
-            let update_wait = [crender_object.update_semaphore];
-            let render_wait = [crender_object.render_semaphore];
-            let render_stage = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
 
-            let submit_render = if render_object.update_cb_pending {
-                let update_cb = [render_object.update_cb];
-                let update_stage = [vk::PipelineStageFlags::ALL_COMMANDS];
+        let render_cb = [render_object.render_cb];
+        let image_wait = [crender_object.image_semaphore];
+        let update_wait = [crender_object.update_semaphore];
+        let render_wait = [crender_object.render_semaphore];
+        let render_stage = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
 
-                let submit_update = [vk::SubmitInfo::builder()
-                    .command_buffers(&update_cb)
-                    .wait_semaphores(&image_wait)
-                    .signal_semaphores(&update_wait)
-                    .wait_dst_stage_mask(&update_stage)
-                    .build()];
+        let submit_render = if render_object.update_cb_pending {
+            let update_cb = [render_object.update_cb];
+            let update_stage = [vk::PipelineStageFlags::ALL_COMMANDS];
 
-                self.rdevice
-                    .queue_submit(
-                        self.rdevice.queues.graphics,
-                        &submit_update,
-                        vk::Fence::null(),
-                    )
-                    .expect("Transfer queue submit failed");
+            let submit_update = [vk::SubmitInfo::builder()
+                .command_buffers(&update_cb)
+                .wait_semaphores(&image_wait)
+                .signal_semaphores(&update_wait)
+                .wait_dst_stage_mask(&update_stage)
+                .build()];
 
-                [vk::SubmitInfo::builder()
-                    .command_buffers(&render_cb)
-                    .wait_semaphores(&update_wait)
-                    .signal_semaphores(&render_wait)
-                    .wait_dst_stage_mask(&render_stage)
-                    .build()]
-            } else {
-                [vk::SubmitInfo::builder()
-                    .command_buffers(&render_cb)
-                    .wait_semaphores(&image_wait)
-                    .signal_semaphores(&render_wait)
-                    .wait_dst_stage_mask(&render_stage)
-                    .build()]
-            };
-
-            self.rdevice
-                .queue_submit(
+            unsafe {
+                self.rdevice.queue_submit(
                     self.rdevice.queues.graphics,
-                    &submit_render,
-                    crender_object.frame_fence,
+                    &submit_update,
+                    vk::Fence::null(),
                 )
-                .expect("Graphics queue submit failed");
+            }
+            .expect("Transfer queue submit failed");
+
+            [vk::SubmitInfo::builder()
+                .command_buffers(&render_cb)
+                .wait_semaphores(&update_wait)
+                .signal_semaphores(&render_wait)
+                .wait_dst_stage_mask(&render_stage)
+                .build()]
+        } else {
+            [vk::SubmitInfo::builder()
+                .command_buffers(&render_cb)
+                .wait_semaphores(&image_wait)
+                .signal_semaphores(&render_wait)
+                .wait_dst_stage_mask(&render_stage)
+                .build()]
+        };
+
+        unsafe {
+            self.rdevice.queue_submit(
+                self.rdevice.queues.graphics,
+                &submit_render,
+                crender_object.frame_fence,
+            )
         }
+        .expect("Graphics queue submit failed");
 
         let updates = render_object.update_cb_pending;
         let triangles = render_object.triangles;
@@ -551,51 +542,62 @@ impl Renderer {
             .render_pass(swapchain_objects.render_pass)
             .render_area(swapchain_objects.scissor);
 
+        if begin_info.debug_calls {
+            debug!("begin_command_buffer with: {:?}", begin_info);
+        }
+
         unsafe {
-            if begin_info.debug_calls {
-                debug!("begin_command_buffer with: {:?}", begin_info);
-            }
+            self.rdevice.reset_command_buffer(
+                render_object.render_cb,
+                vk::CommandBufferResetFlags::empty(),
+            )
+        }
+        .expect("Command buffer reset failed");
 
-            self.rdevice
-                .reset_command_buffer(
-                    render_object.render_cb,
-                    vk::CommandBufferResetFlags::empty(),
-                )
-                .expect("Command buffer reset failed");
+        unsafe {
+            self.rdevice.begin_command_buffer(
+                render_object.render_cb,
+                &vk::CommandBufferBeginInfo::builder(),
+            )
+        }
+        .expect("Command buffer begin failed");
 
-            self.rdevice
-                .begin_command_buffer(
-                    render_object.render_cb,
-                    &vk::CommandBufferBeginInfo::builder(),
-                )
-                .expect("Command buffer begin failed");
-
-            render_object.perf.reset(&rri);
-
+        unsafe {
             self.rdevice
                 .cmd_set_viewport(render_object.render_cb, 0, &viewport);
+        }
 
+        unsafe {
             self.rdevice
                 .cmd_set_scissor(render_object.render_cb, 0, &scissor);
+        }
 
-            drop(swapchain_objects);
+        drop(swapchain_objects);
 
+        unsafe {
+            render_object.perf.reset(&rri);
+        }
+
+        unsafe {
             self.rdevice.cmd_begin_render_pass(
                 render_object.render_cb,
                 &render_pass_begin_info,
                 vk::SubpassContents::INLINE,
             );
-
-            recorder.record(&rri);
-            render_object.perf.bind(&rri);
-            render_object.triangles = rri.triangles.load(Ordering::SeqCst);
-
-            self.rdevice.cmd_end_render_pass(render_object.render_cb);
-
-            self.rdevice
-                .end_command_buffer(render_object.render_cb)
-                .expect("Command buffer end failed");
         }
+
+        recorder.record(&rri);
+        unsafe {
+            render_object.perf.bind(&rri);
+        }
+        render_object.triangles = rri.triangles.load(Ordering::SeqCst);
+
+        unsafe {
+            self.rdevice.cmd_end_render_pass(render_object.render_cb);
+        }
+
+        unsafe { self.rdevice.end_command_buffer(render_object.render_cb) }
+            .expect("Command buffer end failed");
     }
 
     pub fn request_rerecord(&self) {

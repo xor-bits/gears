@@ -1,5 +1,6 @@
 use ash::{util::read_spv, version::DeviceV1_0, vk};
 use gears_traits::{Vertex, UBO};
+use log::debug;
 use parking_lot::Mutex;
 use std::{
     any::{type_name, Any, TypeId},
@@ -245,14 +246,11 @@ impl<'a> GraphicsPipelineBuilder<'a> {
             let desc_sets = (0..self.base.set_count)
                 .into_iter()
                 .map(|_| {
-                    let desc_set = unsafe {
-                        device.allocate_descriptor_sets(
-                            &vk::DescriptorSetAllocateInfo::builder()
-                                .descriptor_pool(desc_pool)
-                                .set_layouts(&desc_set_layout),
-                        )
-                    }
-                    .unwrap()[0];
+                    let allocate_info = vk::DescriptorSetAllocateInfo::builder()
+                        .descriptor_pool(desc_pool)
+                        .set_layouts(&desc_set_layout);
+                    let desc_set =
+                        unsafe { device.allocate_descriptor_sets(&allocate_info) }.unwrap()[0];
                     let ubos = ubos
                         .iter_mut()
                         .map(|(id, (_, ubos))| (id.clone(), ubos.remove(0)))
@@ -260,23 +258,20 @@ impl<'a> GraphicsPipelineBuilder<'a> {
 
                     let first_ubo = ubos.iter().next().unwrap().1 .0;
 
-                    unsafe {
-                        let buffer_info = [vk::DescriptorBufferInfo::builder()
-                            .offset(0)
-                            .range(vk::WHOLE_SIZE)
-                            .buffer(first_ubo)
-                            .build()];
+                    let buffer_info = [vk::DescriptorBufferInfo::builder()
+                        .offset(0)
+                        .range(vk::WHOLE_SIZE)
+                        .buffer(first_ubo)
+                        .build()];
 
-                        let write_set = [vk::WriteDescriptorSet::builder()
-                            .dst_array_element(0)
-                            .dst_binding(0)
-                            .dst_set(desc_set)
-                            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                            .buffer_info(&buffer_info)
-                            .build()];
-
-                        device.update_descriptor_sets(&write_set, &[]);
-                    }
+                    let write_set = [vk::WriteDescriptorSet::builder()
+                        .dst_array_element(0)
+                        .dst_binding(0)
+                        .dst_set(desc_set)
+                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                        .buffer_info(&buffer_info)
+                        .build()];
+                    unsafe { device.update_descriptor_sets(&write_set, &[]) };
 
                     let ubos = ubos
                         .into_iter()
@@ -437,6 +432,10 @@ impl Pipeline {
     }
 
     pub unsafe fn bind(&self, rri: &RenderRecordInfo) {
+        if rri.debug_calls {
+            debug!("cmd_bind_pipeline");
+        }
+
         self.device.cmd_bind_pipeline(
             rri.command_buffer,
             vk::PipelineBindPoint::GRAPHICS,
@@ -444,6 +443,10 @@ impl Pipeline {
         );
 
         if let Some((desc_set, _)) = self.desc_sets.get(rri.image_index) {
+            if rri.debug_calls {
+                debug!("cmd_bind_descriptor_sets");
+            }
+
             let desc_set = [*desc_set];
             self.device.cmd_bind_descriptor_sets(
                 rri.command_buffer,
