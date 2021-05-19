@@ -29,6 +29,7 @@ pub enum WriteType {
 
 #[derive(Debug)]
 pub enum BufferError {
+    NoUBOs,
     InvalidSize,
     TriedToOverflow,
     OutOfMemory,

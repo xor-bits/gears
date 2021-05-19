@@ -422,13 +422,13 @@ impl<'a> GraphicsPipelineBuilder<'a> {
 
 impl Pipeline {
     pub unsafe fn update(&self, uri: &UpdateRecordInfo) -> bool {
-        let (_, ubos) = &self.desc_sets[uri.image_index];
-
         let mut updates = false;
 
-        for (_, ubo) in ubos {
-            let ubo_lock = ubo.lock();
-            updates = updates || ubo_lock.update_t(uri);
+        if let Some((_, ubos)) = self.desc_sets.get(uri.image_index) {
+            for (_, ubo) in ubos {
+                let ubo_lock = ubo.lock();
+                updates = updates || ubo_lock.update_t(uri);
+            }
         }
 
         updates
@@ -459,7 +459,10 @@ impl Pipeline {
         imfi: &ImmediateFrameInfo,
         new_data: &U,
     ) -> Result<WriteType, BufferError> {
-        let (_, ubos) = &self.desc_sets[imfi.image_index];
+        let (_, ubos) = self
+            .desc_sets
+            .get(imfi.image_index)
+            .expect_log(&*format!("Cannot write to UBO when no UBOs were given"));
 
         let mut ubo_lock = ubos
             .get(&TypeId::of::<U>())
