@@ -7,6 +7,8 @@ use std::{
     },
 };
 
+use log::debug;
+
 use super::{
     create_buffer, stage::StageBuffer, vertex::VertexBuffer, Buffer, BufferError, WriteType,
 };
@@ -88,6 +90,10 @@ impl<I: UInt> IndexBuffer<I> {
     }
 
     pub unsafe fn bind(&self, rri: &RenderRecordInfo) {
+        if rri.debug_calls {
+            debug!("cmd_bind_index_buffer");
+        }
+
         self.device
             .cmd_bind_index_buffer(rri.command_buffer, self.buffer, 0, I::get());
     }
@@ -97,6 +103,10 @@ impl<I: UInt> IndexBuffer<I> {
         vertices.bind(rri);
 
         rri.triangles.fetch_add(self.len() / 3, Ordering::SeqCst);
+
+        if rri.debug_calls {
+            debug!("cmd_draw");
+        }
 
         self.device
             .cmd_draw_indexed(rri.command_buffer, self.len() as u32, 1, 0, 0, 0);

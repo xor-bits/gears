@@ -7,6 +7,8 @@ use std::{
     },
 };
 
+use log::debug;
+
 use crate::renderer::{device::RenderDevice, RenderRecordInfo, Renderer, UpdateRecordInfo};
 
 use super::{create_buffer, stage::StageBuffer, Buffer, BufferError, WriteType};
@@ -75,6 +77,10 @@ impl<T> VertexBuffer<T> {
         let buffer = [self.buffer];
         let offsets = [0];
 
+        if rri.debug_calls {
+            debug!("cmd_bind_vertex_buffers");
+        }
+
         self.device
             .cmd_bind_vertex_buffers(rri.command_buffer, 0, &buffer, &offsets);
     }
@@ -83,6 +89,10 @@ impl<T> VertexBuffer<T> {
         self.bind(rri);
 
         rri.triangles.fetch_add(self.len() / 3, Ordering::SeqCst);
+
+        if rri.debug_calls {
+            debug!("cmd_draw");
+        }
 
         self.device
             .cmd_draw(rri.command_buffer, self.len() as u32, 1, 0, 0);

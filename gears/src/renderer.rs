@@ -7,6 +7,7 @@ pub mod queue;
 
 #[cfg(feature = "short_namespaces")]
 pub use buffer::*;
+use cgmath::Vector4;
 #[cfg(feature = "short_namespaces")]
 pub use object::*;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -104,6 +105,13 @@ pub struct RenderRecordInfo {
     command_buffer: vk::CommandBuffer,
     image_index: usize,
     triangles: AtomicUsize,
+    debug_calls: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RenderRecordBeginInfo {
+    pub debug_calls: bool,
+    pub clear_color: Vector4<f32>,
 }
 
 pub struct UpdateRecordInfo {
@@ -119,6 +127,14 @@ pub trait RendererRecord {
     fn update(&self, uri: &UpdateRecordInfo) -> bool {
         // 'any' all object updates and return the result of that
         false
+    }
+
+    #[allow(unused_variables)]
+    fn begin_info(&self) -> RenderRecordBeginInfo {
+        RenderRecordBeginInfo {
+            clear_color: Vector4::new(0.18, 0.18, 0.2, 1.0),
+            debug_calls: false,
+        }
     }
 
     #[allow(unused_variables)]
@@ -498,12 +514,15 @@ impl Renderer {
         render_object: &mut RwLockWriteGuard<RenderObject>,
         image_index: usize,
     ) {
+        let begin_info = recorder.begin_info();
+
         let data = self.data.read();
         let swapchain_objects = data.swapchain_objects.read();
         let rri = RenderRecordInfo {
             command_buffer: render_object.render_cb,
             image_index,
             triangles: AtomicUsize::new(0),
+            debug_calls: begin_info.debug_calls,
         };
 
         let viewport = [swapchain_objects.viewport];
@@ -511,7 +530,12 @@ impl Renderer {
         let clear_values = [
             vk::ClearValue {
                 color: vk::ClearColorValue {
-                    float32: [0.18, 0.18, 0.2, 1.0],
+                    float32: [
+                        begin_info.clear_color.x,
+                        begin_info.clear_color.y,
+                        begin_info.clear_color.z,
+                        begin_info.clear_color.w,
+                    ],
                 },
             },
             vk::ClearValue {
@@ -528,6 +552,10 @@ impl Renderer {
             .render_area(swapchain_objects.scissor);
 
         unsafe {
+            if begin_info.debug_calls {
+                debug!("begin_command_buffer with: {:?}", begin_info);
+            }
+
             self.rdevice
                 .reset_command_buffer(
                     render_object.render_cb,

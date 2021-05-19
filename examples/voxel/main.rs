@@ -11,7 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cgmath::{perspective, Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Vector2, Vector3};
+use cgmath::{
+    perspective, Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Vector2, Vector3, Vector4,
+};
 use cubes::generate_cubes;
 use gears::{
     input_state::InputState,
@@ -21,8 +23,8 @@ use gears::{
     },
     Buffer, ContextGPUPick, ContextValidation, CursorController, ElementState, EventLoopTarget,
     Frame, FrameLoop, FrameLoopTarget, FramePerfReport, HideMode, ImmediateFrameInfo,
-    PipelineBuilder, RenderRecordInfo, Renderer, RendererRecord, SyncMode, UpdateLoop,
-    UpdateLoopTarget, UpdateRate, UpdateRecordInfo, VirtualKeyCode, WindowEvent,
+    PipelineBuilder, RenderRecordBeginInfo, RenderRecordInfo, Renderer, RendererRecord, SyncMode,
+    UpdateLoop, UpdateLoopTarget, UpdateRate, UpdateRecordInfo, VirtualKeyCode, WindowEvent,
 };
 use marching_cubes::generate_marching_cubes;
 use parking_lot::RwLock;
@@ -229,6 +231,13 @@ impl RendererRecord for App {
                 || self.shaders.1.update(uri)
                 || self.ib.update(uri)
                 || self.vb.update(uri)
+        }
+    }
+
+    fn begin_info(&self) -> RenderRecordBeginInfo {
+        RenderRecordBeginInfo {
+            clear_color: Vector4::new(1.0, 1.0, 1.0, 1.0),
+            debug_calls: true,
         }
     }
 
