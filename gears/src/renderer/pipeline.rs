@@ -311,11 +311,13 @@ impl<'a> GraphicsPipelineBuilder<'a> {
             .primitive_restart_enable(false);
 
         let rasterizer_state = vk::PipelineRasterizationStateCreateInfo::builder()
-            .polygon_mode(if debug {
-                vk::PolygonMode::LINE
-            } else {
-                vk::PolygonMode::FILL
-            })
+            .polygon_mode(
+                vk::PolygonMode::FILL, /* if debug {
+                                           vk::PolygonMode::LINE
+                                       } else {
+                                           vk::PolygonMode::FILL
+                                       } */
+            )
             .cull_mode(if debug {
                 vk::CullModeFlags::NONE
             } else {
