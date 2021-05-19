@@ -5,8 +5,8 @@ use winit::{
 };
 
 use crate::{
-    context::{Context, ContextError},
-    ContextGPUPick, ContextValidation, ExpectLog,
+    context::{Context, ContextError, ContextGPUPick, ContextValidation},
+    ExpectLog,
 };
 
 pub struct Frame {
