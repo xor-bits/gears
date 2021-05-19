@@ -8,7 +8,7 @@ use parking_lot::RwLock;
 pub use winit::event::*;
 use winit::event_loop::EventLoop;
 
-use crate::FramePerfReport;
+use crate::renderer::FramePerfReport;
 
 const PERF_LOG_INTERVAL: usize = 5;
 
