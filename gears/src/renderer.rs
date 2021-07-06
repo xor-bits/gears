@@ -7,10 +7,8 @@ pub mod queue;
 
 #[cfg(feature = "short_namespaces")]
 pub use buffer::*;
-use cgmath::Vector4;
 #[cfg(feature = "short_namespaces")]
 pub use object::*;
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 #[cfg(feature = "short_namespaces")]
 pub use pipeline::*;
 #[cfg(feature = "short_namespaces")]
@@ -26,12 +24,16 @@ use crate::{
 
 use ash::{extensions::khr, version::DeviceV1_0, vk};
 use buffer::{image::Image, image::ImageBuilder, image::ImageFormat, image::ImageUsage};
+use cgmath::Vector4;
 use log::{debug, error};
+use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
+        mpsc::{self, Receiver, Sender},
         Arc,
     },
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
@@ -90,12 +92,12 @@ struct ConcurrentRenderObject {
     render_semaphore: vk::Semaphore,
 }
 
-/* enum PresentThreadEvent {
+enum PresentThreadEvent {
     // 0 = frame, 1 = image_index
     // todo: typesafe this
     PresentImage(u32, u32),
     Stop,
-} */
+}
 
 pub struct ImmediateFrameInfo {
     pub image_index: usize,
@@ -148,9 +150,12 @@ pub struct RendererData {
 }
 
 pub struct Renderer {
-    /* present_thread_join: Option<JoinHandle<()>>,
-    main_thread_tx: Mutex<mpsc::Sender<PresentThreadEvent>>,
-    main_thread_rx: Mutex<mpsc::Receiver<bool>>, */
+    // 0 = frame, 1 = image_index
+    // todo: typesafe this
+    main_thread_tx: Mutex<Sender<PresentThreadEvent>>,
+    main_thread_rx: Mutex<Receiver<bool>>,
+    present_thread_join: Option<JoinHandle<()>>,
+
     data: Arc<RwLock<RendererData>>,
 
     frame: AtomicUsize,
@@ -303,15 +308,21 @@ impl Renderer {
 
     pub fn frame<T: RendererRecord>(&self, recorder: &T) -> FramePerfReport {
         let cpu_frametime = Instant::now();
-
-        // thread::sleep(Duration::from_millis(15));
-
         let data = self.data.read();
 
         // increment and get the next frame object index
         let frame = self.frame.fetch_add(1, Ordering::SeqCst) % self.frames_in_flight;
         let crender_object = data.crender_objects[frame].read();
 
+        // recreate swapchain if needed
+        let suboptimal = self
+            .main_thread_rx
+            .lock()
+            .recv()
+            .map_or(false, |suboptimal| suboptimal);
+        if suboptimal {
+            self.recreate_swapchain();
+        }
         self.wait_in_use_render_object(&crender_object);
 
         // aquire image
@@ -395,47 +406,8 @@ impl Renderer {
         let updates = render_object.update_cb_pending;
         let triangles = render_object.triangles;
         drop(render_object);
-
-        // present
-        let suboptimal = {
-            let swapchain_objects = data.swapchain_objects.read();
-            let crender_object = data.crender_objects[frame as usize].read();
-            let wait = [crender_object.render_semaphore];
-            let swapchain = [swapchain_objects.swapchain];
-            let image_index = [image_index as u32];
-
-            let submit_present = vk::PresentInfoKHR::builder()
-                .wait_semaphores(&wait)
-                .swapchains(&swapchain)
-                .image_indices(&image_index);
-
-            unsafe {
-                // present
-                let result = swapchain_objects
-                    .swapchain_loader
-                    .queue_present(self.rdevice.queues.present, &submit_present);
-                match result {
-                    Ok(o) => o,
-                    Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => true,
-                    Err(e) => panic!("Present queue submit failed: {:?}", e),
-                }
-            }
-        };
-
-        // recreate swapchain if needed
-        if suboptimal {
-            self.recreate_swapchain();
-        }
-
-        /* // recreate swapchain if needed
-        let suboptimal = self
-            .main_thread_rx
-            .lock()
-            .try_recv()
-            .map_or(false, |suboptimal| suboptimal);
-        if suboptimal {
-            self.recreate_swapchain();
-        }
+        drop(crender_object);
+        drop(data);
 
         // present
         self.main_thread_tx
@@ -444,7 +416,7 @@ impl Renderer {
                 frame as u32,
                 image_index as u32,
             ))
-            .unwrap(); */
+            .unwrap();
 
         FramePerfReport {
             cpu_frametime: cpu_frametime.elapsed(),
@@ -1050,19 +1022,20 @@ impl RendererBuilder {
             crender_objects,
         }));
 
-        /* let (main_thread_tx, present_thread_rx) = mpsc::channel();
+        let (main_thread_tx, present_thread_rx) = mpsc::channel();
         let (present_thread_tx, main_thread_rx) = mpsc::channel();
         let main_thread_tx = Mutex::new(main_thread_tx);
         let main_thread_rx = Mutex::new(main_thread_rx);
+
+        // initial message so that the main frame thread wont block for ever
+        present_thread_tx.send(false).unwrap();
 
         let present_thread_join = {
             let data = data.clone();
             let rdevice = rdevice.clone();
 
             Some(thread::spawn(move || loop {
-                let event = present_thread_rx.recv().unwrap();
-
-                match event {
+                match present_thread_rx.recv().unwrap() {
                     PresentThreadEvent::Stop => {
                         break;
                     }
@@ -1072,7 +1045,7 @@ impl RendererBuilder {
                         let crender_object = data.crender_objects[frame as usize].read();
                         let wait = [crender_object.render_semaphore];
                         let swapchain = [swapchain_objects.swapchain];
-                        let image_index = [image_index];
+                        let image_index = [image_index as u32];
 
                         let submit_present = vk::PresentInfoKHR::builder()
                             .wait_semaphores(&wait)
@@ -1081,28 +1054,25 @@ impl RendererBuilder {
 
                         let result = unsafe {
                             // present
-                            let result = swapchain_objects
+                            swapchain_objects
                                 .swapchain_loader
-                                .queue_present(rdevice.queues.present, &submit_present);
-                            let current = data.images.fetch_sub(1, Ordering::SeqCst);
-                            debug!("queue_present result: {:?}, {}", result, current);
-                            match result {
-                                Ok(o) => o,
-                                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => true,
-                                Err(e) => panic!("Present queue submit failed: {:?}", e),
-                            }
+                                .queue_present(rdevice.queues.present, &submit_present)
                         };
-
-                        present_thread_tx.send(result).unwrap();
+                        let suboptimal = match result {
+                            Ok(o) => o,
+                            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => true,
+                            Err(e) => panic!("Present queue submit failed: {:?}", e),
+                        };
+                        present_thread_tx.send(suboptimal).unwrap();
                     }
                 }
             }))
-        }; */
+        };
 
         Ok(Renderer {
-            /* present_thread_join,
+            present_thread_join,
             main_thread_tx,
-            main_thread_rx, */
+            main_thread_rx,
             data,
 
             frame: AtomicUsize::new(0),
@@ -1115,11 +1085,11 @@ impl RendererBuilder {
 
 impl Drop for Renderer {
     fn drop(&mut self) {
-        /* self.main_thread_tx
+        self.main_thread_tx
             .lock()
             .send(PresentThreadEvent::Stop)
             .unwrap();
-        self.present_thread_join.take().unwrap().join().unwrap(); */
+        self.present_thread_join.take().unwrap().join().unwrap();
         let mut data = self.data.write();
 
         self.wait();
