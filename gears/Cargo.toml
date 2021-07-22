@@ -9,14 +9,14 @@ license = "MIT"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = []
+default = [ "short_namespaces" ]
 short_namespaces = []
 validation_panic = []
 
 [dependencies]
 log = "~0.4"
 colored = "~2.0"
-cgmath = "~0.18"
+glam = "~0.16"
 wavefront_obj = "~9.0"
 parking_lot = "~0.11"
 bitflags = "~1.2"
@@ -24,5 +24,3 @@ winit = { version = "~0.24", features = ["web-sys"] }
 ash = "~0.32"
 ash-window = "~0.6"
 raw-window-handle = "~0.3"
-gears-pipeline = { path = "../gears-pipeline" }
-gears-traits = { path = "../gears-traits/" }

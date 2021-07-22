@@ -1,331 +1,507 @@
-use crate::{
-    compiler::{self, DefinesInput},
-    ubo::{BindgenFieldType, BindgenStruct, StructRegistry},
+use crate::compiler::{compile_shader_module, DefinesInput};
+use proc_macro::TokenStream;
+use proc_macro2::{Ident, Span};
+use quote::{quote, ToTokens, TokenStreamExt};
+use regex::Regex;
+use shaderc::ShaderKind;
+use std::{
+    fs::{canonicalize, File},
+    io::Read,
+    path::PathBuf,
+};
+use syn::{
+    parse::{Parse, ParseStream},
+    parse_macro_input,
+    spanned::Spanned,
+    AttributeArgs, Error, Lit, LitInt, Meta, NestedMeta, Token,
 };
 
-use proc_macro::TokenStream;
-use proc_macro2::{Group, Ident, Span};
-use quote::{format_ident, quote, ToTokens};
-use regex::{Captures, Regex};
-use shaderc::CompilationArtifact;
-use std::{collections::HashMap, env, fs::File, io::Read, path::Path};
-use syn::{parse::ParseStream, Error, LitStr, Token};
+pub fn module(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as AttributeArgs);
 
-// struct/enum
+    let mut shader_kind = None;
+    let mut shader_path = None;
+    // TODO: let mut shader_debug = None;
+    let mut shader_name = None;
 
-#[derive(PartialEq, Eq, Hash, Clone, Copy)]
-pub enum ModuleType {
-    Vertex,
-    Fragment,
-    Geometry,
-}
-
-pub struct InputModule {
-    source: String,
-    source_file: Option<String>,
-    include_path: Option<String>,
-    defines: DefinesInput,
-    default_defines: bool,
-    entry: Option<String>,
-    debug: bool,
-    span: Span,
-}
-
-pub type InputModules = HashMap<ModuleType, InputModule>;
-pub type CompiledModules = HashMap<ModuleType, CompiledModule>;
-
-pub struct CompiledModule {
-    spirv: CompilationArtifact,
-    module_type: ModuleType,
-    source_file: Option<String>,
-}
-
-// impl
-
-impl ModuleType {
-    pub fn name(&self) -> &'static str {
-        match self {
-            ModuleType::Fragment => "FRAG",
-            ModuleType::Vertex => "VERT",
-            ModuleType::Geometry => "GEOM",
-        }
-    }
-
-    pub fn kind(&self) -> shaderc::ShaderKind {
-        match self {
-            ModuleType::Fragment => shaderc::ShaderKind::Fragment,
-            ModuleType::Vertex => shaderc::ShaderKind::Vertex,
-            ModuleType::Geometry => shaderc::ShaderKind::Geometry,
-        }
-    }
-}
-
-impl InputModule {
-    pub fn compile(
-        self,
-        module_type: ModuleType,
-        struct_reg: &mut StructRegistry,
-        bindgen_structs: &mut Vec<BindgenStruct>,
-    ) -> Result<CompiledModule, Error> {
-        let span = self.span;
-
-        let (source, mut new_bindgen_structs) =
-            preprocess_glsl(self.source.as_str(), module_type.clone(), struct_reg);
-
-        bindgen_structs.append(&mut new_bindgen_structs);
-
-        let spirv = compiler::compile_shader_module(
-            module_type.kind(),
-            source.as_ref(),
-            module_type.name(),
-            self.entry.as_ref().map_or("main", |e| e.as_str()),
-            self.include_path
-                .as_ref()
-                .map_or(None, |s| Some(Path::new(s))),
-            &self.defines,
-            self.default_defines,
-            self.debug,
-        )
-        .or_else(|err| Err(Error::new(span, err)))?;
-
-        let source_file = self.source_file;
-
-        Ok(CompiledModule {
-            spirv,
-            module_type,
-            source_file,
-        })
-    }
-}
-
-// trait impl
-
-impl syn::parse::Parse for InputModule {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut end_span = input.span();
-        let mut source = None;
-        let mut source_file = None;
-        let mut include_path = None;
-        let mut defines = DefinesInput::new();
-        let mut default_defines = true;
-        let mut entry = None;
-        let mut debug = false;
-
-        while !input.is_empty() {
-            let field_type: Ident = input.parse()?;
-            let field_type_string = field_type.to_string();
-
-            match field_type_string.as_str() {
-                "p" | "path" => {
-                    input.parse::<Token![:]>()?;
-
-                    if source.is_some() {
-                        return Err(Error::new(
-                            field_type.span(),
-                            "'source' or 'path' field already specified",
-                        ));
-                    }
-
-                    let path: LitStr = input.parse()?;
-                    end_span = path.span();
-                    let (s, f) = read_shader_source(path.value(), path.span())?;
-                    source = Some(s);
-                    source_file = Some(f);
-
-                    if include_path.is_none() {
-                        let source_path_string = path.value();
-                        let source_path = Path::new(source_path_string.as_str());
-                        include_path = Some(
-                            source_path
-                                .parent()
-                                .ok_or(Error::new(path.span(), "File does not have a directory"))?
-                                .to_str()
-                                .unwrap_or_else(|| panic!("Path unwrap failed"))
-                                .into(),
-                        );
-                    }
-                }
-                "s" | "src" | "source" => {
-                    input.parse::<Token![:]>()?;
-
-                    if source.is_some() {
-                        return Err(Error::new(
-                            field_type.span(),
-                            "'source' or 'path' field already specified",
-                        ));
-                    }
-
-                    let source_lit: LitStr = input.parse()?;
-                    end_span = source_lit.span();
-                    source = Some(source_lit.value());
-                }
-                "i" | "inc" | "include" => {
-                    input.parse::<Token![:]>()?;
-
-                    let path: LitStr = input.parse()?;
-                    end_span = path.span();
-                    include_path = Some(path.value());
-                }
-                "d" | "def" | "define" => {
-                    input.parse::<Token![:]>()?;
-
-                    let group: Group = input.parse()?;
-                    end_span = group.span();
-
-                    let group_tokens: TokenStream = group.stream().into();
-                    defines += syn::parse::<DefinesInput>(group_tokens)?;
-                }
-                "n" | "na" | "no-autodefine" => {
-                    default_defines = false;
-                }
-                "e" | "ep" | "entry" => {
-                    input.parse::<Token![:]>()?;
-
-                    let ep: LitStr = input.parse()?;
-                    end_span = ep.span();
-                    entry = Some(ep.value());
-                }
-                "debug" => {
-                    debug = true;
-                }
-                _ => {
-                    return Err(Error::new(
-                        field_type.span(),
-                        format!("Invalid field '{}'", field_type_string),
-                    ));
-                }
+    for nm in input {
+        let meta = match nm {
+            NestedMeta::Meta(meta) => meta,
+            NestedMeta::Lit(lit) => {
+                return Error::new(lit.span(), "Expected meta attribute but got literal")
+                    .to_compile_error()
+                    .into()
             }
-        }
-
-        let source = source.ok_or(Error::new(
-            end_span,
-            "Missing shader source add either 'source' or 'path' field",
-        ))?;
-
-        Ok(Self {
-            source,
-            source_file,
-            include_path,
-
-            defines,
-            default_defines,
-
-            entry,
-            debug,
-            span: end_span,
-        })
-    }
-}
-
-impl ToTokens for CompiledModule {
-    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-        let field_name = format_ident!("{}_SPIRV", self.module_type.name());
-        let field_ref_name = format_ident!("{}_SPIRV_REF", self.module_type.name());
-        let spirv = self.spirv.as_binary_u8();
-        let len = spirv.len();
-
-        if let Some(source_file) = self.source_file.as_ref() {
-            let field = quote! {
-                // recompile on write hack:
-                const _: &str = include_str!(#source_file);
-            };
-
-            field.to_tokens(tokens);
-        }
-
-        let field = quote! {
-            // spirv:
-            pub const #field_name: [u8; #len] = [ #( #spirv ),* ];
-            pub const #field_ref_name: &[u8] = &#field_name;
         };
 
-        field.to_tokens(tokens);
-    }
-}
+        let name_value = match meta {
+            Meta::NameValue(name_value) => name_value,
+            meta => {
+                return Error::new(meta.span(), "Expected NameValue attribute")
+                    .to_compile_error()
+                    .into()
+            }
+        };
 
-// pub fn
+        let name = name_value
+            .path
+            .segments
+            .iter()
+            .map(|seg| format!("::{}", seg.ident.to_string()))
+            .collect::<String>();
 
-// fn
+        let value_span = name_value.lit.span();
+        let value = match name_value.lit {
+            Lit::Str(s) => s,
+            _ => {
+                return Error::new(value_span, "Invalid literal string")
+                    .to_compile_error()
+                    .into()
+            }
+        };
 
-fn preprocess_glsl<'a>(
-    source: &'a str,
-    module: ModuleType,
-    struct_reg: &mut StructRegistry,
-) -> (String, Vec<BindgenStruct>) {
-    struct_reg.next_module();
-
-    let comment_matcher = Regex::new(r#"(//.*)|(/\*(.|(\r?\n))*?\*/)"#).unwrap();
-
-    let attrib_matcher =
-        Regex::new(r#"#\[gears_(bind)?(gen)\(.+\)\]((\r?\n)?.+)\{([^}]+)*(\r?\n)?\}.+;"#).unwrap();
-
-    let mut bindgen_structs = Vec::new();
-    let mut ident_renameres = Vec::new();
-
-    let mut output = comment_matcher.replace_all(source, " ").to_string();
-
-    output = attrib_matcher
-        .replace_all(&output[..], |caps: &Captures| {
-            let cap = &caps[0];
-            match syn::parse_str::<BindgenStruct>(cap) {
-                Ok(mut s) => {
-                    s.meta.in_module = module;
-                    s.generate(struct_reg);
-                    let glsl = format!("\n{}", s.to_glsl());
-
-                    // uniforms do not have to be renamed
-                    match &s.meta.bind_type {
-                        BindgenFieldType::Uniform(_) => (),
-                        BindgenFieldType::In(_) | BindgenFieldType::Out(_) => {
-                            ident_renameres.push(
-                                Regex::new(format!("\\b{}\\.\\b", s.field_name).as_str()).unwrap(),
-                            );
-                        }
-                    };
-
-                    // bind only gears_bindgen not gears_gen for ex.
-                    if s.meta.bind {
-                        bindgen_structs.push(s);
+        match name.as_str() {
+            "::kind" => {
+                shader_kind = Some(match value.value().as_str() {
+                    "vert" | "vertex" => ShaderKind::Vertex,
+                    "frag" | "fragment" => ShaderKind::Fragment,
+                    _ => {
+                        return Error::new(value_span, "Invalid shader source kind")
+                            .to_compile_error()
+                            .into()
                     }
-                    glsl
-                }
-                Err(e) => {
-                    panic!("attrib failed: {:?}, {}", e.to_string(), cap);
+                })
+            }
+            "::path" => shader_path = Some(value.value()),
+            "::name" => shader_name = Some(value.value()),
+            _ => {
+                return Error::new(name_value.path.span(), "Invalid item name")
+                    .to_compile_error()
+                    .into()
+            }
+        }
+    }
+
+    let path = match shader_path {
+        Some(path) => match canonicalize(path) {
+            Ok(path) => path,
+            Err(err) => {
+                return Error::new(Span::call_site(), err.to_string())
+                    .to_compile_error()
+                    .into()
+            }
+        },
+        None => {
+            return Error::new(Span::call_site(), "No source path given")
+                .to_compile_error()
+                .into()
+        }
+    };
+
+    let source = match File::open(path.clone()) {
+        Ok(mut file) => {
+            let mut source = String::new();
+            match file.read_to_string(&mut source) {
+                Ok(_) => source,
+                Err(err) => {
+                    return Error::new(Span::call_site(), err.to_string())
+                        .to_compile_error()
+                        .into()
                 }
             }
-        })
-        .to_string();
+        }
+        Err(err) => {
+            return Error::new(Span::call_site(), err.to_string())
+                .to_compile_error()
+                .into()
+        }
+    };
 
-    for ident_renamer in ident_renameres {
-        output = ident_renamer
-            .replace_all(&output[..], |caps: &Captures| {
-                let cap = &caps[0];
-                let cap = &cap[..cap.len() - 1];
-                format!("_{}_", cap)
-            })
-            .to_string();
-    }
+    let kind = match shader_kind {
+        Some(kind) => kind,
+        None => {
+            return Error::new(Span::call_site(), "No source kind given")
+                .to_compile_error()
+                .into()
+        }
+    };
 
-    (output, bindgen_structs)
+    let debug = false; /* TODO: match shader_debug {
+                           Some(debug) => debug,
+                           None => false,
+                       }; */
+
+    let name = match shader_name {
+        Some(name) => name,
+        None => {
+            return Error::new(Span::call_site(), "No shader name given")
+                .to_compile_error()
+                .into()
+        }
+    };
+
+    compile_module(source, path, kind, debug, name)
 }
 
-// 0: source, 1: path
-fn read_shader_source(path: String, span: Span) -> syn::Result<(String, String)> {
-    let root = env::var("CARGO_MANIFEST_DIR").unwrap();
+#[derive(Debug)]
+pub struct LayoutDef {
+    location: u32,
+    binding: u32,
+}
 
-    let error_msg = format!("File not found: '{}' does not exist in '{}'", path, root);
-    let full_path = Path::new(&root).join(path);
-    let full_path_str = full_path.as_os_str().to_str().unwrap().to_string();
+fn parse_second_def(input: ParseStream) -> syn::Result<(Ident, u32)> {
+    input.parse::<Token![,]>()?;
+    let id = input.parse::<Ident>()?;
+    input.parse::<Token![=]>()?;
+    Ok((id, input.parse::<LitInt>()?.base10_parse::<u32>()?))
+}
 
-    if !full_path.is_file() {
-        Err(Error::new(span, error_msg))
-    } else {
-        let mut file = File::open(full_path)
-            .or_else(|err| Err(Error::new(span, format!("Could not open file: {}", err))))?;
-        let mut buf = String::new();
-        file.read_to_string(&mut buf)
-            .or(Err(Error::new(span, "Could not read from file")))?;
+impl Parse for LayoutDef {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let content;
+        syn::parenthesized!(content in input);
 
-        Ok((buf, full_path_str))
+        let mut target = LayoutDef {
+            location: 0,
+            binding: 0,
+        };
+
+        let id0 = content.parse::<Ident>()?;
+        content.parse::<Token![=]>()?;
+        let n0 = content.parse::<LitInt>()?.base10_parse::<u32>()?;
+        let n1 = parse_second_def(&content);
+
+        match id0.to_string().as_str() {
+            "location" => {
+                target.location = n0;
+                if let Ok((id1, n1)) = n1 {
+                    if id1.to_string().as_str() != "binding" {
+                        Err(Error::new(
+                            Span::call_site(),
+                            "Only one of location or binding is allowed",
+                        ))?
+                    }
+                    target.binding = n1;
+                }
+            }
+            "binding" => {
+                target.binding = n0;
+                if let Ok((id1, n1)) = n1 {
+                    if id1.to_string().as_str() != "location" {
+                        Err(Error::new(
+                            Span::call_site(),
+                            "Only one of location or binding is allowed",
+                        ))?
+                    }
+                    target.location = n1;
+                }
+            }
+            other => Err(Error::new(
+                Span::call_site(),
+                format!("Invalid layout attribute: '{}'", other),
+            ))?,
+        }
+
+        Ok(target)
+    }
+}
+
+#[derive(Debug)]
+pub enum FieldType {
+    Float,
+    Vec2,
+    Vec3,
+    Vec4,
+    Mat2,
+    Mat3,
+    Mat4,
+    Int,
+    Uint,
+}
+
+impl Parse for FieldType {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let token = input.parse::<Ident>()?;
+        match token.to_string().as_str() {
+            "float" => Ok(Self::Float),
+            "vec2" => Ok(Self::Vec2),
+            "vec3" => Ok(Self::Vec3),
+            "vec4" => Ok(Self::Vec4),
+            "mat2" => Ok(Self::Mat2),
+            "mat3" => Ok(Self::Mat3),
+            "mat4" => Ok(Self::Mat4),
+            "int" => Ok(Self::Int),
+            "uint" => Ok(Self::Uint),
+            other => Err(Error::new(
+                token.span(),
+                format!("invalid type: '{}'", other),
+            )),
+        }
+    }
+}
+
+impl ToTokens for FieldType {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        match self {
+            &FieldType::Float => tokens.append(Ident::new("f32", Span::call_site())),
+            &FieldType::Vec2 => tokens.append(Ident::new("Vec2", Span::call_site())),
+            &FieldType::Vec3 => tokens.append(Ident::new("Vec3", Span::call_site())),
+            &FieldType::Vec4 => tokens.append(Ident::new("Vec4", Span::call_site())),
+            &FieldType::Mat2 => tokens.append(Ident::new("Mat2", Span::call_site())),
+            &FieldType::Mat3 => tokens.append(Ident::new("Mat3", Span::call_site())),
+            &FieldType::Mat4 => tokens.append(Ident::new("Mat4", Span::call_site())),
+            &FieldType::Int => tokens.append(Ident::new("i32", Span::call_site())),
+            &FieldType::Uint => tokens.append(Ident::new("u32", Span::call_site())),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum LayoutType {
+    In,
+    Out,
+    Uniform,
+}
+
+impl Parse for LayoutType {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        match input.parse::<Token![in]>() {
+            Ok(_) => return Ok(Self::In),
+            Err(_) => {}
+        };
+
+        let token = input.parse::<Ident>()?;
+        match token.to_string().as_str() {
+            "out" => Ok(Self::Out),
+            "uniform" => Ok(Self::Uniform),
+            other => Err(Error::new(
+                token.span(),
+                format!(
+                    "Expected identifier out or uniform or keyword in. Got identifier: '{}'",
+                    other
+                ),
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Layout {
+    inputs: Vec<(u32, FieldType)>,
+    outputs: Vec<(u32, FieldType)>,
+    uniforms: Vec<(u32, Vec<FieldType>)>,
+}
+
+#[derive(Debug)]
+pub struct SortedLayout {
+    inputs: Vec<FieldType>,
+    outputs: Vec<FieldType>,
+    uniforms: Vec<Vec<FieldType>>,
+}
+
+#[derive(Debug)]
+pub struct LayoutToken {
+    pub span: Span,
+}
+
+impl Parse for LayoutToken {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let token = input.parse::<Ident>()?;
+        if token.to_string().as_str() == "layout" {
+            Ok(Self { span: token.span() })
+        } else {
+            Err(Error::new(token.span(), "layout token expected"))
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct DataField {
+    ty: FieldType,
+    name: Ident,
+    semicolon: Token![;],
+}
+
+impl Parse for DataField {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(Self {
+            ty: input.parse()?,
+            name: input.parse()?,
+            semicolon: input.parse()?,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct IOLayoutField {
+    layout_token: LayoutToken,
+    layout_def: LayoutDef,
+    layout_type: LayoutType,
+
+    data: DataField,
+}
+
+impl Parse for IOLayoutField {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(Self {
+            layout_token: input.parse()?,
+            layout_def: input.parse()?,
+            layout_type: input.parse()?,
+            data: input.parse()?,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct Fields {
+    data: Vec<DataField>,
+}
+
+impl Parse for Fields {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let content;
+        syn::braced!(content in input);
+
+        let mut data = Vec::new();
+        while !content.is_empty() {
+            data.push(content.parse::<DataField>()?);
+        }
+
+        Ok(Self { data })
+    }
+}
+
+#[derive(Debug)]
+pub struct UniformLayoutField {
+    layout_token: LayoutToken,
+    layout_def: LayoutDef,
+    layout_type: LayoutType,
+
+    struct_name: Ident,
+    fields: Fields,
+    instance_name: Ident,
+    semicolon: Token![;],
+}
+
+impl Parse for UniformLayoutField {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(Self {
+            layout_token: input.parse()?,
+            layout_def: input.parse()?,
+            layout_type: input.parse()?,
+
+            struct_name: input.parse()?,
+            fields: input.parse()?,
+            instance_name: input.parse()?,
+            semicolon: input.parse()?,
+        })
+    }
+}
+
+fn get_layout(source: &str) -> SortedLayout {
+    // warning: regex monsters
+    let comment_remover = Regex::new(r#"//.*(.|\n)"#).unwrap();
+    let comment_block_remover = Regex::new(r#"/\*(.|\n)*?\*/"#).unwrap();
+    let io_layout_finder =
+        Regex::new(r#"layout(\s|)*?\(.*?\)(\s|)*?(in|out)(\s|)*?[a-zA-Z0-9_].*?;"#).unwrap();
+    let uniform_layout_finder = Regex::new(
+        r#"layout(\s|)*?\(.*?\)(\s|)*?uniform(\s|)*?(.|\n)*?(\s|)*?\{(.|\n)*?\}(\s|)*?(.|\n)*?;"#,
+    )
+    .unwrap();
+
+    let source = comment_remover.replace_all(&source, "");
+    let source = comment_block_remover.replace_all(&source, "");
+
+    let mut layout = Layout {
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        uniforms: Vec::new(),
+    };
+
+    for m in io_layout_finder.find_iter(&source) {
+        let f: IOLayoutField = syn::parse_str(m.as_str()).unwrap();
+        match f.layout_type {
+            LayoutType::In => layout.inputs.push((f.layout_def.location, f.data.ty)),
+            LayoutType::Out => layout.outputs.push((f.layout_def.location, f.data.ty)),
+            LayoutType::Uniform => unreachable!(),
+        };
+    }
+
+    for m in uniform_layout_finder.find_iter(&source) {
+        let f: UniformLayoutField = syn::parse_str(m.as_str()).unwrap();
+        match f.layout_type {
+            LayoutType::In => unreachable!(),
+            LayoutType::Out => unreachable!(),
+            LayoutType::Uniform => {
+                let mut uniform = Vec::new();
+                for field in f.fields.data {
+                    uniform.push(field.ty);
+                }
+                layout.uniforms.push((f.layout_def.location, uniform));
+            }
+        };
+    }
+
+    layout.inputs.sort_by(|a, b| a.0.cmp(&b.0));
+    layout.outputs.sort_by(|a, b| a.0.cmp(&b.0));
+    layout.uniforms.sort_by(|a, b| a.0.cmp(&b.0));
+
+    SortedLayout {
+        inputs: layout.inputs.into_iter().map(|(_, f)| f).collect(),
+        outputs: layout.outputs.into_iter().map(|(_, f)| f).collect(),
+        uniforms: layout.uniforms.into_iter().map(|(_, f)| f).collect(),
+    }
+}
+
+fn compile_module(
+    source: String,
+    path: PathBuf,
+    kind: ShaderKind,
+    debug: bool,
+    mod_name: String,
+) -> TokenStream {
+    // preprocess source
+    let layout = get_layout(source.as_str());
+    let inputs = &layout.inputs[..];
+    let outputs = &layout.outputs[..];
+    let uniforms = layout.uniforms.first().map(|v| &v[..]).unwrap_or(&[]); // only one for now
+    let name = Ident::new(mod_name.as_str(), Span::call_site());
+
+    // compile module
+    let artifact = compile_shader_module(
+        kind,
+        &source,
+        "module",
+        "main",
+        path.clone(),
+        &DefinesInput::new(),
+        debug,
+    );
+
+    // tokens
+    match (artifact, debug) {
+        (Ok(spirv), _) => {
+            let spirv = spirv.as_binary_u8();
+            let path = path.to_str().unwrap();
+            (quote! {
+                pub mod #name {
+                    use gears::glam::{Vec2, Vec3, Vec4, Mat2, Mat3, Mat4};
+
+                    pub const SOURCE: &'static str = include_str!(#path);
+                    pub const SPIRV: &'static [u8] = &[ #(#spirv),* ];
+                    pub type INPUT = ( #(#inputs),* );
+                    pub type OUTPUT = ( #(#outputs),* );
+                    pub type UNIFORM = ( #(#uniforms),* );
+                }
+            })
+            .into()
+        }
+        (Err(error), true) => (quote! {
+            #error
+        })
+        .into(),
+        (Err(error), false) => {
+            panic!("{}", error)
+        }
     }
 }

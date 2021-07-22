@@ -1,21 +1,125 @@
 use std::{sync::Arc, time::Instant};
 
-use cgmath::{perspective, Deg, InnerSpace, Matrix4, Point3, Rad, Vector3};
 use gears::{
     load_obj, Buffer, ContextGPUPick, ContextValidation, EventLoopTarget, Frame, FrameLoop,
     FrameLoopTarget, FramePerfReport, ImmediateFrameInfo, InputState, KeyboardInput, Pipeline,
     RenderRecordInfo, Renderer, RendererRecord, SyncMode, UpdateRecordInfo, VertexBuffer,
     VirtualKeyCode, WindowEvent,
 };
+use glam::{Mat4, Vec3};
 use parking_lot::{Mutex, RwLock};
 
 mod shader {
-    gears_pipeline::pipeline! {
+    use gears::{FormatOf, GraphicsPipeline, Input, PipelineBuilderBase, UBOo, Uniform, Vertexo};
+    use gears_pipeline::*;
+    use glam::{Mat4, Vec3};
+    use static_assertions::assert_type_eq_all;
+
+    #[derive(Input)]
+    #[repr(C)]
+    pub struct VertexData {
+        pub pos: Vec3,
+        pub norm: Vec3,
+    }
+
+    /* impl VertexData {
+        const BD: [ash::vk::VertexInputBindingDescription; 1] =
+            [ash::vk::VertexInputBindingDescription {
+                binding: 0,
+                stride: size_of::<VertexData>() as u32,
+                input_rate: ash::vk::VertexInputRate::VERTEX,
+            }];
+        const AD: [ash::vk::VertexInputAttributeDescription; 2] = [
+            ash::vk::VertexInputAttributeDescription {
+                binding: 0,
+                location: 0,
+                offset: 0,
+                format: <Vec3 as FormatOf>::FORMAT_OF,
+            },
+            ash::vk::VertexInputAttributeDescription {
+                binding: 0,
+                location: 1,
+                offset: 0 + <Vec3 as FormatOf>::OFFSET_OF,
+                format: <Vec3 as FormatOf>::FORMAT_OF,
+            },
+        ];
+    } */
+
+    #[derive(Uniform, Default)]
+    #[repr(C)]
+    pub struct UniformData {
+        pub model_matrix: Mat4,
+        pub view_matrix: Mat4,
+        pub projection_matrix: Mat4,
+        pub light_dir: Vec3,
+    }
+
+    /* impl UBOo for UniformData {
+        const STAGE: ash::vk::ShaderStageFlags = ash::vk::ShaderStageFlags::VERTEX;
+    }
+
+    impl Default for UniformData {
+        fn default() -> Self {
+            Self {
+                model_matrix: Mat4::IDENTITY,
+                view_matrix: Mat4::IDENTITY,
+                projection_matrix: Mat4::IDENTITY,
+                light_dir: Vec3::ONE,
+            }
+        }
+    } */
+
+    module! {
+        kind = "vert",
+        path = "examples/gear/res/default.vert.glsl",
+        name = "VERT"
+    }
+
+    module! {
+        kind = "frag",
+        path = "examples/gear/res/default.frag.glsl",
+        name = "FRAG"
+    }
+
+    /* pub const VERT: ModuleData = compile_vert! { "examples/gear/res/default.vert.glsl" };
+    pub const FRAG: ModuleData = compile_frag! { "examples/gear/res/default.frag.glsl" }; */
+
+    pub type Pipeline = GraphicsPipeline<VertexData, (), ()>;
+    pub fn build(renderer: &gears::Renderer) -> Pipeline {
+        assert_type_eq_all!(<VertexData as Input>::FIELDS, VERT::INPUT);
+        // assert_type_eq_all!(<UniformData as Uniform>::FIELDS, VERT::UNIFORM);
+
+        PipelineBuilderBase::new(renderer)
+            .vertex(VERT::SPIRV)
+            .fragment(FRAG::SPIRV)
+            .build()
+    }
+
+    /* pub fn build_legacy(renderer: &gears::Renderer) -> gears::Pipeline {
+        gears::PipelineBuilder::new(renderer)
+            .with_graphics_modules(VERT::SPIRV, FRAG::SPIRV)
+            .with_input::<VertexData>()
+            .with_ubo::<UniformData>()
+            .build(false)
+            .unwrap()
+    } */
+
+    /* pub const SHADER: ShaderData = pipeline! {
+        in VertexData
+
+        mod VERT_SPIRV {
+            in UniformData
+        }
+
+        mod FRAG_SPIRV
+    }; */
+
+    /* gears_pipeline::pipeline! {
         vert: { path: "gear/res/default.vert.glsl" }
         frag: { path: "gear/res/default.frag.glsl" }
 
         builders
-    }
+    } */
 }
 
 const MAX_VBO_LEN: usize = 50_000;
@@ -26,11 +130,11 @@ struct App {
     input: Arc<RwLock<InputState>>,
 
     vb: VertexBuffer<shader::VertexData>,
-    shader: Pipeline,
+    shader: shader::Pipeline,
 
     delta_time: Mutex<Instant>,
     distance: Mutex<f32>,
-    position: Mutex<Vector3<f32>>,
+    position: Mutex<Vec3>,
 }
 
 impl App {
@@ -48,7 +152,7 @@ impl App {
 
             delta_time: Mutex::new(Instant::now()),
             distance: Mutex::new(2.5),
-            position: Mutex::new(Vector3::new(0.0, 0.0, 0.0)),
+            position: Mutex::new(Vec3::new(0.0, 0.0, 0.0)),
         };
 
         app.reload_mesh();
@@ -81,7 +185,7 @@ impl RendererRecord for App {
         let aspect = self.frame.aspect();
 
         let mut distance_delta = 0.0;
-        let mut velocity = Vector3::new(0.0, 0.0, 0.0);
+        let mut velocity = Vec3::new(0.0, 0.0, 0.0);
         {
             let input = self.input.read();
             if input.key_held(VirtualKeyCode::E) {
@@ -123,25 +227,29 @@ impl RendererRecord for App {
             *position
         };
 
-        let eye = Point3::new(
+        let eye = Vec3::new(
             position.x.sin() * position.y.cos(),
             position.y.sin(),
             position.x.cos() * position.y.cos(),
         ) * distance;
-        let focus = Point3::new(0.0, 0.0, 0.0);
+        let focus = Vec3::new(0.0, 0.0, 0.0);
+        let up = Vec3::new(0.0, -1.0, 0.0);
 
-        let ubo = shader::UBO {
-            model_matrix: Matrix4::from_angle_x(Rad { 0: position.z }),
-            view_matrix: Matrix4::look_at_rh(eye, focus, Vector3::new(0.0, -1.0, 0.0)),
-            projection_matrix: perspective(Deg { 0: 60.0 }, aspect, 0.01, 100.0),
-            light_dir: Vector3::new(0.2, 2.0, 0.5).normalize(),
+        let ubo = shader::UniformData {
+            model_matrix: Mat4::from_rotation_x(position.z),
+            view_matrix: Mat4::look_at_rh(eye, focus, up),
+            projection_matrix: Mat4::perspective_rh(1.0, aspect, 0.01, 100.0),
+            light_dir: Vec3::new(0.2, 2.0, 0.5).normalize(),
         };
 
-        self.shader.write_ubo(imfi, &ubo).unwrap();
+        /* self.shader.write_ubo(imfi, &ubo).unwrap(); */
     }
 
     fn update(&self, uri: &UpdateRecordInfo) -> bool {
-        unsafe { self.shader.update(uri) || self.vb.update(uri) }
+        unsafe {
+            /* self.shader.update(uri) || */
+            self.vb.update(uri)
+        }
     }
 
     fn record(&self, rri: &RenderRecordInfo) {

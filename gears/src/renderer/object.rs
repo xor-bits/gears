@@ -1,10 +1,10 @@
-use cgmath::{InnerSpace, Vector3};
+use glam::Vec3;
 use wavefront_obj::obj::Primitive;
 
 pub fn load_obj<V>(
     obj_data: &str,
     _: Option<&str>,
-    construct_vertex: fn(position: Vector3<f32>, normal: Vector3<f32>) -> V,
+    construct_vertex: fn(position: Vec3, normal: Vec3) -> V,
 ) -> Vec<V> {
     let objset = wavefront_obj::obj::parse(obj_data).unwrap();
     // TODO: let mtlset = wavefront_obj::mtl::parse(mtl_data).unwrap();
@@ -37,32 +37,30 @@ pub fn load_obj<V>(
                         let vert = obj.vertices[vert];
 
                         let norm = if let Some(norm_id) = norm {
-                            Vector3::new(
-                                obj.normals[norm_id].x,
-                                obj.normals[norm_id].y,
-                                obj.normals[norm_id].z,
+                            Vec3::new(
+                                obj.normals[norm_id].x as f32,
+                                obj.normals[norm_id].y as f32,
+                                obj.normals[norm_id].z as f32,
                             )
-                            .cast::<f32>()
-                            .unwrap()
                         } else {
-                            let ab = Vector3::new(
-                                obj.vertices[b_vert_id].x - obj.vertices[a_vert_id].x,
-                                obj.vertices[b_vert_id].y - obj.vertices[a_vert_id].y,
-                                obj.vertices[b_vert_id].z - obj.vertices[a_vert_id].z,
+                            let ab = Vec3::new(
+                                (obj.vertices[b_vert_id].x - obj.vertices[a_vert_id].x) as f32,
+                                (obj.vertices[b_vert_id].y - obj.vertices[a_vert_id].y) as f32,
+                                (obj.vertices[b_vert_id].z - obj.vertices[a_vert_id].z) as f32,
                             );
 
-                            let ac = Vector3::new(
-                                obj.vertices[c_vert_id].x - obj.vertices[a_vert_id].x,
-                                obj.vertices[c_vert_id].y - obj.vertices[a_vert_id].y,
-                                obj.vertices[c_vert_id].z - obj.vertices[a_vert_id].z,
+                            let ac = Vec3::new(
+                                (obj.vertices[c_vert_id].x - obj.vertices[a_vert_id].x) as f32,
+                                (obj.vertices[c_vert_id].y - obj.vertices[a_vert_id].y) as f32,
+                                (obj.vertices[c_vert_id].z - obj.vertices[a_vert_id].z) as f32,
                             );
 
-                            ab.normalize().cross(ac.normalize()).cast::<f32>().unwrap()
+                            ab.normalize().cross(ac.normalize())
                         };
 
                         construct_vertex(
-                            Vector3::new(vert.x as f32, vert.y as f32, vert.z as f32),
-                            Vector3::new(norm.x as f32, norm.y as f32, norm.z as f32),
+                            Vec3::new(vert.x as f32, vert.y as f32, vert.z as f32),
+                            Vec3::new(norm.x as f32, norm.y as f32, norm.z as f32),
                         )
                     };
 

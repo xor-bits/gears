@@ -1,19 +1,12 @@
 #version 420
-#extension GL_ARB_separate_shader_objects : enable
 
-#[gears_gen(in)]
-struct VFSharedData {
-	float exposure;
-} frag_in;
+layout(location = 0) in float exposure;
 
-#[gears_gen(out)]
-struct VFFragmentData {
-	vec4 col;
-} frag_out;
+layout(location = 0) out vec4 color;
 
 
 
 void main() {
-	vec3 color = vec3(1.0) * smoothstep(0.1, 1.9, frag_in.exposure);
-	frag_out.col = vec4(color, 1.0);
+	vec3 c = vec3(1.0) * smoothstep(0.1, 1.9, exposure);
+	color = vec4(c, 1.0);
 }

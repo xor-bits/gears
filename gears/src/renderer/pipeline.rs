@@ -1,5 +1,31 @@
+pub mod compute;
+pub mod factory;
+pub mod graphics;
+
+#[cfg(feature = "short_namespaces")]
+pub use compute::*;
+#[cfg(feature = "short_namespaces")]
+pub use factory::*;
+#[cfg(feature = "short_namespaces")]
+pub use graphics::*;
+
+pub struct PipelineBuilderBase {
+    pub device: Arc<RenderDevice>,
+    pub render_pass: vk::RenderPass,
+    pub set_count: usize,
+    pub debug: bool,
+}
+
+pub struct PipelineBase {
+    pub device: Arc<RenderDevice>,
+}
+
+pub struct Module<'a, Uf> {
+    pub spirv: &'a [u8],
+    pub initial_uniform_data: Uf,
+}
+
 use ash::{util::read_spv, version::DeviceV1_0, vk};
-use gears_traits::{Vertex, UBO};
 use log::debug;
 use parking_lot::Mutex;
 use std::{
@@ -129,7 +155,7 @@ impl PipelineBuilder {
         }
     } */
 
-    pub fn with_ubo<U: 'static + UBO + Default + Send>(mut self) -> Self {
+    pub fn with_ubo<U: 'static + UBOo + Default + Send>(mut self) -> Self {
         let buffers = (0..self.set_count)
             .map(|_| -> Result<(vk::Buffer, UBStorage), BufferError> {
                 let mut ubo = UniformBuffer::<U>::new_with_device(self.device.clone())?;
@@ -145,7 +171,7 @@ impl PipelineBuilder {
 }
 
 impl<'a> GraphicsPipelineBuilder<'a> {
-    pub fn with_input<V: Vertex>(mut self) -> Self {
+    pub fn with_input<V: Vertexo>(mut self) -> Self {
         self.vert_input_binding = V::binding_desc();
         self.vert_input_attribute = V::attribute_desc();
         self
@@ -156,7 +182,7 @@ impl<'a> GraphicsPipelineBuilder<'a> {
         self
     }
 
-    pub fn with_ubo<U: 'static + UBO + Default + Send>(mut self) -> Self {
+    pub fn with_ubo<U: 'static + UBOo + Default + Send>(mut self) -> Self {
         self.base = self.base.with_ubo::<U>();
         self
     }
@@ -459,7 +485,7 @@ impl Pipeline {
         }
     }
 
-    pub fn write_ubo<'a, U: 'static + UBO>(
+    pub fn write_ubo<'a, U: 'static + UBOo>(
         &self,
         imfi: &ImmediateFrameInfo,
         new_data: &U,

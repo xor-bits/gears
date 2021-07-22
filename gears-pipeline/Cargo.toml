@@ -17,7 +17,9 @@ syn = "~1.0"
 quote = "~1.0"
 shaderc = "~0.7"
 regex = "~1.4"
-cgmath = "~0.18"
+glam = "~0.16"
+gears = { path = "../gears" }
 
 [dev-dependencies]
-gears-traits = { path = "../gears-traits/" }
+gears = { path = "../gears" }
+static_assertions = "~1.1"

@@ -19,9 +19,10 @@ path = "voxel/main.rs"
 simdnoise = "~3.1"
 log = "~0.4"
 rand = "~0.8"
-cgmath = { version = "~0.18", features = ["swizzle"] }
+glam = "~0.16"
 env_logger = "~0.8"
 parking_lot = "~0.11"
+ash = "~0.32"
+static_assertions = "~1.1"
 gears = { path = "../gears", features = [ "short_namespaces", "validation_panic" ] }
 gears-pipeline = { path = "../gears-pipeline" }
-gears-traits = { path = "../gears-traits/" }

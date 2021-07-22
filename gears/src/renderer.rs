@@ -7,10 +7,8 @@ pub mod queue;
 
 #[cfg(feature = "short_namespaces")]
 pub use buffer::*;
-use cgmath::Vector4;
 #[cfg(feature = "short_namespaces")]
 pub use object::*;
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 #[cfg(feature = "short_namespaces")]
 pub use pipeline::*;
 #[cfg(feature = "short_namespaces")]
@@ -26,7 +24,9 @@ use crate::{
 
 use ash::{extensions::khr, version::DeviceV1_0, vk};
 use buffer::{image::Image, image::ImageBuilder, image::ImageFormat, image::ImageUsage};
+use glam::Vec4;
 use log::{debug, error};
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -111,7 +111,7 @@ pub struct RenderRecordInfo {
 #[derive(Debug, Clone, Copy)]
 pub struct RenderRecordBeginInfo {
     pub debug_calls: bool,
-    pub clear_color: Vector4<f32>,
+    pub clear_color: Vec4,
 }
 
 pub struct UpdateRecordInfo {
@@ -132,7 +132,7 @@ pub trait RendererRecord {
     #[allow(unused_variables)]
     fn begin_info(&self) -> RenderRecordBeginInfo {
         RenderRecordBeginInfo {
-            clear_color: Vector4::new(0.18, 0.18, 0.2, 1.0),
+            clear_color: Vec4::new(0.18, 0.18, 0.2, 1.0),
             debug_calls: false,
         }
     }
