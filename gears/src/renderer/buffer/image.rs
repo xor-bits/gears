@@ -1,9 +1,9 @@
 use ash::{version::DeviceV1_0, vk};
 use bitflags::bitflags;
 use log::*;
-use std::{marker::PhantomData, sync::Arc};
+use std::marker::PhantomData;
 
-use crate::renderer::{device::RenderDevice, Renderer};
+use crate::renderer::{device::Dev, Renderer};
 
 use super::{find_mem_type, BufferError};
 
@@ -30,7 +30,7 @@ pub enum ImageFormat<T> {
 }
 
 pub struct ImageBuilder {
-    device: Arc<RenderDevice>,
+    device: Dev,
 }
 
 pub struct ImageBuilder1D {
@@ -52,7 +52,7 @@ pub struct ImageBuilder3D {
 }
 
 pub struct Image {
-    device: Arc<RenderDevice>,
+    device: Dev,
 
     image: vk::Image,
     image_view: vk::ImageView,
@@ -175,7 +175,7 @@ impl ImageBuilder {
         }
     }
 
-    pub fn new_with_device(device: Arc<RenderDevice>) -> Self {
+    pub fn new_with_device(device: Dev) -> Self {
         Self { device }
     }
 
@@ -343,7 +343,7 @@ impl ImageBuilder3D {
 
 impl Image {
     fn new(
-        device: Arc<RenderDevice>,
+        device: Dev,
         format: vk::Format,
         usage: vk::ImageUsageFlags,
         aspects: vk::ImageAspectFlags,
@@ -372,7 +372,7 @@ impl Image {
     }
 
     fn new_with_image(
-        device: Arc<RenderDevice>,
+        device: Dev,
         image: vk::Image,
         format: vk::Format,
         aspects: vk::ImageAspectFlags,

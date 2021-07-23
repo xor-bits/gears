@@ -1,7 +1,8 @@
-use std::marker::PhantomData;
-
-use crate::{ComputePipeline, GraphicsPipeline, Module, PipelineBuilderBase, Renderer};
+use crate::{
+    BufferError, ComputePipeline, GraphicsPipeline, Module, PipelineBuilderBase, Renderer,
+};
 use ash::vk;
+use std::marker::PhantomData;
 
 // TODO: remove
 pub trait UBOo {
@@ -60,6 +61,12 @@ pub trait Input {
 
 pub trait Uniform {
     type FIELDS;
+    const IS_EMPTY: bool = false;
+}
+
+impl Uniform for () {
+    type FIELDS = ();
+    const IS_EMPTY: bool = true;
 }
 
 // pipeline builder
@@ -102,6 +109,7 @@ impl PipelineBuilderBase {
             vertex: Module {
                 spirv,
                 initial_uniform_data: (),
+                has_uniform: false,
             },
 
             _p: PhantomData {},
@@ -118,6 +126,7 @@ impl PipelineBuilderBase {
             vertex: Module {
                 spirv,
                 initial_uniform_data,
+                has_uniform: true,
             },
 
             _p: PhantomData {},
@@ -130,6 +139,7 @@ impl PipelineBuilderBase {
             fragment: Module {
                 spirv,
                 initial_uniform_data: (),
+                has_uniform: false,
             },
         }
     }
@@ -144,6 +154,7 @@ impl PipelineBuilderBase {
             fragment: Module {
                 spirv,
                 initial_uniform_data,
+                has_uniform: true,
             },
         }
     }
@@ -154,6 +165,7 @@ impl PipelineBuilderBase {
             compute: Module {
                 spirv,
                 initial_uniform_data: (),
+                has_uniform: false,
             },
         }
     }
@@ -168,6 +180,7 @@ impl PipelineBuilderBase {
             compute: Module {
                 spirv,
                 initial_uniform_data,
+                has_uniform: true,
             },
         }
     }
@@ -181,6 +194,7 @@ impl<'a, I: Input, Uf> VertexPipelineBuilder<'a, I, Uf> {
             fragment: Module {
                 spirv,
                 initial_uniform_data: (),
+                has_uniform: false,
             },
 
             _p: PhantomData {},
@@ -198,6 +212,7 @@ impl<'a, I: Input, Uf> VertexPipelineBuilder<'a, I, Uf> {
             fragment: Module {
                 spirv,
                 initial_uniform_data,
+                has_uniform: true,
             },
 
             _p: PhantomData {},
@@ -213,6 +228,7 @@ impl<'a, Uf> FragmentPipelineBuilder<'a, Uf> {
             vertex: Module {
                 spirv,
                 initial_uniform_data: (),
+                has_uniform: false,
             },
 
             _p: PhantomData {},
@@ -230,6 +246,7 @@ impl<'a, Uf> FragmentPipelineBuilder<'a, Uf> {
             vertex: Module {
                 spirv,
                 initial_uniform_data,
+                has_uniform: true,
             },
 
             _p: PhantomData {},
@@ -237,11 +254,14 @@ impl<'a, Uf> FragmentPipelineBuilder<'a, Uf> {
     }
 }
 
-impl<'a, I: Input, UfVert, UfFrag> GraphicsPipelineBuilder<'a, I, UfVert, UfFrag> {
-    pub fn build(self) -> GraphicsPipeline<I, UfVert, UfFrag> {
+impl<'a, I: Input, UfVert: Uniform, UfFrag: Uniform>
+    GraphicsPipelineBuilder<'a, I, UfVert, UfFrag>
+{
+    pub fn build(self) -> Result<GraphicsPipeline<I, UfVert, UfFrag>, BufferError> {
         GraphicsPipeline::new(
             self.base.device,
             self.base.render_pass,
+            self.base.set_count,
             self.vertex,
             self.fragment,
             self.base.debug,
@@ -258,16 +278,4 @@ impl<'a, Uf> ComputePipelineBuilder<'a, Uf> {
             self.base.debug,
         )
     }
-}
-
-impl<I: Input, UfVert: Uniform, UfFrag> GraphicsPipeline<I, UfVert, UfFrag> {
-    pub fn write_vertex_uniform(&mut self, _data: &UfVert) {}
-}
-
-impl<I: Input, UfVert, UfFrag: Uniform> GraphicsPipeline<I, UfVert, UfFrag> {
-    pub fn write_fragment_uniform(&mut self, _data: &UfFrag) {}
-}
-
-impl<Uf: Uniform> ComputePipeline<Uf> {
-    pub fn write_uniform(&mut self, _data: &Uf) {}
 }

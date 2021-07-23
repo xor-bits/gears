@@ -55,6 +55,8 @@ pub struct RenderDevice {
     _entry: ash::Entry,
 }
 
+pub type Dev = Arc<RenderDevice>;
+
 impl RenderDevice {
     // safe if ptrs are not used after instance_layers is modified or dropped
     unsafe fn device_layers(instance_layers: &Vec<&CStr>) -> Vec<*const i8> {
@@ -116,7 +118,7 @@ impl RenderDevice {
         memory_properties
     }
 
-    pub fn from_context(context: ReducedContext) -> Result<Arc<Self>, ContextError> {
+    pub fn from_context(context: ReducedContext) -> Result<Dev, ContextError> {
         // legacy device layers
         // unsafe: instance_layers is dropped in this function
         let instance_layers = unsafe { Self::device_layers(&context.instance_layers) };

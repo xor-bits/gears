@@ -1,20 +1,17 @@
 use ash::{version::DeviceV1_0, vk};
 use std::{
     mem,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use log::debug;
 
-use crate::renderer::{device::RenderDevice, RenderRecordInfo, Renderer, UpdateRecordInfo};
+use crate::renderer::{device::Dev, RenderRecordInfo, Renderer, UpdateRecordInfo};
 
 use super::{create_buffer, stage::StageBuffer, Buffer, BufferError, WriteType};
 
 pub struct VertexBuffer<T> {
-    device: Arc<RenderDevice>,
+    device: Dev,
 
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
@@ -34,7 +31,7 @@ impl<T> VertexBuffer<T> {
         Ok(buffer)
     }
 
-    pub fn new_with_device(device: Arc<RenderDevice>, size: usize) -> Result<Self, BufferError> {
+    pub fn new_with_device(device: Dev, size: usize) -> Result<Self, BufferError> {
         let byte_len = size * mem::size_of::<T>();
         let (buffer, memory) = create_buffer(
             &device,

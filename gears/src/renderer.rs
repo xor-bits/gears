@@ -18,7 +18,7 @@ pub use queue::*;
 
 use crate::{
     context::{Context, ContextError},
-    renderer::device::ReducedContext,
+    renderer::device::{ReducedContext, RenderDevice},
     MapErrorElseLogResult, MapErrorLog, SyncMode,
 };
 
@@ -39,7 +39,7 @@ use std::{
 
 use self::{
     buffer::image::BaseFormat,
-    device::RenderDevice,
+    device::Dev,
     query::{PerfQuery, PerfQueryResult},
 };
 
@@ -161,7 +161,7 @@ pub struct Renderer {
     frame: AtomicUsize,
     frames_in_flight: usize,
 
-    rdevice: Arc<RenderDevice>,
+    rdevice: Dev,
 }
 
 pub struct RendererBuilder {
@@ -185,7 +185,7 @@ impl Default for FramePerfReport {
 
 impl RenderObject {
     fn new(
-        rdevice: Arc<RenderDevice>,
+        rdevice: Dev,
         render_pass: vk::RenderPass,
         color_image: vk::Image,
         color_format: vk::Format,
@@ -258,7 +258,7 @@ impl RenderObject {
 }
 
 impl ConcurrentRenderObject {
-    fn new(device: &Arc<RenderDevice>) -> Result<Self, ContextError> {
+    fn new(device: &Dev) -> Result<Self, ContextError> {
         let semaphore_info = vk::SemaphoreCreateInfo::builder();
         let fence_info = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
 
@@ -884,10 +884,7 @@ impl RendererBuilder {
             .map_err_log("Swapchain image query failed", ContextError::OutOfMemory)
     }
 
-    fn render_pass(
-        device: Arc<RenderDevice>,
-        format: vk::Format,
-    ) -> Result<vk::RenderPass, ContextError> {
+    fn render_pass(device: Dev, format: vk::Format) -> Result<vk::RenderPass, ContextError> {
         let color_attachment = vk::AttachmentDescription::builder()
             .format(format)
             .samples(vk::SampleCountFlags::TYPE_1)

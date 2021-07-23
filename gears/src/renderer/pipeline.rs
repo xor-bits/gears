@@ -10,19 +10,20 @@ pub use factory::*;
 pub use graphics::*;
 
 pub struct PipelineBuilderBase {
-    pub device: Arc<RenderDevice>,
+    pub device: Dev,
     pub render_pass: vk::RenderPass,
     pub set_count: usize,
     pub debug: bool,
 }
 
 pub struct PipelineBase {
-    pub device: Arc<RenderDevice>,
+    pub device: Dev,
 }
 
 pub struct Module<'a, Uf> {
     pub spirv: &'a [u8],
     pub initial_uniform_data: Uf,
+    pub has_uniform: bool,
 }
 
 use ash::{util::read_spv, version::DeviceV1_0, vk};
@@ -43,7 +44,7 @@ use crate::{
 
 use super::{
     buffer::{uniform::UniformBuffer, BufferError, WriteType},
-    device::RenderDevice,
+    device::Dev,
 };
 
 trait UniformBufferT {
@@ -64,7 +65,7 @@ impl<U: 'static> UniformBufferT for UniformBuffer<U> {
 type UBStorage = Arc<Mutex<dyn UniformBufferT + Send>>;
 
 pub struct PipelineBuilder {
-    device: Arc<RenderDevice>,
+    device: Dev,
     render_pass: vk::RenderPass,
     set_count: usize,
 
@@ -95,7 +96,7 @@ pub struct GraphicsPipelineBuilder<'a> {
 } */
 
 pub struct Pipeline {
-    device: Arc<RenderDevice>,
+    device: Dev,
 
     desc_pool: Option<vk::DescriptorPool>,
 
@@ -117,11 +118,7 @@ impl PipelineBuilder {
         }
     }
 
-    pub fn new_with_device(
-        device: Arc<RenderDevice>,
-        render_pass: vk::RenderPass,
-        set_count: usize,
-    ) -> Self {
+    pub fn new_with_device(device: Dev, render_pass: vk::RenderPass, set_count: usize) -> Self {
         Self {
             device,
             render_pass,
@@ -538,7 +535,7 @@ impl Drop for Pipeline {
 }
 
 fn shader_module(
-    device: &Arc<RenderDevice>,
+    device: &Dev,
     spirv: &[u8],
     stage: vk::ShaderStageFlags,
 ) -> (vk::ShaderModule, vk::PipelineShaderStageCreateInfo) {

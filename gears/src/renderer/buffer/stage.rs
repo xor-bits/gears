@@ -1,14 +1,12 @@
-use std::{
-    collections::hash_map::DefaultHasher, hash::Hasher, marker::PhantomData, mem, slice, sync::Arc,
-};
+use std::{collections::hash_map::DefaultHasher, hash::Hasher, marker::PhantomData, mem, slice};
 
 use ash::{version::DeviceV1_0, vk};
 
 use super::{create_buffer_with_fallback, Buffer, BufferError, WriteType};
-use crate::renderer::{device::RenderDevice, UpdateRecordInfo};
+use crate::renderer::{device::Dev, UpdateRecordInfo};
 
 pub struct StageBuffer<T> {
-    device: Arc<RenderDevice>,
+    device: Dev,
 
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
@@ -26,7 +24,7 @@ pub struct StageBuffer<T> {
 
 impl<T> StageBuffer<T> {
     pub fn new_with_device(
-        device: Arc<RenderDevice>,
+        device: Dev,
         size: usize,
         write_optimize: bool,
     ) -> Result<Self, BufferError> {
@@ -39,7 +37,7 @@ impl<T> StageBuffer<T> {
     }
 
     pub fn new_with_usage(
-        device: Arc<RenderDevice>,
+        device: Dev,
         usage: vk::BufferUsageFlags,
         size: usize,
         write_optimize: bool,

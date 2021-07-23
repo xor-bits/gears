@@ -17,9 +17,8 @@ pub use vertex::*;
 
 use ash::{version::DeviceV1_0, vk};
 use log::warn;
-use std::sync::Arc;
 
-use super::{device::RenderDevice, UpdateRecordInfo};
+use super::{device::Dev, UpdateRecordInfo};
 
 #[derive(Debug)]
 pub enum WriteType {
@@ -42,7 +41,7 @@ pub trait Buffer {
 }
 
 fn create_buffer(
-    device: &Arc<RenderDevice>,
+    device: &Dev,
     byte_size: usize,
     usage: vk::BufferUsageFlags,
     sharing_mode: vk::SharingMode,
@@ -57,7 +56,7 @@ fn create_buffer(
 }
 
 fn create_buffer_with_fallback(
-    device: &Arc<RenderDevice>,
+    device: &Dev,
     byte_size: usize,
     usage: vk::BufferUsageFlags,
     sharing_mode: vk::SharingMode,
@@ -81,7 +80,7 @@ fn create_buffer_with_fallback(
 }
 
 fn create_buffer_with_mem_type<F: FnMut(&vk::MemoryRequirements) -> Result<u32, BufferError>>(
-    device: &Arc<RenderDevice>,
+    device: &Dev,
     byte_size: usize,
     usage: vk::BufferUsageFlags,
     sharing_mode: vk::SharingMode,

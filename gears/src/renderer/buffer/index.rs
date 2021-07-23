@@ -1,10 +1,7 @@
 use ash::{version::DeviceV1_0, vk};
 use std::{
     mem,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use log::debug;
@@ -12,7 +9,7 @@ use log::debug;
 use super::{
     create_buffer, stage::StageBuffer, vertex::VertexBuffer, Buffer, BufferError, WriteType,
 };
-use crate::renderer::{device::RenderDevice, RenderRecordInfo, Renderer, UpdateRecordInfo};
+use crate::renderer::{device::Dev, RenderRecordInfo, Renderer, UpdateRecordInfo};
 
 pub trait UInt {
     fn get() -> vk::IndexType;
@@ -30,7 +27,7 @@ impl UInt for u32 {
 }
 
 pub struct IndexBuffer<I: UInt> {
-    device: Arc<RenderDevice>,
+    device: Dev,
 
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
@@ -50,7 +47,7 @@ impl<I: UInt> IndexBuffer<I> {
         Ok(buffer)
     }
 
-    pub fn new_with_device(device: Arc<RenderDevice>, size: usize) -> Result<Self, BufferError> {
+    pub fn new_with_device(device: Dev, size: usize) -> Result<Self, BufferError> {
         let byte_len = size * mem::size_of::<u32>();
         let (buffer, memory) = create_buffer(
             &device,

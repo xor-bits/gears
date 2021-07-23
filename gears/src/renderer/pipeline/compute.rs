@@ -1,8 +1,8 @@
-use std::{marker::PhantomData, sync::Arc};
+use std::marker::PhantomData;
 
 use ash::vk;
 
-use crate::{renderer::device::RenderDevice, Module, PipelineBase};
+use crate::{renderer::device::Dev, ImmediateFrameInfo, Module, PipelineBase, Uniform};
 
 pub struct ComputePipeline<Uf> {
     base: PipelineBase,
@@ -10,17 +10,16 @@ pub struct ComputePipeline<Uf> {
 }
 
 impl<Uf> ComputePipeline<Uf> {
-    pub fn new(
-        device: Arc<RenderDevice>,
-        render_pass: vk::RenderPass,
-        comp: Module<Uf>,
-        debug: bool,
-    ) -> Self {
-        Self {
-            base: PipelineBase { device },
-            _p: PhantomData {},
-        }
+    pub fn new(device: Dev, render_pass: vk::RenderPass, comp: Module<Uf>, debug: bool) -> Self {
+        todo!()
     }
+}
+
+impl<Uf> ComputePipeline<Uf>
+where
+    Uf: Uniform,
+{
+    pub fn write_uniform(&self, imfi: &ImmediateFrameInfo, data: &Uf) {}
 }
 
 impl<Uf> Drop for ComputePipeline<Uf> {

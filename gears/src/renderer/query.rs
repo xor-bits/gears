@@ -2,13 +2,12 @@ use ash::{version::DeviceV1_0, vk};
 use log::debug;
 use std::{
     ops::{Add, AddAssign},
-    sync::Arc,
     time::Duration,
 };
 
 use crate::renderer::RenderRecordInfo;
 
-use super::device::RenderDevice;
+use super::device::Dev;
 
 const TIMESTAMP_STAGES: [vk::PipelineStageFlags; 6] = [
     vk::PipelineStageFlags::BOTTOM_OF_PIPE, // pipeline begin
@@ -34,7 +33,7 @@ pub enum PerfQueryError {
 }
 
 pub struct PerfQuery {
-    device: Arc<RenderDevice>,
+    device: Dev,
     query_pool: vk::QueryPool,
 }
 
@@ -66,7 +65,7 @@ impl Add for PerfQueryResult {
 }
 
 impl PerfQuery {
-    pub fn new_with_device(device: Arc<RenderDevice>) -> Self {
+    pub fn new_with_device(device: Dev) -> Self {
         let query_pool_info = vk::QueryPoolCreateInfo::builder()
             .query_type(vk::QueryType::TIMESTAMP)
             .query_count(TIMESTAMP_COUNT);

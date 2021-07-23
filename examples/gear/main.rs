@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Instant};
 
 use gears::{
     load_obj, Buffer, ContextGPUPick, ContextValidation, EventLoopTarget, Frame, FrameLoop,
-    FrameLoopTarget, FramePerfReport, ImmediateFrameInfo, InputState, KeyboardInput, Pipeline,
+    FrameLoopTarget, FramePerfReport, ImmediateFrameInfo, InputState, KeyboardInput,
     RenderRecordInfo, Renderer, RendererRecord, SyncMode, UpdateRecordInfo, VertexBuffer,
     VirtualKeyCode, WindowEvent,
 };
@@ -10,40 +10,17 @@ use glam::{Mat4, Vec3};
 use parking_lot::{Mutex, RwLock};
 
 mod shader {
-    use gears::{FormatOf, GraphicsPipeline, Input, PipelineBuilderBase, UBOo, Uniform, Vertexo};
+    use gears::{FormatOf, GraphicsPipeline, Input, PipelineBuilderBase, Uniform};
     use gears_pipeline::*;
     use glam::{Mat4, Vec3};
     use static_assertions::assert_type_eq_all;
 
-    #[derive(Input)]
+    #[derive(Input, Default)]
     #[repr(C)]
     pub struct VertexData {
         pub pos: Vec3,
         pub norm: Vec3,
     }
-
-    /* impl VertexData {
-        const BD: [ash::vk::VertexInputBindingDescription; 1] =
-            [ash::vk::VertexInputBindingDescription {
-                binding: 0,
-                stride: size_of::<VertexData>() as u32,
-                input_rate: ash::vk::VertexInputRate::VERTEX,
-            }];
-        const AD: [ash::vk::VertexInputAttributeDescription; 2] = [
-            ash::vk::VertexInputAttributeDescription {
-                binding: 0,
-                location: 0,
-                offset: 0,
-                format: <Vec3 as FormatOf>::FORMAT_OF,
-            },
-            ash::vk::VertexInputAttributeDescription {
-                binding: 0,
-                location: 1,
-                offset: 0 + <Vec3 as FormatOf>::OFFSET_OF,
-                format: <Vec3 as FormatOf>::FORMAT_OF,
-            },
-        ];
-    } */
 
     #[derive(Uniform, Default)]
     #[repr(C)]
@@ -53,21 +30,6 @@ mod shader {
         pub projection_matrix: Mat4,
         pub light_dir: Vec3,
     }
-
-    /* impl UBOo for UniformData {
-        const STAGE: ash::vk::ShaderStageFlags = ash::vk::ShaderStageFlags::VERTEX;
-    }
-
-    impl Default for UniformData {
-        fn default() -> Self {
-            Self {
-                model_matrix: Mat4::IDENTITY,
-                view_matrix: Mat4::IDENTITY,
-                projection_matrix: Mat4::IDENTITY,
-                light_dir: Vec3::ONE,
-            }
-        }
-    } */
 
     module! {
         kind = "vert",
@@ -81,30 +43,8 @@ mod shader {
         name = "FRAG"
     }
 
-    /* pub const VERT: ModuleData = compile_vert! { "examples/gear/res/default.vert.glsl" };
-    pub const FRAG: ModuleData = compile_frag! { "examples/gear/res/default.frag.glsl" }; */
-
-    pub type Pipeline = GraphicsPipeline<VertexData, (), ()>;
-    pub fn build(renderer: &gears::Renderer) -> Pipeline {
-        assert_type_eq_all!(<VertexData as Input>::FIELDS, VERT::INPUT);
-        // assert_type_eq_all!(<UniformData as Uniform>::FIELDS, VERT::UNIFORM);
-
-        PipelineBuilderBase::new(renderer)
-            .vertex(VERT::SPIRV)
-            .fragment(FRAG::SPIRV)
-            .build()
-    }
-
-    /* pub fn build_legacy(renderer: &gears::Renderer) -> gears::Pipeline {
-        gears::PipelineBuilder::new(renderer)
-            .with_graphics_modules(VERT::SPIRV, FRAG::SPIRV)
-            .with_input::<VertexData>()
-            .with_ubo::<UniformData>()
-            .build(false)
-            .unwrap()
-    } */
-
-    /* pub const SHADER: ShaderData = pipeline! {
+    /*
+    pub const SHADER: ShaderData = pipeline! {
         in VertexData
 
         mod VERT_SPIRV {
@@ -112,14 +52,20 @@ mod shader {
         }
 
         mod FRAG_SPIRV
-    }; */
+    }; TODO: generates: bellow
+    */
 
-    /* gears_pipeline::pipeline! {
-        vert: { path: "gear/res/default.vert.glsl" }
-        frag: { path: "gear/res/default.frag.glsl" }
+    pub type Pipeline = GraphicsPipeline<VertexData, UniformData, ()>;
+    pub fn build(renderer: &gears::Renderer) -> Pipeline {
+        assert_type_eq_all!(<VertexData as Input>::FIELDS, VERT::INPUT);
+        assert_type_eq_all!(<UniformData as Uniform>::FIELDS, VERT::UNIFORM);
 
-        builders
-    } */
+        PipelineBuilderBase::new(renderer)
+            .vertex_uniform(VERT::SPIRV, UniformData::default())
+            .fragment(FRAG::SPIRV)
+            .build()
+            .unwrap()
+    }
 }
 
 const MAX_VBO_LEN: usize = 50_000;
@@ -242,14 +188,11 @@ impl RendererRecord for App {
             light_dir: Vec3::new(0.2, 2.0, 0.5).normalize(),
         };
 
-        /* self.shader.write_ubo(imfi, &ubo).unwrap(); */
+        self.shader.write_vertex_uniform(imfi, &ubo).unwrap();
     }
 
     fn update(&self, uri: &UpdateRecordInfo) -> bool {
-        unsafe {
-            /* self.shader.update(uri) || */
-            self.vb.update(uri)
-        }
+        unsafe { self.shader.update(uri) || self.vb.update(uri) }
     }
 
     fn record(&self, rri: &RenderRecordInfo) {

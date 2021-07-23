@@ -1,8 +1,7 @@
 use ash::vk;
-use std::sync::Arc;
 
 use super::{stage::StageBuffer, Buffer, BufferError, WriteType};
-use crate::renderer::{device::RenderDevice, Renderer, UpdateRecordInfo};
+use crate::renderer::{device::Dev, Renderer, UpdateRecordInfo};
 
 pub struct UniformBuffer<T> {
     stage: StageBuffer<T>, // the uniform buffer itself
@@ -19,7 +18,7 @@ impl<T> UniformBuffer<T> {
         Ok(buffer)
     }
 
-    pub fn new_with_device(device: Arc<RenderDevice>) -> Result<Self, BufferError> {
+    pub fn new_with_device(device: Dev) -> Result<Self, BufferError> {
         Ok(Self {
             stage: StageBuffer::new_with_usage(
                 device.clone(),
