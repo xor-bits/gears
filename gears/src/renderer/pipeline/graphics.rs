@@ -28,14 +28,14 @@ where
     _p4: PhantomData<UfFrag>,
 }
 
-struct UBOModule<Uf>(Option<Vec<RwLock<UniformBuffer<Uf>>>>);
+struct UBOModule<Uf>(Option<(Vec<RwLock<UniformBuffer<Uf>>>, u32)>);
 
 impl<Uf> UBOModule<Uf> {
     fn write(&self, imfi: &ImmediateFrameInfo, data: &Uf) -> Result<WriteType, BufferError> {
         let ubo = self
             .0
             .as_ref()
-            .map(|v| v.get(imfi.image_index))
+            .map(|(v, _)| v.get(imfi.image_index))
             .flatten()
             .unwrap();
 
@@ -46,7 +46,7 @@ impl<Uf> UBOModule<Uf> {
         let ubo = self
             .0
             .as_ref()
-            .map(|sets| sets.get(uri.image_index))
+            .map(|(sets, _)| sets.get(uri.image_index))
             .flatten();
         if let Some(ubo) = ubo {
             ubo.read().update(uri)
@@ -298,6 +298,14 @@ where
         }
     }
 
+    pub unsafe fn draw(&self, count: u32, rri: &RenderRecordInfo) {
+        if rri.debug_calls {
+            debug!("cmd_bind_pipeline");
+        }
+
+        self.device.cmd_draw(rri.command_buffer, count, 1, 0, 0);
+    }
+
     fn get_ubos(
         device: &Dev,
         set_count: usize,
@@ -312,33 +320,37 @@ where
             count: 0,
         };
 
-        if vert.uniform.is_some() {
-            target.vert.0 = Some(
+        if let Some((_, binding)) = vert.uniform {
+            target.vert.0 = Some((
                 (0..set_count)
                     .map(|_| Ok(RwLock::new(UniformBuffer::new_with_device(device.clone())?)))
                     .collect::<Result<_, _>>()?,
-            );
+                binding,
+            ));
             target.count += 1;
         }
         match geom {
             Some(Module {
-                uniform: Some(_), ..
+                uniform: Some((_, binding)),
+                ..
             }) => {
-                target.geom.0 = Some(
+                target.geom.0 = Some((
                     (0..set_count)
                         .map(|_| Ok(RwLock::new(UniformBuffer::new_with_device(device.clone())?)))
                         .collect::<Result<_, _>>()?,
-                );
+                    *binding,
+                ));
                 target.count += 1;
             }
             _ => {}
         }
-        if frag.uniform.is_some() {
-            target.frag.0 = Some(
+        if let Some((_, binding)) = frag.uniform {
+            target.frag.0 = Some((
                 (0..set_count)
                     .map(|_| Ok(RwLock::new(UniformBuffer::new_with_device(device.clone())?)))
                     .collect::<Result<_, _>>()?,
-            );
+                binding,
+            ));
             target.count += 1;
         }
 
@@ -354,25 +366,25 @@ where
         }; */
 
         let mut vec = Vec::new();
-        if ubos.vert.0.is_some() {
+        if let Some((_, binding)) = ubos.vert.0 {
             vec.push(
                 vk::DescriptorSetLayoutBinding::builder()
-                    .binding(0)
+                    .binding(binding)
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                     .descriptor_count(1)
                     .stage_flags(vk::ShaderStageFlags::VERTEX)
                     .build(),
-            )
+            );
         }
-        if ubos.frag.0.is_some() {
+        if let Some((_, binding)) = ubos.frag.0 {
             vec.push(
                 vk::DescriptorSetLayoutBinding::builder()
-                    .binding(0)
+                    .binding(binding)
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                     .descriptor_count(1)
                     .stage_flags(vk::ShaderStageFlags::FRAGMENT)
                     .build(),
-            )
+            );
         }
 
         vec
@@ -445,34 +457,24 @@ where
             .collect()
     }
 
-    fn write_descriptor_sets(
+    fn write_descriptor_sets_for_ubo<Uf>(
         device: &Dev,
         desc_sets: &[vk::DescriptorSet],
-        ubos: &GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag>,
+        ubo: &Vec<RwLock<UniformBuffer<Uf>>>,
+        binding: u32,
     ) {
-        let buf = ubos
-            .vert
-            .0
-            .as_ref()
-            .map(|v| v.first().unwrap().read().get())
-            .unwrap_or_else(|| {
-                ubos.frag
-                    .0
-                    .as_ref()
-                    .map(|v| v.first().unwrap().read().get())
-                    .unwrap()
-            });
+        for (&desc_set, ubo) in desc_sets.iter().zip(ubo.iter()) {
+            let buffer = ubo.read().get();
 
-        for &desc_set in desc_sets {
             let buffer_info = [vk::DescriptorBufferInfo::builder()
                 .offset(0)
                 .range(vk::WHOLE_SIZE)
-                .buffer(buf)
+                .buffer(buffer)
                 .build()];
 
             let write_set = [vk::WriteDescriptorSet::builder()
                 .dst_array_element(0)
-                .dst_binding(0)
+                .dst_binding(binding)
                 .dst_set(desc_set)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                 .buffer_info(&buffer_info)
@@ -481,6 +483,22 @@ where
             let copy_set = [];
 
             unsafe { device.update_descriptor_sets(&write_set, &copy_set) };
+        }
+    }
+
+    fn write_descriptor_sets(
+        device: &Dev,
+        desc_sets: &[vk::DescriptorSet],
+        ubos: &GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag>,
+    ) {
+        if let Some((buf, binding)) = ubos.vert.0.as_ref() {
+            Self::write_descriptor_sets_for_ubo(device, desc_sets, buf, *binding);
+        }
+        if let Some((buf, binding)) = ubos.geom.0.as_ref() {
+            Self::write_descriptor_sets_for_ubo(device, desc_sets, buf, *binding);
+        }
+        if let Some((buf, binding)) = ubos.frag.0.as_ref() {
+            Self::write_descriptor_sets_for_ubo(device, desc_sets, buf, *binding);
         }
     }
 }

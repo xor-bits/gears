@@ -3,7 +3,7 @@ use proc_macro2::{Ident, TokenStream, TokenTree};
 use quote::quote;
 use shaderc::ShaderKind;
 use std::{collections::HashMap};
-use syn::{parse::Parse, parse_macro_input, Error, LitStr, Token};
+use syn::{Error, LitInt, LitStr, Token, parse::Parse, parse_macro_input};
 
 struct PipelineIO {
 	
@@ -49,6 +49,8 @@ impl Parse for PipelineModule {
 struct PipelineUniform {
     _in_token: Token![in],
     in_struct: Ident,
+    _as_token: Token![as],
+    in_binding: LitInt,
 }
 
 impl Parse for PipelineUniform {
@@ -59,6 +61,8 @@ impl Parse for PipelineUniform {
         Ok(Self {
             _in_token: content.parse()?,
             in_struct: content.parse()?,
+            _as_token: content.parse()?,
+            in_binding: content.parse()?,
         })
     }
 }
@@ -187,7 +191,7 @@ impl PipelineInput {
         }
     }
 
-    fn get_module(module: &PipelineModule) -> (TokenStream, TokenStream, Ident, bool) {
+    fn get_module(module: &PipelineModule) -> (TokenStream, TokenStream, Ident, Option<u32>) {
         let module_name = Ident::new(
             module.module_name.value().as_str(),
             module.module_name.span(),
@@ -197,11 +201,11 @@ impl PipelineInput {
             Self::get_uniform_tokens(module),
             Self::get_uniform_assert_tokens(module, &module_name),
             module_name,
-			module.uniforms.is_some()
+			module.uniforms.as_ref().map(|u| u.in_module.in_binding.base10_digits().parse::<u32>().expect("Binding must be u32"))
         )
     }
 
-    fn get_module2(module: Option<&PipelineModule>) -> (TokenStream, TokenStream, Option<(Ident, bool)>) {
+    fn get_module2(module: Option<&PipelineModule>) -> (TokenStream, TokenStream, Option<(Ident, Option<u32>)>) {
         match module {
             Some(module) => {
 				let get_module = Self::get_module(module);
@@ -224,17 +228,17 @@ impl PipelineInput {
 		};
 
 		// mandatory modules
-        let (vert_uniform, vert_uniform_assert, vert, vert_has_uniform) = Self::get_module(&self.vertex);
-        let (frag_uniform, frag_uniform_assert, frag, frag_has_uniform) = Self::get_module(&self.fragment);
+        let (vert_uniform, vert_uniform_assert, vert, vert_uniform_binding) = Self::get_module(&self.vertex);
+        let (frag_uniform, frag_uniform_assert, frag, frag_uniform_binding) = Self::get_module(&self.fragment);
 		
-		let vert_call = if vert_has_uniform {
-			quote! { .vertex_uniform(#vert #load_spirv, #vert_uniform::default()) }
+		let vert_call = if let Some(binding) = vert_uniform_binding {
+			quote! { .vertex_uniform(#vert #load_spirv, #vert_uniform::default(), #binding) }
 		} else {
 			quote! { .vertex(#vert #load_spirv) }
 		};
 		
-		let frag_call = if frag_has_uniform {
-			quote! { .fragment_uniform(#frag #load_spirv, #frag_uniform::default()) }
+		let frag_call = if let Some(binding) = frag_uniform_binding {
+			quote! { .fragment_uniform(#frag #load_spirv, #frag_uniform::default(), #binding) }
 		} else {
 			quote! { .fragment(#frag #load_spirv) }
 		};
@@ -243,10 +247,10 @@ impl PipelineInput {
         let (geom_uniform, geom_uniform_assert, geom) = Self::get_module2(self.modules.get(&(ShaderKind::Geometry as usize)));
 
 		let geom_call = match &geom {
-			Some((geom, true)) => {
-				quote! { .geometry_uniform(#geom #load_spirv, #geom_uniform::default()) }
+			Some((geom, Some(binding))) => {
+				quote! { .geometry_uniform(#geom #load_spirv, #geom_uniform::default(), #binding) }
 			}
-			Some((geom, false)) => {
+			Some((geom, None)) => {
 				quote! { .geometry(#geom #load_spirv) }
 			}
 			None => quote! {}

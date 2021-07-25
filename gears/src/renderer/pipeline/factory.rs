@@ -169,9 +169,10 @@ where
         self,
         spirv: Cow<'a, [u8]>,
         initial_uniform_data: NewUfVert,
+        binding: u32,
     ) -> GPipelineBuilder<'a, In, Out, NewUfVert, UfGeom, UfFrag, true, GEOM, FRAG> {
         GPipelineBuilder {
-            vert: Module::with(spirv, initial_uniform_data),
+            vert: Module::with(spirv, initial_uniform_data, binding),
             geom: self.geom,
             frag: self.frag,
 
@@ -195,9 +196,10 @@ impl PipelineBuilder {
         self,
         spirv: Cow<'a, [u8]>,
         initial_uniform_data: UfVert,
+        binding: u32,
     ) -> GPipelineBuilder<'a, (), (), UfVert, (), (), true, false, false> {
         self.graphics_builder()
-            .vertex_uniform(spirv, initial_uniform_data)
+            .vertex_uniform(spirv, initial_uniform_data, binding)
     }
 }
 
@@ -229,11 +231,12 @@ where
         self,
         spirv: Cow<'a, [u8]>,
         initial_uniform_data: NewUfFrag,
+        binding: u32,
     ) -> GPipelineBuilder<'a, In, Out, UfVert, UfGeom, NewUfFrag, VERT, GEOM, true> {
         GPipelineBuilder {
             vert: self.vert,
             geom: self.geom,
-            frag: Module::with(spirv, initial_uniform_data),
+            frag: Module::with(spirv, initial_uniform_data, binding),
 
             base: self.base,
 
@@ -255,9 +258,10 @@ impl PipelineBuilder {
         self,
         spirv: Cow<'a, [u8]>,
         initial_uniform_data: UfFrag,
+        binding: u32,
     ) -> GPipelineBuilder<'a, (), (), (), (), UfFrag, false, false, true> {
         self.graphics_builder()
-            .fragment_uniform(spirv, initial_uniform_data)
+            .fragment_uniform(spirv, initial_uniform_data, binding)
     }
 }
 
@@ -289,10 +293,11 @@ where
         self,
         spirv: Cow<'a, [u8]>,
         initial_uniform_data: NewUfGeom,
+        binding: u32,
     ) -> GPipelineBuilder<'a, In, Out, UfVert, NewUfGeom, UfFrag, VERT, true, FRAG> {
         GPipelineBuilder {
             vert: self.vert,
-            geom: Some(Module::with(spirv, initial_uniform_data)),
+            geom: Some(Module::with(spirv, initial_uniform_data, binding)),
             frag: self.frag,
 
             base: self.base,
@@ -315,9 +320,10 @@ impl PipelineBuilder {
         self,
         spirv: Cow<'a, [u8]>,
         initial_uniform_data: UfGeom,
+        binding: u32,
     ) -> GPipelineBuilder<'a, (), (), (), UfGeom, (), false, true, false> {
         self.graphics_builder()
-            .geometry_uniform(spirv, initial_uniform_data)
+            .geometry_uniform(spirv, initial_uniform_data, binding)
     }
 }
 

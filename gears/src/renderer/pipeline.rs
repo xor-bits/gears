@@ -115,7 +115,7 @@ impl Output for RGBAOutput {
 
 pub struct Module<'a, Uf> {
     pub spirv: Cow<'a, [u8]>,
-    pub uniform: Option<Uf>,
+    pub uniform: Option<(Uf, u32)>,
 }
 
 impl<'a, Uf> Module<'a, Uf> {
@@ -133,10 +133,10 @@ impl<'a, Uf> Module<'a, Uf> {
         }
     }
 
-    pub const fn with(spirv: Cow<'a, [u8]>, initial_uniform_data: Uf) -> Self {
+    pub const fn with(spirv: Cow<'a, [u8]>, initial_uniform_data: Uf, binding: u32) -> Self {
         Self {
             spirv,
-            uniform: Some(initial_uniform_data),
+            uniform: Some((initial_uniform_data, binding)),
         }
     }
 }

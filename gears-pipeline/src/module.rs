@@ -192,7 +192,7 @@ fn make_module(
 
     quote! {
         pub mod #name {
-            use gears::glam::{Vec2, Vec3, Vec4, Mat2, Mat3, Mat4};
+            use gears::glam::{Vec2, Vec3, Vec4, DVec2, DVec3, DVec4, Mat2, Mat3, Mat4, DMat2, DMat3, DMat4};
 
             #load_spirv
 

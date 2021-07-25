@@ -221,12 +221,19 @@ impl Parse for UniformLayoutField {
 #[derive(Debug, PartialEq, Eq)]
 pub enum FieldType {
     Float,
+    Double,
     Vec2,
     Vec3,
     Vec4,
+    DVec2,
+    DVec3,
+    DVec4,
     Mat2,
     Mat3,
     Mat4,
+    DMat2,
+    DMat3,
+    DMat4,
     Int,
     Uint,
 }
@@ -235,12 +242,19 @@ impl FieldType {
     pub fn to_ident(&self) -> Ident {
         match self {
             &FieldType::Float => Ident::new("f32", Span::call_site()),
+            &FieldType::Double => Ident::new("f64", Span::call_site()),
             &FieldType::Vec2 => Ident::new("Vec2", Span::call_site()),
             &FieldType::Vec3 => Ident::new("Vec3", Span::call_site()),
             &FieldType::Vec4 => Ident::new("Vec4", Span::call_site()),
+            &FieldType::DVec2 => Ident::new("DVec2", Span::call_site()),
+            &FieldType::DVec3 => Ident::new("DVec3", Span::call_site()),
+            &FieldType::DVec4 => Ident::new("DVec4", Span::call_site()),
             &FieldType::Mat2 => Ident::new("Mat2", Span::call_site()),
             &FieldType::Mat3 => Ident::new("Mat3", Span::call_site()),
             &FieldType::Mat4 => Ident::new("Mat4", Span::call_site()),
+            &FieldType::DMat2 => Ident::new("DMat2", Span::call_site()),
+            &FieldType::DMat3 => Ident::new("DMat3", Span::call_site()),
+            &FieldType::DMat4 => Ident::new("DMat4", Span::call_site()),
             &FieldType::Int => Ident::new("i32", Span::call_site()),
             &FieldType::Uint => Ident::new("u32", Span::call_site()),
         }
@@ -252,12 +266,16 @@ impl Parse for FieldType {
         let token = input.parse::<Ident>()?;
         match token.to_string().as_str() {
             "float" => Ok(Self::Float),
+            "double" => Ok(Self::Double),
             "vec2" => Ok(Self::Vec2),
             "vec3" => Ok(Self::Vec3),
             "vec4" => Ok(Self::Vec4),
-            "mat2" => Ok(Self::Mat2),
-            "mat3" => Ok(Self::Mat3),
-            "mat4" => Ok(Self::Mat4),
+            "dvec2" => Ok(Self::DVec2),
+            "dvec3" => Ok(Self::DVec3),
+            "dvec4" => Ok(Self::DVec4),
+            "dmat2" => Ok(Self::DMat2),
+            "dmat3" => Ok(Self::DMat3),
+            "dmat4" => Ok(Self::DMat4),
             "int" => Ok(Self::Int),
             "uint" => Ok(Self::Uint),
             other => Err(Error::new(
@@ -272,12 +290,19 @@ impl ToTokens for FieldType {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         let res = match self {
             &FieldType::Float => quote! { gears::gears_spirv::parse::FieldType::Float },
+            &FieldType::Double => quote! { gears::gears_spirv::parse::FieldType::Double },
             &FieldType::Vec2 => quote! { gears::gears_spirv::parse::FieldType::Vec2 },
             &FieldType::Vec3 => quote! { gears::gears_spirv::parse::FieldType::Vec3 },
             &FieldType::Vec4 => quote! { gears::gears_spirv::parse::FieldType::Vec4 },
+            &FieldType::DVec2 => quote! { gears::gears_spirv::parse::FieldType::DVec2 },
+            &FieldType::DVec3 => quote! { gears::gears_spirv::parse::FieldType::DVec3 },
+            &FieldType::DVec4 => quote! { gears::gears_spirv::parse::FieldType::DVec4 },
             &FieldType::Mat2 => quote! { gears::gears_spirv::parse::FieldType::Mat2 },
             &FieldType::Mat3 => quote! { gears::gears_spirv::parse::FieldType::Mat3 },
             &FieldType::Mat4 => quote! { gears::gears_spirv::parse::FieldType::Mat4 },
+            &FieldType::DMat2 => quote! { gears::gears_spirv::parse::FieldType::DMat2 },
+            &FieldType::DMat3 => quote! { gears::gears_spirv::parse::FieldType::DMat3 },
+            &FieldType::DMat4 => quote! { gears::gears_spirv::parse::FieldType::DMat4 },
             &FieldType::Int => quote! { gears::gears_spirv::parse::FieldType::Int },
             &FieldType::Uint => quote! { gears::gears_spirv::parse::FieldType::Uint },
         };

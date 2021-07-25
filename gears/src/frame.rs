@@ -65,6 +65,10 @@ impl Frame {
         }
     }
 
+    pub fn scale(&self) -> f64 {
+        self.window.scale_factor()
+    }
+
     pub fn window(&self) -> &Window {
         &self.window
     }
