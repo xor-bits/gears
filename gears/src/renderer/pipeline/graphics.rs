@@ -80,9 +80,9 @@ where
         // modules
 
         let (vert_module, vert_stage) =
-            shader_module(&device, vert.spirv, vk::ShaderStageFlags::VERTEX);
+            shader_module(&device, &vert.spirv, vk::ShaderStageFlags::VERTEX);
         let (frag_module, frag_stage) =
-            shader_module(&device, frag.spirv, vk::ShaderStageFlags::FRAGMENT);
+            shader_module(&device, &frag.spirv, vk::ShaderStageFlags::FRAGMENT);
         let mut shader_stages = vec![vert_stage, frag_stage];
         let mut shader_modules = vec![vert_module, frag_module];
 
@@ -90,7 +90,7 @@ where
 
         if let Some(geom) = geom.as_ref() {
             let (geom_module, geom_stage) =
-                shader_module(&device, geom.spirv, vk::ShaderStageFlags::GEOMETRY);
+                shader_module(&device, &geom.spirv, vk::ShaderStageFlags::GEOMETRY);
             shader_stages.push(geom_stage);
             shader_modules.push(geom_module);
         }

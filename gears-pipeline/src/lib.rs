@@ -1,7 +1,6 @@
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, DeriveInput};
 
-mod compiler;
 mod derive;
 mod module;
 mod pipeline;
@@ -18,16 +17,16 @@ pub fn shader(_input: TokenStream) -> TokenStream {
 /// ```no_run
 /// pub struct Pipeline(pub gears::renderer::pipeline::GraphicsPipeline<(), (), i32, (), ()>);
 /// impl Pipeline {
-/// 	pub fn build(renderer: &gears::renderer::Renderer) -> Result<Self, gears::renderer::buffer::BufferError> {
+/// 	pub fn build(renderer: &gears::renderer::Renderer) -> Result<Self, gears::renderer::pipeline::PipelineError> {
 ///			// validations filled in
 ///			// like: gears::static_assertions::assert_type_eq_all!()
 ///			Ok(Self {
 ///				0: gears::renderer::pipeline::factory::Pipeline::builder()
-///					.vertex_uniform(&[], 32)
-///					.fragment(&[])
+///					.vertex_uniform(VERT::load_spirv().map_err(|err| gears::renderer::pipeline::PipelineError::CompileError(err))?, 32)
+///					.fragment(FRAG::load_spirv().map_err(|err| gears::renderer::pipeline::PipelineError::CompileError(err))?)
 ///					.input::<()>()
 ///					.output::<()>()
-///					.build(renderer)?
+///					.build(renderer).map_err(|err| gears::renderer::pipeline::PipelineError::BufferError(err))?
 ///			})
 /// 	}
 /// }
@@ -78,9 +77,15 @@ pub fn pipeline(input: TokenStream) -> TokenStream {
 /// pub mod MODULE {
 ///     // these values are just examples
 ///
+///     // const fn spirv loader for compile time shaders
+///     // and non-const fn spirv loader for runtime shaders
+///     pub const fn load_spirv() -> Result<std::borrow::Cow<'static, [u8]>, String> { ... }
+///
 ///     // include_str!() macro to trick cargo to recompile
 ///     // this source file if the shader source file got
 ///     // modified since the last build
+///     // for runtime modules, this is the source for the
+///     // runtime validator
 ///     pub const SOURCE: &'static str = "the source code";
 ///
 ///     // SPIRV byte-code for Vulkan (or OpenGL or whatever)
@@ -136,6 +141,16 @@ pub fn pipeline(input: TokenStream) -> TokenStream {
 /// can be used multiple times
 ///
 /// example: `define = "CONSTANT=3.0"` or `define = "ENABLE"`
+///
+/// ### `runtime`
+/// tells the shader module to use `path` for validation
+/// and to compile spirv at runtime from a file provided
+/// by the function passed to `runtime`
+///
+/// the function signature is as follows:
+/// fn reader(name: &'static str) -> (String, Option<PathBuf>);
+///
+/// example: `runtime = "fn_to_read_glsl"`
 #[proc_macro]
 pub fn module(input: TokenStream) -> TokenStream {
     module::module(input)

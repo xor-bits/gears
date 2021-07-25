@@ -19,6 +19,9 @@ pub use loops::*;
 #[cfg(feature = "short_namespaces")]
 pub use renderer::*;
 
+#[cfg(feature = "runtime_shaders")]
+pub use gears_spirv;
+
 pub use ash::vk;
 pub use gears_pipeline::*;
 pub use glam;

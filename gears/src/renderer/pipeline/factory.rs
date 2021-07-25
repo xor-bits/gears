@@ -1,5 +1,5 @@
 use crate::{BufferError, GraphicsPipeline, Input, Module, Output, Renderer};
-use std::marker::PhantomData;
+use std::{borrow::Cow, marker::PhantomData};
 
 // pipeline
 
@@ -151,7 +151,7 @@ where
 {
     pub fn vertex(
         self,
-        spirv: &'a [u8],
+        spirv: Cow<'a, [u8]>,
     ) -> GPipelineBuilder<'a, In, Out, UfVert, UfGeom, UfFrag, true, GEOM, FRAG> {
         GPipelineBuilder {
             vert: Module::new(spirv),
@@ -167,7 +167,7 @@ where
 
     pub fn vertex_uniform<NewUfVert>(
         self,
-        spirv: &'a [u8],
+        spirv: Cow<'a, [u8]>,
         initial_uniform_data: NewUfVert,
     ) -> GPipelineBuilder<'a, In, Out, NewUfVert, UfGeom, UfFrag, true, GEOM, FRAG> {
         GPipelineBuilder {
@@ -186,14 +186,14 @@ where
 impl PipelineBuilder {
     pub fn vertex<'a>(
         self,
-        spirv: &'a [u8],
+        spirv: Cow<'a, [u8]>,
     ) -> GPipelineBuilder<'a, (), (), (), (), (), true, false, false> {
         self.graphics_builder().vertex(spirv)
     }
 
     pub fn vertex_uniform<'a, UfVert>(
         self,
-        spirv: &'a [u8],
+        spirv: Cow<'a, [u8]>,
         initial_uniform_data: UfVert,
     ) -> GPipelineBuilder<'a, (), (), UfVert, (), (), true, false, false> {
         self.graphics_builder()
@@ -211,7 +211,7 @@ where
 {
     pub fn fragment(
         self,
-        spirv: &'a [u8],
+        spirv: Cow<'a, [u8]>,
     ) -> GPipelineBuilder<'a, In, Out, UfVert, UfGeom, UfFrag, VERT, GEOM, true> {
         GPipelineBuilder {
             vert: self.vert,
@@ -227,7 +227,7 @@ where
 
     pub fn fragment_uniform<NewUfFrag>(
         self,
-        spirv: &'a [u8],
+        spirv: Cow<'a, [u8]>,
         initial_uniform_data: NewUfFrag,
     ) -> GPipelineBuilder<'a, In, Out, UfVert, UfGeom, NewUfFrag, VERT, GEOM, true> {
         GPipelineBuilder {
@@ -246,14 +246,14 @@ where
 impl PipelineBuilder {
     pub fn fragment<'a>(
         self,
-        spirv: &'a [u8],
+        spirv: Cow<'a, [u8]>,
     ) -> GPipelineBuilder<'a, (), (), (), (), (), false, false, true> {
         self.graphics_builder().fragment(spirv)
     }
 
     pub fn fragment_uniform<'a, UfFrag>(
         self,
-        spirv: &'a [u8],
+        spirv: Cow<'a, [u8]>,
         initial_uniform_data: UfFrag,
     ) -> GPipelineBuilder<'a, (), (), (), (), UfFrag, false, false, true> {
         self.graphics_builder()
@@ -271,7 +271,7 @@ where
 {
     pub fn geometry(
         self,
-        spirv: &'a [u8],
+        spirv: Cow<'a, [u8]>,
     ) -> GPipelineBuilder<'a, In, Out, UfVert, UfGeom, UfFrag, VERT, true, FRAG> {
         GPipelineBuilder {
             vert: self.vert,
@@ -287,7 +287,7 @@ where
 
     pub fn geometry_uniform<NewUfGeom>(
         self,
-        spirv: &'a [u8],
+        spirv: Cow<'a, [u8]>,
         initial_uniform_data: NewUfGeom,
     ) -> GPipelineBuilder<'a, In, Out, UfVert, NewUfGeom, UfFrag, VERT, true, FRAG> {
         GPipelineBuilder {
@@ -306,14 +306,14 @@ where
 impl PipelineBuilder {
     pub fn geometry<'a>(
         self,
-        spirv: &'a [u8],
+        spirv: Cow<'a, [u8]>,
     ) -> GPipelineBuilder<'a, (), (), (), (), (), false, true, false> {
         self.graphics_builder().geometry(spirv)
     }
 
     pub fn geometry_uniform<'a, UfGeom>(
         self,
-        spirv: &'a [u8],
+        spirv: Cow<'a, [u8]>,
         initial_uniform_data: UfGeom,
     ) -> GPipelineBuilder<'a, (), (), (), UfGeom, (), false, true, false> {
         self.graphics_builder()

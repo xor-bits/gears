@@ -1,4 +1,4 @@
-use crate::module::name_to_kind;
+use gears_spirv::parse::name_to_kind;
 use proc_macro2::{Ident, TokenStream, TokenTree};
 use quote::quote;
 use shaderc::ShaderKind;
@@ -216,20 +216,27 @@ impl PipelineInput {
         let input = self.input.in_struct;
         let output = self.input.out_struct;
 
+		let load_spirv = quote! {
+			::load_spirv()?
+		};
+		let wrap_err = quote! {
+			.map_err(|err| gears::renderer::pipeline::PipelineError::BufferError(err))?
+		};
+
 		// mandatory modules
         let (vert_uniform, vert_uniform_assert, vert, vert_has_uniform) = Self::get_module(&self.vertex);
         let (frag_uniform, frag_uniform_assert, frag, frag_has_uniform) = Self::get_module(&self.fragment);
 		
 		let vert_call = if vert_has_uniform {
-			quote! { .vertex_uniform(#vert::SPIRV, #vert_uniform::default()) }
+			quote! { .vertex_uniform(#vert #load_spirv, #vert_uniform::default()) }
 		} else {
-			quote! { .vertex(#vert::SPIRV) }
+			quote! { .vertex(#vert #load_spirv) }
 		};
 		
 		let frag_call = if frag_has_uniform {
-			quote! { .fragment_uniform(#frag::SPIRV, #frag_uniform::default()) }
+			quote! { .fragment_uniform(#frag #load_spirv, #frag_uniform::default()) }
 		} else {
-			quote! { .fragment(#frag::SPIRV) }
+			quote! { .fragment(#frag #load_spirv) }
 		};
 
 		// optional modules
@@ -237,10 +244,10 @@ impl PipelineInput {
 
 		let geom_call = match &geom {
 			Some((geom, true)) => {
-				quote! { .geometry_uniform(#geom::SPIRV, #geom_uniform::default()) }
+				quote! { .geometry_uniform(#geom #load_spirv, #geom_uniform::default()) }
 			}
 			Some((geom, false)) => {
-				quote! { .geometry(#geom::SPIRV) }
+				quote! { .geometry(#geom #load_spirv) }
 			}
 			None => quote! {}
 		};
@@ -276,7 +283,7 @@ impl PipelineInput {
         (quote! {
 			pub struct #name (#target_type);
             impl #name {
-				pub fn build(renderer: &gears::renderer::Renderer) -> Result<Self, gears::renderer::buffer::BufferError> {
+				pub fn build(renderer: &gears::renderer::Renderer) -> Result<Self, gears::renderer::pipeline::PipelineError> {
 					gears::static_assertions::assert_type_eq_all!(<#input as gears::renderer::pipeline::Input>::FIELDS, #vert::INPUT);
 					gears::static_assertions::assert_type_eq_all!(<#output as gears::renderer::pipeline::Output>::FIELDS, #frag::OUTPUT);
 					
@@ -293,7 +300,8 @@ impl PipelineInput {
 							#geom_call
 							.input::<#input>()
 							.output::<#output>()
-							.build(renderer)?
+							.build(renderer)
+							#wrap_err
 					})
 				}
             }

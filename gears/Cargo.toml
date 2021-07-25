@@ -12,6 +12,7 @@ license = "MIT"
 default = [ "short_namespaces" ]
 short_namespaces = []
 validation_panic = []
+runtime_shaders = [ "gears-spirv" ]
 
 [dependencies]
 log = "~0.4"
@@ -26,3 +27,7 @@ ash-window = "~0.6"
 raw-window-handle = "~0.3"
 static_assertions = "~1.1"
 gears-pipeline = { path = "../gears-pipeline" }
+
+[dependencies.gears-spirv]
+path = "../gears-spirv"
+optional = true

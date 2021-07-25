@@ -2,7 +2,7 @@ pub mod compute;
 pub mod factory;
 pub mod graphics;
 
-use std::{ffi::CStr, io::Cursor};
+use std::{borrow::Cow, ffi::CStr, fmt::Display, io::Cursor};
 
 #[cfg(feature = "short_namespaces")]
 pub use compute::*;
@@ -12,8 +12,29 @@ use glam::Vec4;
 #[cfg(feature = "short_namespaces")]
 pub use graphics::*;
 
+use crate::BufferError;
+
 use super::device::Dev;
 use ash::{util::read_spv, version::DeviceV1_0, vk};
+
+// pipeline error
+
+#[derive(Debug)]
+pub enum PipelineError {
+    BufferError(BufferError),
+    LayoutMismatch(String),
+    CompileError(String),
+}
+
+impl Display for PipelineError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PipelineError::BufferError(err) => write!(f, "BufferError: {:?}", err),
+            PipelineError::LayoutMismatch(err) => write!(f, "LayoutMismatch: {}", err),
+            PipelineError::CompileError(err) => write!(f, "CompileError: {}", err),
+        }
+    }
+}
 
 // todo: runtime shader
 
@@ -93,26 +114,26 @@ impl Output for RGBAOutput {
 // shader builder
 
 pub struct Module<'a, Uf> {
-    pub spirv: &'a [u8],
+    pub spirv: Cow<'a, [u8]>,
     pub uniform: Option<Uf>,
 }
 
 impl<'a, Uf> Module<'a, Uf> {
     pub const fn none() -> Self {
         Self {
-            spirv: &[],
+            spirv: Cow::Borrowed(&[]),
             uniform: None,
         }
     }
 
-    pub const fn new(spirv: &'a [u8]) -> Self {
+    pub const fn new(spirv: Cow<'a, [u8]>) -> Self {
         Self {
             spirv,
             uniform: None,
         }
     }
 
-    pub const fn with(spirv: &'a [u8], initial_uniform_data: Uf) -> Self {
+    pub const fn with(spirv: Cow<'a, [u8]>, initial_uniform_data: Uf) -> Self {
         Self {
             spirv,
             uniform: Some(initial_uniform_data),
