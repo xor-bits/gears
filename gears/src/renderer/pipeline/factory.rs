@@ -1,90 +1,368 @@
-use crate::{
-    BufferError, ComputePipeline, GraphicsPipeline, Module, PipelineBuilderBase, Renderer,
-};
-use ash::vk;
+use crate::{BufferError, GraphicsPipeline, Input, Module, Output, Renderer};
 use std::marker::PhantomData;
 
-// TODO: remove
-pub trait UBOo {
-    const STAGE: vk::ShaderStageFlags;
-}
+// pipeline
 
-// TODO: remove
-pub trait Vertexo /* <const N: usize> */ {
-    // const generics not yet stable
-    fn binding_desc() -> Vec<vk::VertexInputBindingDescription>;
-    fn attribute_desc() -> Vec<vk::VertexInputAttributeDescription>;
-}
+pub struct Pipeline {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModuleInput {
-    Float,
-    Vec2,
-    Vec3,
-    Vec4,
-
-    Mat2,
-    Mat3,
-    Mat4,
-
-    Int,
-    UInt,
-}
-
-/* pub enum ModuleOutput {
-    Float,
-    Vec2,
-    Vec3,
-    Vec4,
-} */
-
-#[derive(Debug, Clone, Copy)]
-pub struct ModuleData {
-    pub source: &'static str,
-    pub spirv: &'static [u8],
-    pub inputs: &'static [ModuleInput],
-    pub uniforms: &'static [ModuleInput],
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ShaderData {}
-
-pub trait Input {
-    type FIELDS;
-    const BINDING_DESCRIPTION: &'static [vk::VertexInputBindingDescription];
-    const ATTRIBUTE_DESCRIPTION: &'static [vk::VertexInputAttributeDescription];
-}
-
-/* pub trait Output {
-    fn output_info() -> &'static [ModuleInput];
-} */
-
-pub trait Uniform {
-    type FIELDS;
-    const IS_EMPTY: bool = false;
-}
-
-impl Uniform for () {
-    type FIELDS = ();
-    const IS_EMPTY: bool = true;
+impl Pipeline {
+    pub const fn builder() -> PipelineBuilder {
+        PipelineBuilder {}
+    }
 }
 
 // pipeline builder
 
-pub struct VertexPipelineBuilder<'a, I: Input, Uf> {
+pub struct PipelineBuilder {}
+
+impl PipelineBuilder {
+    fn graphics_builder<'a>(self) -> GPipelineBuilder<'a, (), (), (), (), (), false, false, false> {
+        GPipelineBuilder::<'a, (), (), (), (), (), false, false, false>::new(self)
+    }
+}
+
+// graphics pipeline builder
+
+pub struct GPipelineBuilder<
+    'a,
+    In,
+    Out,
+    UfVert,
+    UfGeom,
+    UfFrag,
+    const VERT: bool,
+    const GEOM: bool,
+    const FRAG: bool,
+> where
+    In: Input,
+    Out: Output,
+{
+    vert: Module<'a, UfVert>,
+    geom: Option<Module<'a, UfGeom>>,
+    frag: Module<'a, UfFrag>,
+
+    base: PipelineBuilder,
+
+    _p0: PhantomData<In>,
+    _p1: PhantomData<Out>,
+}
+
+impl<'a, In, Out, UfVert, UfGeom, UfFrag, const VERT: bool, const GEOM: bool, const FRAG: bool>
+    GPipelineBuilder<'a, In, Out, UfVert, UfGeom, UfFrag, VERT, GEOM, FRAG>
+where
+    In: Input,
+    Out: Output,
+{
+    pub fn new(
+        base: PipelineBuilder,
+    ) -> GPipelineBuilder<'a, (), (), (), (), (), false, false, false> {
+        GPipelineBuilder {
+            vert: Module::none(),
+            geom: None,
+            frag: Module::none(),
+
+            base,
+
+            _p0: PhantomData {},
+            _p1: PhantomData {},
+        }
+    }
+}
+
+impl<'a, In, Out, UfVert, UfGeom, UfFrag, const GEOM: bool>
+    GPipelineBuilder<'a, In, Out, UfVert, UfGeom, UfFrag, true, GEOM, true>
+where
+    In: Input,
+    Out: Output,
+{
+    pub fn build(
+        self,
+        renderer: &Renderer,
+    ) -> Result<GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>, BufferError> {
+        GraphicsPipeline::new(
+            renderer.rdevice.clone(),
+            renderer.data.read().swapchain_objects.read().render_pass,
+            renderer.data.read().render_objects.len(),
+            self.vert,
+            self.geom,
+            self.frag,
+            false,
+        )
+    }
+}
+
+// graphics pipeline io
+
+impl<'a, Out, UfVert, UfGeom, UfFrag, const VERT: bool, const GEOM: bool, const FRAG: bool>
+    GPipelineBuilder<'a, (), Out, UfVert, UfGeom, UfFrag, VERT, GEOM, FRAG>
+where
+    Out: Output,
+{
+    pub fn input<In>(
+        self,
+    ) -> GPipelineBuilder<'a, In, Out, UfVert, UfGeom, UfFrag, VERT, GEOM, FRAG>
+    where
+        In: Input,
+    {
+        GPipelineBuilder {
+            vert: self.vert,
+            geom: self.geom,
+            frag: self.frag,
+
+            base: self.base,
+
+            _p0: PhantomData {},
+            _p1: self._p1,
+        }
+    }
+}
+
+impl<'a, In, UfVert, UfGeom, UfFrag, const VERT: bool, const GEOM: bool, const FRAG: bool>
+    GPipelineBuilder<'a, In, (), UfVert, UfGeom, UfFrag, VERT, GEOM, FRAG>
+where
+    In: Input,
+{
+    pub fn output<Out>(
+        self,
+    ) -> GPipelineBuilder<'a, In, Out, UfVert, UfGeom, UfFrag, VERT, GEOM, FRAG>
+    where
+        Out: Output,
+    {
+        GPipelineBuilder {
+            vert: self.vert,
+            geom: self.geom,
+            frag: self.frag,
+
+            base: self.base,
+
+            _p0: self._p0,
+            _p1: PhantomData {},
+        }
+    }
+}
+
+// graphics pipeline vertex
+
+impl<'a, In, Out, UfVert, UfGeom, UfFrag, const GEOM: bool, const FRAG: bool>
+    GPipelineBuilder<'a, In, Out, UfVert, UfGeom, UfFrag, false, GEOM, FRAG>
+where
+    In: Input,
+    Out: Output,
+{
+    pub fn vertex(
+        self,
+        spirv: &'a [u8],
+    ) -> GPipelineBuilder<'a, In, Out, UfVert, UfGeom, UfFrag, true, GEOM, FRAG> {
+        GPipelineBuilder {
+            vert: Module::new(spirv),
+            geom: self.geom,
+            frag: self.frag,
+
+            base: self.base,
+
+            _p0: self._p0,
+            _p1: self._p1,
+        }
+    }
+
+    pub fn vertex_uniform<NewUfVert>(
+        self,
+        spirv: &'a [u8],
+        initial_uniform_data: NewUfVert,
+    ) -> GPipelineBuilder<'a, In, Out, NewUfVert, UfGeom, UfFrag, true, GEOM, FRAG> {
+        GPipelineBuilder {
+            vert: Module::with(spirv, initial_uniform_data),
+            geom: self.geom,
+            frag: self.frag,
+
+            base: self.base,
+
+            _p0: self._p0,
+            _p1: self._p1,
+        }
+    }
+}
+
+impl PipelineBuilder {
+    pub fn vertex<'a>(
+        self,
+        spirv: &'a [u8],
+    ) -> GPipelineBuilder<'a, (), (), (), (), (), true, false, false> {
+        self.graphics_builder().vertex(spirv)
+    }
+
+    pub fn vertex_uniform<'a, UfVert>(
+        self,
+        spirv: &'a [u8],
+        initial_uniform_data: UfVert,
+    ) -> GPipelineBuilder<'a, (), (), UfVert, (), (), true, false, false> {
+        self.graphics_builder()
+            .vertex_uniform(spirv, initial_uniform_data)
+    }
+}
+
+// graphics pipeline fragment
+
+impl<'a, In, Out, UfVert, UfGeom, UfFrag, const VERT: bool, const GEOM: bool>
+    GPipelineBuilder<'a, In, Out, UfVert, UfGeom, UfFrag, VERT, GEOM, false>
+where
+    In: Input,
+    Out: Output,
+{
+    pub fn fragment(
+        self,
+        spirv: &'a [u8],
+    ) -> GPipelineBuilder<'a, In, Out, UfVert, UfGeom, UfFrag, VERT, GEOM, true> {
+        GPipelineBuilder {
+            vert: self.vert,
+            geom: self.geom,
+            frag: Module::new(spirv),
+
+            base: self.base,
+
+            _p0: self._p0,
+            _p1: self._p1,
+        }
+    }
+
+    pub fn fragment_uniform<NewUfFrag>(
+        self,
+        spirv: &'a [u8],
+        initial_uniform_data: NewUfFrag,
+    ) -> GPipelineBuilder<'a, In, Out, UfVert, UfGeom, NewUfFrag, VERT, GEOM, true> {
+        GPipelineBuilder {
+            vert: self.vert,
+            geom: self.geom,
+            frag: Module::with(spirv, initial_uniform_data),
+
+            base: self.base,
+
+            _p0: self._p0,
+            _p1: self._p1,
+        }
+    }
+}
+
+impl PipelineBuilder {
+    pub fn fragment<'a>(
+        self,
+        spirv: &'a [u8],
+    ) -> GPipelineBuilder<'a, (), (), (), (), (), false, false, true> {
+        self.graphics_builder().fragment(spirv)
+    }
+
+    pub fn fragment_uniform<'a, UfFrag>(
+        self,
+        spirv: &'a [u8],
+        initial_uniform_data: UfFrag,
+    ) -> GPipelineBuilder<'a, (), (), (), (), UfFrag, false, false, true> {
+        self.graphics_builder()
+            .fragment_uniform(spirv, initial_uniform_data)
+    }
+}
+
+// graphics pipeline geometry
+
+impl<'a, In, Out, UfVert, UfGeom, UfFrag, const VERT: bool, const FRAG: bool>
+    GPipelineBuilder<'a, In, Out, UfVert, UfGeom, UfFrag, VERT, false, FRAG>
+where
+    In: Input,
+    Out: Output,
+{
+    pub fn geometry(
+        self,
+        spirv: &'a [u8],
+    ) -> GPipelineBuilder<'a, In, Out, UfVert, UfGeom, UfFrag, VERT, true, FRAG> {
+        GPipelineBuilder {
+            vert: self.vert,
+            geom: Some(Module::new(spirv)),
+            frag: self.frag,
+
+            base: self.base,
+
+            _p0: self._p0,
+            _p1: self._p1,
+        }
+    }
+
+    pub fn geometry_uniform<NewUfGeom>(
+        self,
+        spirv: &'a [u8],
+        initial_uniform_data: NewUfGeom,
+    ) -> GPipelineBuilder<'a, In, Out, UfVert, NewUfGeom, UfFrag, VERT, true, FRAG> {
+        GPipelineBuilder {
+            vert: self.vert,
+            geom: Some(Module::with(spirv, initial_uniform_data)),
+            frag: self.frag,
+
+            base: self.base,
+
+            _p0: self._p0,
+            _p1: self._p1,
+        }
+    }
+}
+
+impl PipelineBuilder {
+    pub fn geometry<'a>(
+        self,
+        spirv: &'a [u8],
+    ) -> GPipelineBuilder<'a, (), (), (), (), (), false, true, false> {
+        self.graphics_builder().geometry(spirv)
+    }
+
+    pub fn geometry_uniform<'a, UfGeom>(
+        self,
+        spirv: &'a [u8],
+        initial_uniform_data: UfGeom,
+    ) -> GPipelineBuilder<'a, (), (), (), UfGeom, (), false, true, false> {
+        self.graphics_builder()
+            .geometry_uniform(spirv, initial_uniform_data)
+    }
+}
+
+/* pub struct GraphicsPipelineOptionals<'a, UfGeom>
+where
+    UfGeom: Default,
+{
+    geometry: Option<Module<'a, UfGeom>>,
+}
+
+pub struct VertexPipelineBuilder<'a, I, UfVert, UfGeom>
+where
+    I: Input,
+    UfVert: Default,
+    UfGeom: Default,
+{
     base: PipelineBuilderBase,
-    vertex: Module<'a, Uf>,
+    vertex: Module<'a, UfVert>,
+
+    optionals: GraphicsPipelineOptionals<'a, UfGeom>,
 
     _p: PhantomData<I>,
 }
-pub struct FragmentPipelineBuilder<'a, Uf> {
+pub struct FragmentPipelineBuilder<'a, UfGeom, UfFrag>
+where
+    UfGeom: Default,
+    UfFrag: Default,
+{
     base: PipelineBuilderBase,
-    fragment: Module<'a, Uf>,
+    fragment: Module<'a, UfFrag>,
+
+    optionals: GraphicsPipelineOptionals<'a, UfGeom>,
 }
-pub struct GraphicsPipelineBuilder<'a, I: Input, UfVert, UfFrag> {
+pub struct GraphicsPipelineBuilder<'a, I, UfVert, UfGeom, UfFrag>
+where
+    I: Input,
+    UfVert: Default,
+    UfGeom: Default,
+    UfFrag: Default,
+{
     base: PipelineBuilderBase,
     vertex: Module<'a, UfVert>,
     fragment: Module<'a, UfFrag>,
+
+    optionals: GraphicsPipelineOptionals<'a, UfGeom>,
 
     _p: PhantomData<I>,
 }
@@ -103,7 +381,10 @@ impl PipelineBuilderBase {
         }
     }
 
-    pub fn vertex<'a, I: Input>(self, spirv: &[u8]) -> VertexPipelineBuilder<I, ()> {
+    pub fn vertex<'a, I: Input, UfGeom>(
+        self,
+        spirv: &[u8],
+    ) -> VertexPipelineBuilder<I, (), UfGeom> {
         VertexPipelineBuilder {
             base: self,
             vertex: Module {
@@ -112,15 +393,17 @@ impl PipelineBuilderBase {
                 has_uniform: false,
             },
 
+            optionals: GraphicsPipelineOptionals { geometry: None },
+
             _p: PhantomData {},
         }
     }
 
-    pub fn vertex_uniform<'a, I: Input, U: Uniform>(
+    pub fn vertex_uniform<'a, I: Input, UfVert: Uniform, UfGeom>(
         self,
         spirv: &'a [u8],
-        initial_uniform_data: U,
-    ) -> VertexPipelineBuilder<'a, I, U> {
+        initial_uniform_data: UfVert,
+    ) -> VertexPipelineBuilder<'a, I, UfVert, UfGeom> {
         VertexPipelineBuilder {
             base: self,
             vertex: Module {
@@ -129,11 +412,13 @@ impl PipelineBuilderBase {
                 has_uniform: true,
             },
 
+            optionals: GraphicsPipelineOptionals { geometry: None },
+
             _p: PhantomData {},
         }
     }
 
-    pub fn fragment(self, spirv: &[u8]) -> FragmentPipelineBuilder<()> {
+    pub fn fragment<UfGeom>(self, spirv: &[u8]) -> FragmentPipelineBuilder<UfGeom, ()> {
         FragmentPipelineBuilder {
             base: self,
             fragment: Module {
@@ -141,14 +426,16 @@ impl PipelineBuilderBase {
                 initial_uniform_data: (),
                 has_uniform: false,
             },
+
+            optionals: GraphicsPipelineOptionals { geometry: None },
         }
     }
 
-    pub fn fragment_uniform<'a, U: Uniform>(
+    pub fn fragment_uniform<'a, UfGeom, UfFrag: Uniform>(
         self,
         spirv: &'a [u8],
-        initial_uniform_data: U,
-    ) -> FragmentPipelineBuilder<'a, U> {
+        initial_uniform_data: UfFrag,
+    ) -> FragmentPipelineBuilder<'a, UfGeom, UfFrag> {
         FragmentPipelineBuilder {
             base: self,
             fragment: Module {
@@ -156,6 +443,8 @@ impl PipelineBuilderBase {
                 initial_uniform_data,
                 has_uniform: true,
             },
+
+            optionals: GraphicsPipelineOptionals { geometry: None },
         }
     }
 
@@ -186,8 +475,8 @@ impl PipelineBuilderBase {
     }
 }
 
-impl<'a, I: Input, Uf> VertexPipelineBuilder<'a, I, Uf> {
-    pub fn fragment(self, spirv: &'a [u8]) -> GraphicsPipelineBuilder<I, Uf, ()> {
+impl<'a, I: Input, UfVert, UfGeom> VertexPipelineBuilder<'a, I, UfVert, UfGeom> {
+    pub fn fragment(self, spirv: &'a [u8]) -> GraphicsPipelineBuilder<I, UfVert, UfGeom, ()> {
         GraphicsPipelineBuilder {
             base: self.base,
             vertex: self.vertex,
@@ -197,15 +486,17 @@ impl<'a, I: Input, Uf> VertexPipelineBuilder<'a, I, Uf> {
                 has_uniform: false,
             },
 
+            optionals: self.optionals,
+
             _p: PhantomData {},
         }
     }
 
-    pub fn fragment_uniform<U: Uniform>(
+    pub fn fragment_uniform<UfFrag: Uniform>(
         self,
         spirv: &'a [u8],
-        initial_uniform_data: U,
-    ) -> GraphicsPipelineBuilder<'a, I, Uf, U> {
+        initial_uniform_data: UfFrag,
+    ) -> GraphicsPipelineBuilder<'a, I, UfVert, UfGeom, UfFrag> {
         GraphicsPipelineBuilder {
             base: self.base,
             vertex: self.vertex,
@@ -215,13 +506,27 @@ impl<'a, I: Input, Uf> VertexPipelineBuilder<'a, I, Uf> {
                 has_uniform: true,
             },
 
+            optionals: self.optionals,
+
             _p: PhantomData {},
         }
     }
+
+    pub fn geometry(self, spirv: &'a [u8]) -> Self {
+        self.optionals.geometry = Some(Module {
+            spirv,
+            initial_uniform_data: (),
+            has_uniform: false,
+        });
+        self
+    }
 }
 
-impl<'a, Uf> FragmentPipelineBuilder<'a, Uf> {
-    pub fn vertex<I: Input>(self, spirv: &'a [u8]) -> GraphicsPipelineBuilder<I, (), Uf> {
+impl<'a, UfGeom, UfFrag> FragmentPipelineBuilder<'a, UfGeom, UfFrag> {
+    pub fn vertex<I: Input>(
+        self,
+        spirv: &'a [u8],
+    ) -> GraphicsPipelineBuilder<I, (), UfGeom, UfFrag> {
         GraphicsPipelineBuilder {
             base: self.base,
             fragment: self.fragment,
@@ -231,15 +536,17 @@ impl<'a, Uf> FragmentPipelineBuilder<'a, Uf> {
                 has_uniform: false,
             },
 
+            optionals: self.optionals,
+
             _p: PhantomData {},
         }
     }
 
-    pub fn vertex_uniform<I: Input, U: Uniform>(
+    pub fn vertex_uniform<I: Input, UfVert: Uniform>(
         self,
         spirv: &'a [u8],
-        initial_uniform_data: U,
-    ) -> GraphicsPipelineBuilder<'a, I, U, Uf> {
+        initial_uniform_data: UfVert,
+    ) -> GraphicsPipelineBuilder<'a, I, UfVert, UfGeom, UfFrag> {
         GraphicsPipelineBuilder {
             base: self.base,
             fragment: self.fragment,
@@ -249,20 +556,21 @@ impl<'a, Uf> FragmentPipelineBuilder<'a, Uf> {
                 has_uniform: true,
             },
 
+            optionals: self.optionals,
+
             _p: PhantomData {},
         }
     }
 }
 
-impl<'a, I: Input, UfVert: Uniform, UfFrag: Uniform>
-    GraphicsPipelineBuilder<'a, I, UfVert, UfFrag>
-{
-    pub fn build(self) -> Result<GraphicsPipeline<I, UfVert, UfFrag>, BufferError> {
+impl<'a, I: Input, UfVert, UfGeom, UfFrag> GraphicsPipelineBuilder<'a, I, UfVert, UfGeom, UfFrag> {
+    pub fn build(self) -> Result<GraphicsPipeline<I, UfVert, UfGeom, UfFrag>, BufferError> {
         GraphicsPipeline::new(
             self.base.device,
             self.base.render_pass,
             self.base.set_count,
             self.vertex,
+            self.optionals.geometry,
             self.fragment,
             self.base.debug,
         )
@@ -279,3 +587,4 @@ impl<'a, Uf> ComputePipelineBuilder<'a, Uf> {
         )
     }
 }
+ */

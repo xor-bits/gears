@@ -1,19 +1,11 @@
-use cgmath::{InnerSpace, Vector3};
-
-use crate::point_to_index;
-
 use super::{shader, DEPTH, HEIGHT, WIDTH};
-
-const LIGHT_DIR: Vector3<f32> = Vector3::<f32> {
-    x: 0.24140227479263378942,
-    y: 0.96560909917053515768,
-    z: 0.09656090991705351577,
-};
+use crate::point_to_index;
+use gears::glam::Vec3;
 
 fn triangle(
-    p_a: Vector3<f32>,
-    p_b: Vector3<f32>,
-    p_c: Vector3<f32>,
+    p_a: Vec3,
+    p_b: Vec3,
+    p_c: Vec3,
     vertices: &mut Vec<shader::VertexData>,
     indices: &mut Vec<u32>,
 ) {
@@ -21,7 +13,14 @@ fn triangle(
     let ac = p_c - p_a;
     let normal = ac.cross(ab).normalize();
 
-    let exposure = LIGHT_DIR.dot(normal) * 0.375 + 0.625;
+    let exposure = Vec3::new(
+        0.24140227479263378942,
+        0.96560909917053515768,
+        0.09656090991705351577,
+    )
+    .dot(normal)
+        * 0.375
+        + 0.625;
 
     let i = vertices.len();
     vertices.push(shader::VertexData {
@@ -42,10 +41,10 @@ fn triangle(
 }
 
 fn quad(
-    p_a: Vector3<f32>,
-    p_b: Vector3<f32>,
-    p_c: Vector3<f32>,
-    p_d: Vector3<f32>,
+    p_a: Vec3,
+    p_b: Vec3,
+    p_c: Vec3,
+    p_d: Vec3,
     vertices: &mut Vec<shader::VertexData>,
     indices: &mut Vec<u32>,
 ) {
@@ -54,11 +53,11 @@ fn quad(
 }
 
 fn pentagon(
-    p_a: Vector3<f32>,
-    p_b: Vector3<f32>,
-    p_c: Vector3<f32>,
-    p_d: Vector3<f32>,
-    p_e: Vector3<f32>,
+    p_a: Vec3,
+    p_b: Vec3,
+    p_c: Vec3,
+    p_d: Vec3,
+    p_e: Vec3,
     vertices: &mut Vec<shader::VertexData>,
     indices: &mut Vec<u32>,
 ) {
@@ -67,12 +66,12 @@ fn pentagon(
 }
 
 fn hexagon(
-    p_a: Vector3<f32>,
-    p_b: Vector3<f32>,
-    p_c: Vector3<f32>,
-    p_d: Vector3<f32>,
-    p_e: Vector3<f32>,
-    p_f: Vector3<f32>,
+    p_a: Vec3,
+    p_b: Vec3,
+    p_c: Vec3,
+    p_d: Vec3,
+    p_e: Vec3,
+    p_f: Vec3,
     vertices: &mut Vec<shader::VertexData>,
     indices: &mut Vec<u32>,
 ) {
@@ -114,15 +113,15 @@ pub fn generate_marching_cubes(
     let mut indices = Vec::new();
     let mut missing = 0u64;
 
-    let c_a = Vector3::new(0.0, 0.0, 0.0);
-    let c_b = Vector3::new(1.0, 0.0, 0.0);
-    let c_c = Vector3::new(0.0, 1.0, 0.0);
-    let c_d = Vector3::new(1.0, 1.0, 0.0);
+    let c_a = Vec3::new(0.0, 0.0, 0.0);
+    let c_b = Vec3::new(1.0, 0.0, 0.0);
+    let c_c = Vec3::new(0.0, 1.0, 0.0);
+    let c_d = Vec3::new(1.0, 1.0, 0.0);
 
-    let c_e = Vector3::new(0.0, 0.0, 1.0);
-    let c_f = Vector3::new(1.0, 0.0, 1.0);
-    let c_g = Vector3::new(0.0, 1.0, 1.0);
-    let c_h = Vector3::new(1.0, 1.0, 1.0);
+    let c_e = Vec3::new(0.0, 0.0, 1.0);
+    let c_f = Vec3::new(1.0, 0.0, 1.0);
+    let c_g = Vec3::new(0.0, 1.0, 1.0);
+    let c_h = Vec3::new(1.0, 1.0, 1.0);
 
     for z in 0..DEPTH - 1 {
         for y in 0..HEIGHT - 1 {
@@ -146,11 +145,11 @@ pub fn generate_marching_cubes(
                 let p_g = exists(pv_g);
                 let p_h = exists(pv_h);
 
-                let origin = Vector3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
+                let origin = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
 
-                let lerp = |a: &Vector3<f32>, b: &Vector3<f32>, av: f32, bv: f32| {
+                let lerp = |a: &Vec3, b: &Vec3, av: f32, bv: f32| {
                     let t = if smooth { (0.5 - bv) / (av - bv) } else { 0.5 };
-                    origin + a * t + b * (1.0 - t)
+                    origin + (*a) * t + (*b) * (1.0 - t)
                 };
 
                 let a = lerp(&c_a, &c_c, pv_a, pv_c);

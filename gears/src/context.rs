@@ -6,7 +6,7 @@ use ash::{
     vk, Entry,
 };
 use colored::Colorize;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use std::{
     env,
     ffi::CStr,
@@ -309,7 +309,7 @@ impl Context {
             );
             ContextError::NoSuitableGPUs
         })?;
-        debug!(
+        info!(
             "GPU chosen: {} from: {}",
             pdevice_to_string(&instance, pdevice),
             all_pdevices_to_string(&pdevice_names, false)

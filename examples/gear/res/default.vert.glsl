@@ -1,9 +1,9 @@
 #version 420
 
 layout(location = 0) in vec3 pos;
-layout (location = 1) in vec3 norm;
+layout(location = 1) in vec3 norm;
 
-layout (location = 0) out float exposure;
+layout(location = 0) out float exposure;
 
 layout(binding = 0) uniform UBO {
 	mat4 model_matrix;

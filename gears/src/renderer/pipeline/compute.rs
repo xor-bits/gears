@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+/* use std::marker::PhantomData;
 
 use ash::vk;
 
@@ -25,3 +25,4 @@ where
 impl<Uf> Drop for ComputePipeline<Uf> {
     fn drop(&mut self) {}
 }
+ */

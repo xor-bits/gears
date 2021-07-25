@@ -16,11 +16,13 @@ validation_panic = []
 [dependencies]
 log = "~0.4"
 colored = "~2.0"
-glam = "~0.16"
-wavefront_obj = "~9.0"
+glam = "~0.17"
+wavefront_obj = "~10.0"
 parking_lot = "~0.11"
 bitflags = "~1.2"
-winit = { version = "~0.24", features = ["web-sys"] }
+winit = { version = "~0.25", features = ["web-sys"] }
 ash = "~0.32"
 ash-window = "~0.6"
 raw-window-handle = "~0.3"
+static_assertions = "~1.1"
+gears-pipeline = { path = "../gears-pipeline" }

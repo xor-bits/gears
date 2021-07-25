@@ -1,6 +1,6 @@
 use crate::compiler::{compile_shader_module, DefinesInput};
 use proc_macro::TokenStream;
-use proc_macro2::{Ident, Span};
+use proc_macro2::{Group, Ident, Span};
 use quote::{quote, ToTokens, TokenStreamExt};
 use regex::Regex;
 use shaderc::ShaderKind;
@@ -16,6 +16,15 @@ use syn::{
     AttributeArgs, Error, Lit, LitInt, Meta, NestedMeta, Token,
 };
 
+pub fn name_to_kind(name: &str) -> Result<ShaderKind, &'static str> {
+    match name {
+        "vert" | "vertex" => Ok(ShaderKind::Vertex),
+        "frag" | "fragment" => Ok(ShaderKind::Fragment),
+        "geom" | "geometry" => Ok(ShaderKind::Geometry),
+        _ => Err("Invalid shader source kind"),
+    }
+}
+
 pub fn module(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as AttributeArgs);
 
@@ -23,6 +32,7 @@ pub fn module(input: TokenStream) -> TokenStream {
     let mut shader_path = None;
     // TODO: let mut shader_debug = None;
     let mut shader_name = None;
+    let mut shader_defines = DefinesInput::new();
 
     for nm in input {
         let meta = match nm {
@@ -62,18 +72,20 @@ pub fn module(input: TokenStream) -> TokenStream {
 
         match name.as_str() {
             "::kind" => {
-                shader_kind = Some(match value.value().as_str() {
-                    "vert" | "vertex" => ShaderKind::Vertex,
-                    "frag" | "fragment" => ShaderKind::Fragment,
-                    _ => {
-                        return Error::new(value_span, "Invalid shader source kind")
-                            .to_compile_error()
-                            .into()
-                    }
+                shader_kind = Some(match name_to_kind(value.value().as_str()) {
+                    Ok(kind) => kind,
+                    Err(err) => return Error::new(value_span, err).to_compile_error().into(),
                 })
             }
             "::path" => shader_path = Some(value.value()),
             "::name" => shader_name = Some(value.value()),
+            "::define" => {
+                if let Some((l, r)) = value.value().split_once('=') {
+                    shader_defines.push((l.into(), Some(r.into())));
+                } else {
+                    shader_defines.push((value.value(), None));
+                }
+            }
             _ => {
                 return Error::new(name_value.path.span(), "Invalid item name")
                     .to_compile_error()
@@ -140,7 +152,7 @@ pub fn module(input: TokenStream) -> TokenStream {
         }
     };
 
-    compile_module(source, path, kind, debug, name)
+    compile_module(source, path, kind, debug, name, &shader_defines)
 }
 
 #[derive(Debug)]
@@ -319,6 +331,7 @@ impl Parse for LayoutToken {
 pub struct DataField {
     ty: FieldType,
     name: Ident,
+    array: Option<Group>,
     semicolon: Token![;],
 }
 
@@ -327,6 +340,7 @@ impl Parse for DataField {
         Ok(Self {
             ty: input.parse()?,
             name: input.parse()?,
+            array: input.parse()?,
             semicolon: input.parse()?,
         })
     }
@@ -459,6 +473,7 @@ fn compile_module(
     kind: ShaderKind,
     debug: bool,
     mod_name: String,
+    shader_defines: &DefinesInput,
 ) -> TokenStream {
     // preprocess source
     let layout = get_layout(source.as_str());
@@ -474,7 +489,7 @@ fn compile_module(
         "module",
         "main",
         path.clone(),
-        &DefinesInput::new(),
+        &shader_defines,
         debug,
     );
 
@@ -489,9 +504,9 @@ fn compile_module(
 
                     pub const SOURCE: &'static str = include_str!(#path);
                     pub const SPIRV: &'static [u8] = &[ #(#spirv),* ];
-                    pub type INPUT = ( #(#inputs),* );
-                    pub type OUTPUT = ( #(#outputs),* );
-                    pub type UNIFORM = ( #(#uniforms),* );
+                    pub type INPUT = ( #(#inputs,)* );
+                    pub type OUTPUT = ( #(#outputs,)* );
+                    pub type UNIFORM = ( #(#uniforms,)* );
                 }
             })
             .into()

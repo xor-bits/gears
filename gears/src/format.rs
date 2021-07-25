@@ -8,6 +8,18 @@ pub trait FormatOf {
     const COUNT_OF: u32;
 }
 
+impl FormatOf for i32 {
+    const FORMAT_OF: vk::Format = vk::Format::R32_SINT;
+    const OFFSET_OF: u32 = size_of::<i32>() as u32;
+    const COUNT_OF: u32 = 1;
+}
+
+impl FormatOf for u32 {
+    const FORMAT_OF: vk::Format = vk::Format::R32_UINT;
+    const OFFSET_OF: u32 = size_of::<i32>() as u32;
+    const COUNT_OF: u32 = 1;
+}
+
 impl FormatOf for f32 {
     const FORMAT_OF: vk::Format = vk::Format::R32_SFLOAT;
     const OFFSET_OF: u32 = size_of::<f32>() as u32;

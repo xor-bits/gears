@@ -11,20 +11,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cgmath::{
-    perspective, Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Vector2, Vector3, Vector4,
-};
 use cubes::generate_cubes;
 use gears::{
+    glam::{Mat4, Vec2, Vec3, Vec4},
     input_state::InputState,
-    renderer::{
-        buffer::{IndexBuffer, VertexBuffer},
-        pipeline::Pipeline,
-    },
+    renderer::buffer::{IndexBuffer, VertexBuffer},
     Buffer, ContextGPUPick, ContextValidation, CursorController, ElementState, EventLoopTarget,
     Frame, FrameLoop, FrameLoopTarget, FramePerfReport, HideMode, ImmediateFrameInfo,
-    PipelineBuilder, RenderRecordBeginInfo, RenderRecordInfo, Renderer, RendererRecord, SyncMode,
-    UpdateLoop, UpdateLoopTarget, UpdateRate, UpdateRecordInfo, VirtualKeyCode, WindowEvent,
+    RenderRecordBeginInfo, RenderRecordInfo, Renderer, RendererRecord, SyncMode, UpdateLoop,
+    UpdateLoopTarget, UpdateRate, UpdateRecordInfo, VirtualKeyCode, WindowEvent,
 };
 use marching_cubes::generate_marching_cubes;
 use parking_lot::RwLock;
@@ -34,17 +29,64 @@ mod cubes;
 mod marching_cubes;
 
 mod shader {
-    gears_pipeline::pipeline! {
-        vert: { path: "voxel/res/default.vert.glsl" }
-        frag: { path: "voxel/res/default.frag.glsl" }
-        builders
-    }
-}
+    use gears::{
+        glam::{Mat4, Vec3},
+        module, pipeline, FormatOf, Input, RGBAOutput, Uniform,
+    };
 
-mod debug_shader {
-    gears_pipeline::pipeline! {
-        vert: { path: "voxel/res/default.vert.glsl" define: ["DEBUGGING"] }
-        geom: { path: "voxel/res/default.geom.glsl" }
+    #[derive(Input, Default)]
+    #[repr(C)]
+    pub struct VertexData {
+        pub position: Vec3,
+        pub exposure: f32,
+    }
+
+    #[derive(Uniform, Default)]
+    #[repr(C)]
+    pub struct UniformData {
+        pub mvp: Mat4,
+    }
+
+    module! {
+        kind = "vert",
+        path = "examples/voxel/res/default.vert.glsl",
+        name = "VERT"
+    }
+
+    module! {
+        kind = "geom",
+        path = "examples/voxel/res/default.geom.glsl",
+        name = "GEOM"
+    }
+
+    module! {
+        kind = "frag",
+        path = "examples/voxel/res/default.frag.glsl",
+        name = "FRAG"
+    }
+
+    module! {
+        kind = "frag",
+        path = "examples/voxel/res/default.frag.glsl",
+        name = "DEBUG_FRAG",
+        define = "DEBUGGING"
+    }
+
+    pipeline! {
+        "DefaultPipeline"
+        VertexData -> RGBAOutput
+
+        mod "VERT" as "vert" where { in UniformData }
+        mod "FRAG" as "frag"
+    }
+
+    pipeline! {
+        "DebugPipeline"
+        VertexData -> RGBAOutput
+
+        mod "VERT" as "vert" where { in UniformData }
+        mod "GEOM" as "geom"
+        mod "DEBUG_FRAG" as "frag"
     }
 }
 
@@ -78,14 +120,14 @@ struct App {
 
     vb: VertexBuffer<shader::VertexData>,
     ib: IndexBuffer<u32>,
-    shaders: (Pipeline, Pipeline),
+    shaders: (shader::DefaultPipeline, shader::DebugPipeline),
 
     cursor_controller: CursorController,
     input: Arc<RwLock<InputState>>,
 
-    look_dir: Vector2<f32>,
-    position: Point3<f32>,
-    velocity: Vector3<f32>,
+    look_dir: Vec2,
+    position: Vec3,
+    velocity: Vec3,
 
     debug: bool,
     voxels: Vec<f32>,
@@ -136,14 +178,8 @@ impl App {
         let vb = VertexBuffer::new_with_data(&renderer, &vertices[..]).unwrap();
         let ib = IndexBuffer::new_with_data(&renderer, &indices[..]).unwrap();
 
-        let fill_shader = shader::build(&renderer);
-        let line_shader = PipelineBuilder::new(&renderer)
-            .with_ubo::<shader::UBO>()
-            .with_graphics_modules(debug_shader::VERT_SPIRV_REF, shader::FRAG_SPIRV_REF)
-            .with_geometry_module(debug_shader::GEOM_SPIRV_REF)
-            .with_input::<shader::VertexData>()
-            .build(false)
-            .unwrap();
+        let fill_shader = shader::DefaultPipeline::build(&renderer).unwrap();
+        let line_shader = shader::DebugPipeline::build(&renderer).unwrap();
 
         let cursor_controller = CursorController::new().with_hide_mode(HideMode::GrabCursor);
 
@@ -158,12 +194,12 @@ impl App {
             cursor_controller,
             input,
 
-            look_dir: Vector2::new(
+            look_dir: Vec2::new(
                 -std::f32::consts::FRAC_PI_4 * 3.0,
                 -std::f32::consts::PI / 5.0,
             ),
-            position: Point3::new(-26.0, -26.0, -26.0),
-            velocity: Vector3::new(0.0, 0.0, 0.0),
+            position: Vec3::new(-26.0, -26.0, -26.0),
+            velocity: Vec3::new(0.0, 0.0, 0.0),
 
             debug: false,
             voxels,
@@ -205,24 +241,23 @@ impl RendererRecord for App {
         let dt_s = self.delta_time.elapsed().as_secs_f32() / self.updaterate.as_secs_f32();
         let aspect = self.frame.aspect();
 
-        let dir = Vector3::new(
+        let dir = Vec3::new(
             self.look_dir.y.cos() * self.look_dir.x.sin(),
             self.look_dir.y.sin(),
             self.look_dir.y.cos() * self.look_dir.x.cos(),
         );
         let eye = self.position + self.velocity * dt_s;
-        let focus = (eye - dir).to_vec();
-        let focus = Point3::from_vec(focus);
-        let up = Vector3::new(0.0, 1.0, 0.0);
+        let focus = eye - dir;
+        let up = Vec3::new(0.0, 1.0, 0.0);
 
-        let ubo = shader::UBO {
-            mvp: perspective(Deg { 0: 60.0 }, aspect, 0.01, 500.0)
-                * Matrix4::look_at_rh(eye, focus, up)
-                * Matrix4::from_scale(1.0),
+        let ubo = shader::UniformData {
+            mvp: Mat4::perspective_rh(1.0, aspect, 0.01, 500.0)
+                * Mat4::look_at_rh(eye, focus, up)
+                * Mat4::from_scale(Vec3::new(1.0, 1.0, 1.0)),
         };
 
-        self.shaders.0.write_ubo(imfi, &ubo).unwrap();
-        self.shaders.1.write_ubo(imfi, &ubo).unwrap();
+        self.shaders.0.write_vertex_uniform(imfi, &ubo).unwrap();
+        self.shaders.1.write_vertex_uniform(imfi, &ubo).unwrap();
     }
 
     fn update(&self, uri: &UpdateRecordInfo) -> bool {
@@ -236,7 +271,7 @@ impl RendererRecord for App {
 
     fn begin_info(&self) -> RenderRecordBeginInfo {
         RenderRecordBeginInfo {
-            clear_color: Vector4::new(1.0, 1.0, 1.0, 1.0),
+            clear_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
             debug_calls: true,
         }
     }
@@ -296,7 +331,7 @@ impl EventLoopTarget for App {
         }
 
         if let Some((delta_x, delta_y)) = self.cursor_controller.event(event, &self.frame) {
-            self.look_dir -= Vector2::new(delta_x as f32, delta_y as f32);
+            self.look_dir -= Vec2::new(delta_x as f32, delta_y as f32);
 
             self.look_dir.y = self.look_dir.y.clamp(
                 -std::f32::consts::PI / 2.0 + 0.0001,
@@ -311,12 +346,12 @@ impl UpdateLoopTarget for App {
         let dt_s = delta_time.as_secs_f32();
         self.delta_time = Instant::now();
 
-        let look_dir = Vector3::new(
+        let look_dir = Vec3::new(
             self.look_dir.y.cos() * self.look_dir.x.sin(),
             self.look_dir.y.sin(),
             self.look_dir.y.cos() * self.look_dir.x.cos(),
         );
-        let up = Vector3::new(0.0, 1.0, 0.0);
+        let up = Vec3::new(0.0, 1.0, 0.0);
 
         {
             let input = self.input.read();
@@ -336,7 +371,7 @@ impl UpdateLoopTarget for App {
                 dir.normalize() * speed
             };
 
-            self.velocity = Vector3::new(0.0, 0.0, 0.0);
+            self.velocity = Vec3::new(0.0, 0.0, 0.0);
             if input.key_held(VirtualKeyCode::W) {
                 self.velocity -= dir;
             }

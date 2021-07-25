@@ -1,4 +1,4 @@
-use cgmath::Vector3;
+use gears::glam::Vec3;
 
 use super::{point_to_index, shader, DEPTH, HEIGHT, WIDTH};
 
@@ -41,43 +41,35 @@ fn quad(
     let varying_bz = if sz == 2 { 1 } else { 0 };
 
     vertices.push(shader::VertexData {
-        position: Vector3::new(
-            x + al * varying_ax + ar * varying_bx,
-            y + al * varying_ay + ar * varying_by,
-            z + al * varying_az + ar * varying_bz,
-        )
-        .cast()
-        .unwrap(),
+        position: Vec3::new(
+            (x + al * varying_ax + ar * varying_bx) as f32,
+            (y + al * varying_ay + ar * varying_by) as f32,
+            (z + al * varying_az + ar * varying_bz) as f32,
+        ),
         exposure: light.to_exposure(),
     });
     vertices.push(shader::VertexData {
-        position: Vector3::new(
-            x + al * varying_ax + br * varying_bx,
-            y + al * varying_ay + br * varying_by,
-            z + al * varying_az + br * varying_bz,
-        )
-        .cast()
-        .unwrap(),
+        position: Vec3::new(
+            (x + al * varying_ax + br * varying_bx) as f32,
+            (y + al * varying_ay + br * varying_by) as f32,
+            (z + al * varying_az + br * varying_bz) as f32,
+        ),
         exposure: light.to_exposure(),
     });
     vertices.push(shader::VertexData {
-        position: Vector3::new(
-            x + bl * varying_ax + br * varying_bx,
-            y + bl * varying_ay + br * varying_by,
-            z + bl * varying_az + br * varying_bz,
-        )
-        .cast()
-        .unwrap(),
+        position: Vec3::new(
+            (x + bl * varying_ax + br * varying_bx) as f32,
+            (y + bl * varying_ay + br * varying_by) as f32,
+            (z + bl * varying_az + br * varying_bz) as f32,
+        ),
         exposure: light.to_exposure(),
     });
     vertices.push(shader::VertexData {
-        position: Vector3::new(
-            x + bl * varying_ax + ar * varying_bx,
-            y + bl * varying_ay + ar * varying_by,
-            z + bl * varying_az + ar * varying_bz,
-        )
-        .cast()
-        .unwrap(),
+        position: Vec3::new(
+            (x + bl * varying_ax + ar * varying_bx) as f32,
+            (y + bl * varying_ay + ar * varying_by) as f32,
+            (z + bl * varying_az + ar * varying_bz) as f32,
+        ),
         exposure: light.to_exposure(),
     });
 }

@@ -1,19 +1,18 @@
-use std::{sync::Arc, time::Instant};
-
 use gears::{
+    glam::{Mat4, Vec3},
     load_obj, Buffer, ContextGPUPick, ContextValidation, EventLoopTarget, Frame, FrameLoop,
     FrameLoopTarget, FramePerfReport, ImmediateFrameInfo, InputState, KeyboardInput,
     RenderRecordInfo, Renderer, RendererRecord, SyncMode, UpdateRecordInfo, VertexBuffer,
     VirtualKeyCode, WindowEvent,
 };
-use glam::{Mat4, Vec3};
 use parking_lot::{Mutex, RwLock};
+use std::{sync::Arc, time::Instant};
 
 mod shader {
-    use gears::{FormatOf, GraphicsPipeline, Input, PipelineBuilderBase, Uniform};
-    use gears_pipeline::*;
-    use glam::{Mat4, Vec3};
-    use static_assertions::assert_type_eq_all;
+    use gears::{
+        glam::{Mat4, Vec3},
+        module, pipeline, FormatOf, Input, RGBAOutput, Uniform,
+    };
 
     #[derive(Input, Default)]
     #[repr(C)]
@@ -43,28 +42,11 @@ mod shader {
         name = "FRAG"
     }
 
-    /*
-    pub const SHADER: ShaderData = pipeline! {
-        in VertexData
-
-        mod VERT_SPIRV {
-            in UniformData
-        }
-
-        mod FRAG_SPIRV
-    }; TODO: generates: bellow
-    */
-
-    pub type Pipeline = GraphicsPipeline<VertexData, UniformData, ()>;
-    pub fn build(renderer: &gears::Renderer) -> Pipeline {
-        assert_type_eq_all!(<VertexData as Input>::FIELDS, VERT::INPUT);
-        assert_type_eq_all!(<UniformData as Uniform>::FIELDS, VERT::UNIFORM);
-
-        PipelineBuilderBase::new(renderer)
-            .vertex_uniform(VERT::SPIRV, UniformData::default())
-            .fragment(FRAG::SPIRV)
-            .build()
-            .unwrap()
+    pipeline! {
+        "DefaultPipeline"
+        VertexData -> RGBAOutput
+        mod "VERT" as "vert" where { in UniformData }
+        mod "FRAG" as "frag"
     }
 }
 
@@ -76,7 +58,7 @@ struct App {
     input: Arc<RwLock<InputState>>,
 
     vb: VertexBuffer<shader::VertexData>,
-    shader: shader::Pipeline,
+    shader: shader::DefaultPipeline,
 
     delta_time: Mutex<Instant>,
     distance: Mutex<f32>,
@@ -86,7 +68,7 @@ struct App {
 impl App {
     fn init(frame: Frame, renderer: Renderer, input: Arc<RwLock<InputState>>) -> Arc<RwLock<Self>> {
         let vb = VertexBuffer::new(&renderer, MAX_VBO_LEN).unwrap();
-        let shader = shader::build(&renderer);
+        let shader = shader::DefaultPipeline::build(&renderer).unwrap();
 
         let mut app = Self {
             frame,

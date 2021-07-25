@@ -1,19 +1,19 @@
-use super::shader_module;
 use crate::{
-    renderer::device::Dev, Buffer, BufferError, ImmediateFrameInfo, Input, Module, PipelineBase,
-    RenderRecordInfo, Uniform, UniformBuffer, UpdateRecordInfo, WriteType,
+    pipeline::shader_module, renderer::device::Dev, Buffer, BufferError, ImmediateFrameInfo, Input,
+    Module, Output, RenderRecordInfo, Uniform, UniformBuffer, UpdateRecordInfo, WriteType,
 };
 use ash::{version::DeviceV1_0, vk};
 use log::debug;
 use parking_lot::RwLock;
 use std::marker::PhantomData;
 
-pub struct GraphicsPipeline<I, UfVert, UfFrag>
+pub struct GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
 where
-    I: Input,
+    In: Input,
+    Out: Output,
 {
-    base: PipelineBase,
-    ubos: GraphicsPipelineUBOS<UfVert, UfFrag>,
+    device: Dev,
+    ubos: GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag>,
 
     descriptor: Option<(vk::DescriptorPool, Vec<vk::DescriptorSet>)>,
 
@@ -21,9 +21,11 @@ where
     pipeline_layout: vk::PipelineLayout,
     pipeline_descriptor_layout: vk::DescriptorSetLayout,
 
-    _p0: PhantomData<I>,
-    _p1: PhantomData<UfVert>,
-    _p2: PhantomData<UfFrag>,
+    _p0: PhantomData<In>,
+    _p1: PhantomData<Out>,
+    _p2: PhantomData<UfVert>,
+    _p3: PhantomData<UfGeom>,
+    _p4: PhantomData<UfFrag>,
 }
 
 struct UBOModule<Uf>(Option<Vec<RwLock<UniformBuffer<Uf>>>>);
@@ -54,33 +56,48 @@ impl<Uf> UBOModule<Uf> {
     }
 }
 
-struct GraphicsPipelineUBOS<UfVert, UfFrag> {
+struct GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag> {
     vert: UBOModule<UfVert>,
+    geom: UBOModule<UfGeom>,
     frag: UBOModule<UfFrag>,
     count: usize,
 }
 
-impl<I, UfVert, UfFrag> GraphicsPipeline<I, UfVert, UfFrag>
+impl<In, Out, UfVert, UfGeom, UfFrag> GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
 where
-    I: Input,
+    In: Input,
+    Out: Output,
 {
     pub fn new(
         device: Dev,
         render_pass: vk::RenderPass,
         set_count: usize,
         vert: Module<UfVert>,
+        geom: Option<Module<UfGeom>>,
         frag: Module<UfFrag>,
         debug: bool,
     ) -> Result<Self, BufferError> {
         // modules
 
-        let vert_stage = shader_module(&device, vert.spirv, vk::ShaderStageFlags::VERTEX);
-        let frag_stage = shader_module(&device, frag.spirv, vk::ShaderStageFlags::FRAGMENT);
-        let shader_stages = vec![vert_stage.1, frag_stage.1];
+        let (vert_module, vert_stage) =
+            shader_module(&device, vert.spirv, vk::ShaderStageFlags::VERTEX);
+        let (frag_module, frag_stage) =
+            shader_module(&device, frag.spirv, vk::ShaderStageFlags::FRAGMENT);
+        let mut shader_stages = vec![vert_stage, frag_stage];
+        let mut shader_modules = vec![vert_module, frag_module];
+
+        // optional modules
+
+        if let Some(geom) = geom.as_ref() {
+            let (geom_module, geom_stage) =
+                shader_module(&device, geom.spirv, vk::ShaderStageFlags::GEOMETRY);
+            shader_stages.push(geom_stage);
+            shader_modules.push(geom_module);
+        }
 
         // uniform buffer objects
 
-        let ubos = Self::get_ubos(&device, set_count, &vert, &frag)?;
+        let ubos = Self::get_ubos(&device, set_count, &vert, &geom, &frag)?;
 
         // pipeline layout
 
@@ -108,8 +125,8 @@ where
         // fixed states
 
         let vertex_state = vk::PipelineVertexInputStateCreateInfo::builder()
-            .vertex_binding_descriptions(I::BINDING_DESCRIPTION)
-            .vertex_attribute_descriptions(I::ATTRIBUTE_DESCRIPTION);
+            .vertex_binding_descriptions(In::BINDING_DESCRIPTION)
+            .vertex_attribute_descriptions(In::ATTRIBUTE_DESCRIPTION);
 
         let vertex_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::builder()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
@@ -210,14 +227,15 @@ where
         };
 
         unsafe {
-            device.destroy_shader_module(frag_stage.0, None);
-            device.destroy_shader_module(vert_stage.0, None);
+            for shader_module in shader_modules {
+                device.destroy_shader_module(shader_module, None);
+            }
         }
 
         let pipeline = pipeline.expect("Graphics pipeline creation failed")[0];
 
         Ok(Self {
-            base: PipelineBase { device },
+            device,
             ubos,
 
             descriptor,
@@ -229,6 +247,8 @@ where
             _p0: PhantomData {},
             _p1: PhantomData {},
             _p2: PhantomData {},
+            _p3: PhantomData {},
+            _p4: PhantomData {},
         })
     }
 
@@ -236,6 +256,7 @@ where
         let mut updates = false;
 
         updates = updates || self.ubos.vert.update(uri);
+        updates = updates || self.ubos.geom.update(uri);
         updates = updates || self.ubos.frag.update(uri);
 
         updates
@@ -246,7 +267,7 @@ where
             debug!("cmd_bind_pipeline");
         }
 
-        self.base.device.cmd_bind_pipeline(
+        self.device.cmd_bind_pipeline(
             rri.command_buffer,
             vk::PipelineBindPoint::GRAPHICS,
             self.pipeline,
@@ -266,7 +287,7 @@ where
             let descriptor_sets = [descriptor_set];
             let offsets = [];
 
-            self.base.device.cmd_bind_descriptor_sets(
+            self.device.cmd_bind_descriptor_sets(
                 rri.command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline_layout,
@@ -281,15 +302,17 @@ where
         device: &Dev,
         set_count: usize,
         vert: &Module<UfVert>,
+        geom: &Option<Module<UfGeom>>,
         frag: &Module<UfFrag>,
-    ) -> Result<GraphicsPipelineUBOS<UfVert, UfFrag>, BufferError> {
+    ) -> Result<GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag>, BufferError> {
         let mut target = GraphicsPipelineUBOS {
             vert: UBOModule(None),
+            geom: UBOModule(None),
             frag: UBOModule(None),
             count: 0,
         };
 
-        if vert.has_uniform {
+        if vert.uniform.is_some() {
             target.vert.0 = Some(
                 (0..set_count)
                     .map(|_| Ok(RwLock::new(UniformBuffer::new_with_device(device.clone())?)))
@@ -297,7 +320,20 @@ where
             );
             target.count += 1;
         }
-        if frag.has_uniform {
+        match geom {
+            Some(Module {
+                uniform: Some(_), ..
+            }) => {
+                target.geom.0 = Some(
+                    (0..set_count)
+                        .map(|_| Ok(RwLock::new(UniformBuffer::new_with_device(device.clone())?)))
+                        .collect::<Result<_, _>>()?,
+                );
+                target.count += 1;
+            }
+            _ => {}
+        }
+        if frag.uniform.is_some() {
             target.frag.0 = Some(
                 (0..set_count)
                     .map(|_| Ok(RwLock::new(UniformBuffer::new_with_device(device.clone())?)))
@@ -310,7 +346,7 @@ where
     }
 
     fn get_bindings(
-        ubos: &GraphicsPipelineUBOS<UfVert, UfFrag>,
+        ubos: &GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag>,
     ) -> Vec<vk::DescriptorSetLayoutBinding> {
         /* TODO: let CLONE: vk::DescriptorSetLayoutBinding = vk::DescriptorSetLayoutBinding {
             binding: 0,
@@ -342,7 +378,9 @@ where
         vec
     }
 
-    fn get_sizes(ubos: &GraphicsPipelineUBOS<UfVert, UfFrag>) -> Vec<vk::DescriptorPoolSize> {
+    fn get_sizes(
+        ubos: &GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag>,
+    ) -> Vec<vk::DescriptorPoolSize> {
         const CLONE: vk::DescriptorPoolSize = vk::DescriptorPoolSize {
             descriptor_count: 1,
             ty: vk::DescriptorType::UNIFORM_BUFFER,
@@ -363,7 +401,7 @@ where
 
     fn descriptor_layout(
         device: &Dev,
-        ubos: &GraphicsPipelineUBOS<UfVert, UfFrag>,
+        ubos: &GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag>,
     ) -> [vk::DescriptorSetLayout; 1] {
         let bindings = Self::get_bindings(&ubos);
 
@@ -379,7 +417,7 @@ where
     fn descriptor_pool(
         device: &Dev,
         set_count: usize,
-        ubos: &GraphicsPipelineUBOS<UfVert, UfFrag>,
+        ubos: &GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag>,
     ) -> vk::DescriptorPool {
         let sizes = Self::get_sizes(ubos);
 
@@ -410,7 +448,7 @@ where
     fn write_descriptor_sets(
         device: &Dev,
         desc_sets: &[vk::DescriptorSet],
-        ubos: &GraphicsPipelineUBOS<UfVert, UfFrag>,
+        ubos: &GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag>,
     ) {
         let buf = ubos
             .vert
@@ -447,9 +485,10 @@ where
     }
 }
 
-impl<I, UfVert, UfFrag> GraphicsPipeline<I, UfVert, UfFrag>
+impl<In, Out, UfVert, UfGeom, UfFrag> GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
 where
-    I: Input,
+    In: Input,
+    Out: Output,
     UfVert: Uniform,
 {
     pub fn write_vertex_uniform(
@@ -461,9 +500,25 @@ where
     }
 }
 
-impl<I, UfVert, UfFrag> GraphicsPipeline<I, UfVert, UfFrag>
+impl<In, Out, UfVert, UfGeom, UfFrag> GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
 where
-    I: Input,
+    In: Input,
+    Out: Output,
+    UfGeom: Uniform,
+{
+    pub fn write_geometry_uniform(
+        &self,
+        imfi: &ImmediateFrameInfo,
+        data: &UfGeom,
+    ) -> Result<WriteType, BufferError> {
+        self.ubos.geom.write(imfi, data)
+    }
+}
+
+impl<In, Out, UfVert, UfGeom, UfFrag> GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
+where
+    In: Input,
+    Out: Output,
     UfFrag: Uniform,
 {
     pub fn write_fragment_uniform(
@@ -475,26 +530,23 @@ where
     }
 }
 
-impl<I, UfVert, UfFrag> Drop for GraphicsPipeline<I, UfVert, UfFrag>
+impl<In, Out, UfVert, UfGeom, UfFrag> Drop for GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
 where
-    I: Input,
+    In: Input,
+    Out: Output,
 {
     fn drop(&mut self) {
         unsafe {
-            self.base
-                .device
+            self.device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
 
-            self.base.device.destroy_pipeline(self.pipeline, None);
+            self.device.destroy_pipeline(self.pipeline, None);
 
-            self.base
-                .device
+            self.device
                 .destroy_descriptor_set_layout(self.pipeline_descriptor_layout, None);
 
             if let Some((descriptor_pool, _)) = self.descriptor.take() {
-                self.base
-                    .device
-                    .destroy_descriptor_pool(descriptor_pool, None);
+                self.device.destroy_descriptor_pool(descriptor_pool, None);
             }
         }
     }

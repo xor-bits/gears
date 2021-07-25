@@ -20,7 +20,9 @@ pub use loops::*;
 pub use renderer::*;
 
 pub use ash::vk;
+pub use gears_pipeline::*;
 pub use glam;
+pub use static_assertions;
 
 use log::error;
 use std::{fmt, time};
