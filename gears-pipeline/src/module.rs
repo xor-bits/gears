@@ -289,6 +289,18 @@ fn make_load_spirv(
     }
 
     quote! {
+        fn layout_assert(
+            l: &[gears::gears_spirv::parse::FieldType],
+            r: &[gears::gears_spirv::parse::FieldType],
+        ) -> Result<(), gears::renderer::pipeline::PipelineError> {
+            if l != r {
+                Err(gears::renderer::pipeline::PipelineError::LayoutMismatch(
+                    format!("left != right\n  left: '{:?}'\n right: '{:?}'", l, r),
+                ))
+            } else {
+                Ok(())
+            }
+        }
         pub fn load_spirv() -> Result<std::borrow::Cow<'static, [u8]>, gears::renderer::pipeline::PipelineError> {
             let source = super:: #shader_runtime (#name_str);
             let layout = gears::gears_spirv::parse::get_layout(&source);
@@ -298,14 +310,6 @@ fn make_load_spirv(
             let inputs = &layout.inputs[..];
             let outputs = &layout.outputs[..];
             let uniforms = layout.uniforms.first().map(|v| &v[..]).unwrap_or(&[]);
-
-            let layout_assert = |l, r| -> Result<(), gears::renderer::pipeline::PipelineError> {
-                if l != r {
-                    Err(gears::renderer::pipeline::PipelineError::LayoutMismatch(format!("left != right\n  left: '{:?}'\n right: '{:?}'", l, r)))
-                } else {
-                    Ok(())
-                }
-            };
 
             layout_assert(inputs, &[ #(#layout_inputs),* ])?;
             layout_assert(outputs, &[ #(#layout_outputs),* ])?;
