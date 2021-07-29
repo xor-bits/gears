@@ -45,7 +45,7 @@ mod shader {
     pipeline! {
         "DefaultPipeline"
         VertexData -> RGBAOutput
-        mod "VERT" as "vert" where { in UniformData }
+        mod "VERT" as "vert" where { in UniformData as 0 }
         mod "FRAG" as "frag"
     }
 }

@@ -1,11 +1,12 @@
-/// controls:
-/// - W,A,S,D,Space,C to move around
-/// - Mouse to look around
-/// - R to regenerate voxels with new seed
-/// - B to generate cube mesh
-/// - N to generate marching cubes mesh
-/// - M to generate smoothed marching cubes mesh
-/// - Tab to toggle wireframe
+//! controls:
+//! - W,A,S,D,Space,C to move around
+//! - Mouse to look around
+//! - R to regenerate voxels with new seed
+//! - B to generate cube mesh
+//! - N to generate marching cubes mesh
+//! - M to generate smoothed marching cubes mesh
+//! - Tab to toggle wireframe
+
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -76,7 +77,7 @@ mod shader {
         "DefaultPipeline"
         VertexData -> RGBAOutput
 
-        mod "VERT" as "vert" where { in UniformData }
+        mod "VERT" as "vert" where { in UniformData as 0 }
         mod "FRAG" as "frag"
     }
 
@@ -84,7 +85,7 @@ mod shader {
         "DebugPipeline"
         VertexData -> RGBAOutput
 
-        mod "VERT" as "vert" where { in UniformData }
+        mod "VERT" as "vert" where { in UniformData as 0 }
         mod "GEOM" as "geom"
         mod "DEBUG_FRAG" as "frag"
     }
