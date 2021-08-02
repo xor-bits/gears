@@ -1,13 +1,21 @@
+use super::{stage::StageBuffer, Buffer, BufferError, WriteType};
+use crate::{
+    renderer::{device::Dev, Renderer, UpdateRecordInfo},
+    WriteBuffer,
+};
 use ash::vk;
 
-use super::{stage::StageBuffer, Buffer, BufferError, WriteType};
-use crate::renderer::{device::Dev, Renderer, UpdateRecordInfo};
-
-pub struct UniformBuffer<T> {
+pub struct UniformBuffer<T>
+where
+    T: PartialEq,
+{
     stage: StageBuffer<T>, // the uniform buffer itself
 }
 
-impl<T> UniformBuffer<T> {
+impl<T> UniformBuffer<T>
+where
+    T: PartialEq,
+{
     pub fn new(renderer: &Renderer) -> Result<Self, BufferError> {
         Self::new_with_device(renderer.rdevice.clone())
     }
@@ -28,18 +36,34 @@ impl<T> UniformBuffer<T> {
             )?,
         })
     }
+}
 
-    pub fn write(&mut self, data: &T) -> Result<WriteType, BufferError> {
+impl<T> WriteBuffer<T> for UniformBuffer<T>
+where
+    T: PartialEq,
+{
+    fn write(&mut self, data: &T) -> Result<WriteType, BufferError> {
         self.stage.write_single(0, data)
     }
 }
 
-impl<T> Buffer for UniformBuffer<T> {
-    unsafe fn update(&self, uri: &UpdateRecordInfo) -> bool {
+impl<T> Buffer<T> for UniformBuffer<T>
+where
+    T: PartialEq,
+{
+    unsafe fn update(&mut self, uri: &UpdateRecordInfo) -> bool {
         self.stage.update(uri)
     }
 
-    fn get(&self) -> vk::Buffer {
-        self.stage.get()
+    fn buffer(&self) -> vk::Buffer {
+        self.stage.buffer()
+    }
+
+    fn len(&self) -> usize {
+        self.stage.len()
+    }
+
+    fn capacity(&self) -> usize {
+        self.stage.capacity()
     }
 }

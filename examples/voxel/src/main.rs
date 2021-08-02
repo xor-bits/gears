@@ -8,7 +8,10 @@
 //! - Tab to toggle wireframe
 
 use std::{
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -19,8 +22,8 @@ use gears::{
     renderer::buffer::{IndexBuffer, VertexBuffer},
     Buffer, ContextGPUPick, ContextValidation, CursorController, ElementState, EventLoopTarget,
     Frame, FrameLoop, FrameLoopTarget, FramePerfReport, HideMode, ImmediateFrameInfo,
-    RenderRecordBeginInfo, RenderRecordInfo, Renderer, RendererRecord, SyncMode, UpdateLoop,
-    UpdateLoopTarget, UpdateRate, UpdateRecordInfo, VirtualKeyCode, WindowEvent,
+    MultiWriteBuffer, RenderRecordBeginInfo, RenderRecordInfo, Renderer, RendererRecord, SyncMode,
+    UpdateLoop, UpdateLoopTarget, UpdateRate, UpdateRecordInfo, VirtualKeyCode, WindowEvent,
 };
 use marching_cubes::generate_marching_cubes;
 use parking_lot::RwLock;
@@ -35,14 +38,14 @@ mod shader {
         module, pipeline, FormatOf, Input, RGBAOutput, Uniform,
     };
 
-    #[derive(Input, Default)]
+    #[derive(Input, PartialEq, Default)]
     #[repr(C)]
     pub struct VertexData {
         pub position: Vec3,
         pub exposure: f32,
     }
 
-    #[derive(Uniform, Default)]
+    #[derive(Uniform, PartialEq, Default)]
     #[repr(C)]
     pub struct UniformData {
         pub mvp: Mat4,
@@ -119,23 +122,23 @@ struct App {
     frame: Frame,
     renderer: Renderer,
 
-    vb: VertexBuffer<shader::VertexData>,
-    ib: IndexBuffer<u32>,
     shaders: (shader::DefaultPipeline, shader::DebugPipeline),
+    vb: RwLock<VertexBuffer<shader::VertexData>>,
+    ib: RwLock<IndexBuffer<u32>>,
 
-    cursor_controller: CursorController,
-    input: Arc<RwLock<InputState>>,
+    cursor_controller: RwLock<CursorController>,
+    input: RwLock<InputState>,
 
-    look_dir: Vec2,
-    position: Vec3,
-    velocity: Vec3,
+    look_dir: RwLock<Vec2>,
+    position: RwLock<Vec3>,
+    velocity: RwLock<Vec3>,
 
-    debug: bool,
-    voxels: Vec<f32>,
-    mesh: MeshMode,
+    debug: AtomicBool,
+    voxels: RwLock<Vec<f32>>,
+    mesh: RwLock<MeshMode>,
 
-    updaterate: Duration,
-    delta_time: Instant,
+    update_rate: Duration,
+    delta_time: RwLock<Instant>,
 }
 
 fn generate_voxels(seed: i32) -> Vec<f32> {
@@ -172,17 +175,20 @@ fn point_to_index(x: usize, y: usize, z: usize) -> usize {
 }
 
 impl App {
-    fn init(frame: Frame, renderer: Renderer, input: Arc<RwLock<InputState>>) -> Arc<RwLock<Self>> {
+    fn init(frame: Frame, renderer: Renderer) -> Arc<RwLock<Self>> {
         let voxels = generate_voxels(0);
         let (vertices, indices) = generate_cubes(&voxels);
+        let voxels = RwLock::new(voxels);
 
-        let vb = VertexBuffer::new_with_data(&renderer, &vertices[..]).unwrap();
-        let ib = IndexBuffer::new_with_data(&renderer, &indices[..]).unwrap();
+        let vb = RwLock::new(VertexBuffer::new_with_data(&renderer, &vertices[..]).unwrap());
+        let ib = RwLock::new(IndexBuffer::new_with_data(&renderer, &indices[..]).unwrap());
 
         let fill_shader = shader::DefaultPipeline::build(&renderer).unwrap();
         let line_shader = shader::DebugPipeline::build(&renderer).unwrap();
 
-        let cursor_controller = CursorController::new().with_hide_mode(HideMode::GrabCursor);
+        let input = InputState::new();
+        let cursor_controller =
+            RwLock::new(CursorController::new().with_hide_mode(HideMode::GrabCursor));
 
         Arc::new(RwLock::new(Self {
             frame,
@@ -195,59 +201,65 @@ impl App {
             cursor_controller,
             input,
 
-            look_dir: Vec2::new(
+            look_dir: RwLock::new(Vec2::new(
                 -std::f32::consts::FRAC_PI_4 * 3.0,
                 -std::f32::consts::PI / 5.0,
-            ),
-            position: Vec3::new(-26.0, -26.0, -26.0),
-            velocity: Vec3::new(0.0, 0.0, 0.0),
+            )),
+            position: RwLock::new(Vec3::new(-26.0, -26.0, -26.0)),
+            velocity: RwLock::new(Vec3::new(0.0, 0.0, 0.0)),
 
-            debug: false,
+            debug: AtomicBool::new(false),
             voxels,
-            mesh: MeshMode::MarchingCubes,
+            mesh: RwLock::new(MeshMode::MarchingCubes),
 
-            updaterate: UpdateRate::PerSecond(UPDATES_PER_SECOND).to_interval(),
-            delta_time: Instant::now(),
+            update_rate: UpdateRate::PerSecond(UPDATES_PER_SECOND).to_interval(),
+            delta_time: RwLock::new(Instant::now()),
         }))
     }
 
-    fn remesh(&mut self) {
-        let (vertices, indices) = self.mesh.gen_mesh(&self.voxels);
+    fn re_mesh(&self) {
+        let (vertices, indices) = self.mesh.read().gen_mesh(&self.voxels.read());
 
         // TODO: impl VertexBuffer::resize
-        let vb_resize = self.vb.len() < vertices.len();
-        let ib_resize = self.ib.len() < indices.len();
+        let vb_resize = self.vb.read().len() < vertices.len();
+        let ib_resize = self.ib.read().len() < indices.len();
         if vb_resize || ib_resize {
             self.renderer.wait();
             if vb_resize {
-                self.vb = VertexBuffer::new_with_data(&self.renderer, &vertices[..]).unwrap();
+                *self.vb.write() =
+                    VertexBuffer::new_with_data(&self.renderer, &vertices[..]).unwrap();
             }
             if ib_resize {
-                self.ib = IndexBuffer::new_with_data(&self.renderer, &indices[..]).unwrap();
+                *self.ib.write() =
+                    IndexBuffer::new_with_data(&self.renderer, &indices[..]).unwrap();
             }
             self.renderer.request_rerecord();
         }
 
         if !vb_resize {
-            self.vb.write(0, &vertices[..]).unwrap();
+            self.vb.write().write(0, &vertices[..]).unwrap();
         }
         if !ib_resize {
-            self.ib.write(0, &indices[..]).unwrap();
+            self.ib.write().write(0, &indices[..]).unwrap();
         }
     }
 }
 
 impl RendererRecord for App {
     fn immediate(&self, imfi: &ImmediateFrameInfo) {
-        let dt_s = self.delta_time.elapsed().as_secs_f32() / self.updaterate.as_secs_f32();
+        let dt_s = self.delta_time.read().elapsed().as_secs_f32() / self.update_rate.as_secs_f32();
         let aspect = self.frame.aspect();
 
+        let look_dir = *self.look_dir.read();
+        let position = *self.position.read();
+        let velocity = *self.velocity.read();
+
         let dir = Vec3::new(
-            self.look_dir.y.cos() * self.look_dir.x.sin(),
-            self.look_dir.y.sin(),
-            self.look_dir.y.cos() * self.look_dir.x.cos(),
+            look_dir.y.cos() * look_dir.x.sin(),
+            look_dir.y.sin(),
+            look_dir.y.cos() * look_dir.x.cos(),
         );
-        let eye = self.position + self.velocity * dt_s;
+        let eye = position + velocity * dt_s;
         let focus = eye - dir;
         let up = Vec3::new(0.0, 1.0, 0.0);
 
@@ -261,13 +273,15 @@ impl RendererRecord for App {
         self.shaders.1.write_vertex_uniform(imfi, &ubo).unwrap();
     }
 
-    fn update(&self, uri: &UpdateRecordInfo) -> bool {
-        unsafe {
-            self.shaders.0.update(uri)
-                || self.shaders.1.update(uri)
-                || self.ib.update(uri)
-                || self.vb.update(uri)
-        }
+    unsafe fn update(&self, uri: &UpdateRecordInfo) -> bool {
+        [
+            self.shaders.0.update(uri),
+            self.shaders.1.update(uri),
+            self.ib.write().update(uri),
+            self.vb.write().update(uri),
+        ]
+        .iter()
+        .any(|b| *b)
     }
 
     fn begin_info(&self) -> RenderRecordBeginInfo {
@@ -277,15 +291,16 @@ impl RendererRecord for App {
         }
     }
 
-    fn record(&self, rri: &RenderRecordInfo) {
-        unsafe {
-            if self.debug {
-                self.shaders.0.bind(rri);
-            } else {
-                self.shaders.1.bind(rri);
-            }
-            self.ib.draw(rri, &self.vb);
+    unsafe fn record(&self, rri: &RenderRecordInfo) {
+        if self.debug.load(Ordering::SeqCst) {
+            self.shaders.0.draw(rri)
+        } else {
+            self.shaders.1.draw(rri)
         }
+        .vertex(&self.vb.read())
+        .index(&self.ib.read())
+        .direct(self.ib.read().len() as u32, 0)
+        .execute();
     }
 }
 
@@ -296,45 +311,47 @@ impl FrameLoopTarget for App {
 }
 
 impl EventLoopTarget for App {
-    fn event(&mut self, event: &WindowEvent) {
+    fn event(&self, event: &WindowEvent) {
+        self.input.write().update(event);
         if let WindowEvent::KeyboardInput { input, .. } = event {
             match (input.virtual_keycode, input.state) {
                 (Some(VirtualKeyCode::Tab), ElementState::Pressed) => {
                     self.renderer.request_rerecord();
-                    self.debug = !self.debug;
+                    self.debug.fetch_xor(true, Ordering::SeqCst); // xor a, 1 == !a
                 }
                 (Some(VirtualKeyCode::R), ElementState::Pressed) => {
                     let tp = Instant::now();
-                    self.voxels = generate_voxels(rand::random());
-                    self.remesh();
-                    println!("Regen and remesh took: {}ms", tp.elapsed().as_millis());
+                    *self.voxels.write() = generate_voxels(rand::random());
+                    self.re_mesh();
+                    println!("Re-gen and re-mesh took: {}ms", tp.elapsed().as_millis());
                 }
                 (Some(VirtualKeyCode::B), ElementState::Pressed) => {
                     let tp = Instant::now();
-                    self.mesh = MeshMode::Cubes;
-                    self.remesh();
-                    println!("Remesh took: {}ms", tp.elapsed().as_millis());
+                    *self.mesh.write() = MeshMode::Cubes;
+                    self.re_mesh();
+                    println!("Re-mesh took: {}ms", tp.elapsed().as_millis());
                 }
                 (Some(VirtualKeyCode::N), ElementState::Pressed) => {
                     let tp = Instant::now();
-                    self.mesh = MeshMode::MarchingCubes;
-                    self.remesh();
-                    println!("Remesh took: {}ms", tp.elapsed().as_millis());
+                    *self.mesh.write() = MeshMode::MarchingCubes;
+                    self.re_mesh();
+                    println!("Re-mesh took: {}ms", tp.elapsed().as_millis());
                 }
                 (Some(VirtualKeyCode::M), ElementState::Pressed) => {
                     let tp = Instant::now();
-                    self.mesh = MeshMode::SMarchingCubes;
-                    self.remesh();
-                    println!("Remesh took: {}ms", tp.elapsed().as_millis());
+                    *self.mesh.write() = MeshMode::SMarchingCubes;
+                    self.re_mesh();
+                    println!("Re-mesh took: {}ms", tp.elapsed().as_millis());
                 }
                 _ => {}
             }
         }
 
-        if let Some((delta_x, delta_y)) = self.cursor_controller.event(event, &self.frame) {
-            self.look_dir -= Vec2::new(delta_x as f32, delta_y as f32);
+        if let Some((delta_x, delta_y)) = self.cursor_controller.write().event(event, &self.frame) {
+            let mut look_dir = self.look_dir.write();
+            *look_dir -= Vec2::new(delta_x as f32, delta_y as f32);
 
-            self.look_dir.y = self.look_dir.y.clamp(
+            look_dir.y = look_dir.y.clamp(
                 -std::f32::consts::PI / 2.0 + 0.0001,
                 std::f32::consts::PI / 2.0 - 0.0001,
             );
@@ -343,14 +360,15 @@ impl EventLoopTarget for App {
 }
 
 impl UpdateLoopTarget for App {
-    fn update(&mut self, delta_time: &Duration) {
+    fn update(&self, delta_time: &Duration) {
         let dt_s = delta_time.as_secs_f32();
-        self.delta_time = Instant::now();
+        *self.delta_time.write() = Instant::now();
 
+        let look_dir = *self.look_dir.read();
         let look_dir = Vec3::new(
-            self.look_dir.y.cos() * self.look_dir.x.sin(),
-            self.look_dir.y.sin(),
-            self.look_dir.y.cos() * self.look_dir.x.cos(),
+            look_dir.y.cos() * look_dir.x.sin(),
+            look_dir.y.sin(),
+            look_dir.y.cos() * look_dir.x.cos(),
         );
         let up = Vec3::new(0.0, 1.0, 0.0);
 
@@ -372,26 +390,27 @@ impl UpdateLoopTarget for App {
                 dir.normalize() * speed
             };
 
-            self.velocity = Vec3::new(0.0, 0.0, 0.0);
+            let mut velocity = Vec3::new(0.0, 0.0, 0.0);
             if input.key_held(VirtualKeyCode::W) {
-                self.velocity -= dir;
+                velocity -= dir;
             }
             if input.key_held(VirtualKeyCode::S) {
-                self.velocity += dir;
+                velocity += dir;
             }
             if input.key_held(VirtualKeyCode::A) {
-                self.velocity += dir.cross(up);
+                velocity += dir.cross(up);
             }
             if input.key_held(VirtualKeyCode::D) {
-                self.velocity -= dir.cross(up);
+                velocity -= dir.cross(up);
             }
             if input.key_held(VirtualKeyCode::Space) {
-                self.velocity.y -= speed;
+                velocity.y -= speed;
             }
             if input.key_held(VirtualKeyCode::C) {
-                self.velocity.y += speed;
+                velocity.y += speed;
             }
-            self.position += self.velocity;
+            *self.velocity.write() = velocity;
+            *self.position.write() += velocity;
         }
     }
 }
@@ -414,12 +433,10 @@ fn main() {
         .build(context)
         .unwrap();
 
-    let input = InputState::new();
-    let app = App::init(frame, renderer, input.clone());
+    let app = App::init(frame, renderer);
 
     let frame_loop = FrameLoop::new()
         .with_event_loop(event_loop)
-        .with_event_target(input)
         .with_event_target(app.clone())
         .with_frame_target(app.clone())
         .build();

@@ -21,6 +21,7 @@ glam = "~0.17"
 wavefront_obj = "~10.0"
 parking_lot = "~0.11"
 bitflags = "~1.2"
+memoffset = "~0.6"
 winit = { version = "~0.25", features = ["web-sys"] }
 ash = "~0.32"
 ash-window = "~0.6"

@@ -2,15 +2,18 @@ use super::{debug::Debugger, renderer::queue::QueueFamilies, MapErrorLog};
 
 use ash::{
     extensions::{ext, khr},
+    prelude::VkResult,
     version::{EntryV1_0, InstanceV1_0},
     vk, Entry,
 };
 use colored::Colorize;
 use log::{debug, error, info, warn};
 use std::{
+    collections::HashSet,
     env,
     ffi::CStr,
     io::{self, Write},
+    os::raw::c_char,
 };
 use winit::window::Window;
 
@@ -112,8 +115,6 @@ impl Context {
                 engine_version.2,
             ));
 
-        // layers
-
         debug!(
             "Vulkan API version requested: {}.{}.{}",
             vk::version_major(application_info.api_version),
@@ -121,42 +122,27 @@ impl Context {
             vk::version_patch(application_info.api_version)
         );
 
+        // layers
+
+        // query available layers from instance
         let available_layers = entry
             .enumerate_instance_layer_properties()
             .map_err_log("Could not query instance layers", ContextError::OutOfMemory)?;
 
-        let mut requested_layers = if valid == ContextValidation::WithValidation {
-            vec![CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0").unwrap()]
+        // requested layers
+        let khronos_validation_layer =
+            CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0").unwrap();
+        let mut requested_layers: Vec<&CStr> = if valid == ContextValidation::WithValidation {
+            vec![khronos_validation_layer]
         } else {
             vec![]
         };
-
-        let mut requested_layers_raw: Vec<*const i8> = requested_layers
+        let mut requested_layers_raw: Vec<*const c_char> = requested_layers
             .iter()
-            .map(|raw_name| raw_name.as_ptr())
+            .map(|layer| layer.as_ptr())
             .collect();
 
-        // extensions
-
-        let available_extensions = entry
-            .enumerate_instance_extension_properties()
-            .map_err_log(
-                "Could not query instance extensions",
-                ContextError::OutOfMemory,
-            )?;
-
-        let mut requested_extensions = vec![ext::DebugUtils::name()];
-        requested_extensions.append(
-            &mut ash_window::enumerate_required_extensions(window).map_err_log(
-                "Could not query window extensions",
-                ContextError::UnsupportedPlatform,
-            )?,
-        );
-        let requested_extensions_raw: Vec<*const i8> = requested_extensions
-            .iter()
-            .map(|raw_name| raw_name.as_ptr())
-            .collect();
-
+        // check for missing layers
         let missing_layers: Vec<_> = requested_layers
             .iter()
             .filter_map(|layer| {
@@ -166,21 +152,6 @@ impl Context {
                     .is_none()
                 {
                     Some(layer)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        let missing_extensions: Vec<_> = requested_extensions
-            .iter()
-            .filter_map(|ext| {
-                if available_extensions
-                    .iter()
-                    .find(|aext| unsafe { CStr::from_ptr(aext.extension_name.as_ptr()) } == *ext)
-                    .is_none()
-                {
-                    Some(ext)
                 } else {
                     None
                 }
@@ -199,6 +170,70 @@ impl Context {
             requested_layers.clear();
             requested_layers_raw.clear();
         }
+        debug!("No missing layers");
+
+        // extensions
+
+        // query available extensions from instance and layers
+        const INSTANCE_QUERY_ERROR_MSG: &str = "Could not query instance extensions";
+        const INSTANCE_QUERY_ERROR: ContextError = ContextError::OutOfMemory;
+        let mut available_extensions_unique = HashSet::new();
+        let available_extensions = requested_layers
+            .iter()
+            .map(|layer| {
+                enumerate_instance_extension_properties_with_layer(&entry, layer)
+                    .map_err_log(INSTANCE_QUERY_ERROR_MSG, INSTANCE_QUERY_ERROR)
+            })
+            .collect::<Result<Vec<_>, ContextError>>()?
+            .into_iter()
+            .flatten()
+            .chain(
+                entry
+                    .enumerate_instance_extension_properties()
+                    .map_err_log(INSTANCE_QUERY_ERROR_MSG, INSTANCE_QUERY_ERROR)?,
+            )
+            .filter_map(|properties| {
+                if available_extensions_unique.contains(&properties.extension_name) {
+                    None
+                } else {
+                    available_extensions_unique.insert(properties.extension_name);
+                    Some(properties)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // requested extensions
+        let mut requested_extensions = if valid == ContextValidation::WithValidation {
+            vec![ext::DebugUtils::name()]
+        } else {
+            vec![]
+        };
+        requested_extensions.append(
+            &mut ash_window::enumerate_required_extensions(window).map_err_log(
+                "Could not query window extensions",
+                ContextError::UnsupportedPlatform,
+            )?,
+        );
+        let requested_extensions_raw: Vec<*const c_char> = requested_extensions
+            .iter()
+            .map(|raw_name| raw_name.as_ptr())
+            .collect();
+
+        // check for missing extensions
+        let missing_extensions: Vec<_> = requested_extensions
+            .iter()
+            .filter_map(|ext| {
+                if available_extensions
+                    .iter()
+                    .find(|aext| unsafe { CStr::from_ptr(aext.extension_name.as_ptr()) } == *ext)
+                    .is_none()
+                {
+                    Some(ext)
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         debug!(
             "Requested extensions: {:?}\nAvailable extensions: {:?}",
@@ -208,6 +243,9 @@ impl Context {
             error!("Missing extensions: {:?}", missing_extensions);
             return Err(ContextError::MissingInstanceExtensions);
         }
+        debug!("No missing extensions");
+
+        // instance
 
         let instance_info = vk::InstanceCreateInfo::builder()
             .application_info(&application_info)
@@ -216,14 +254,24 @@ impl Context {
 
         let instance = unsafe { entry.create_instance(&instance_info, None) }
             .map_err_log("Instance creation failed", ContextError::OutOfMemory)?;
+        debug!("Vulkan instance created");
+
+        // surface
 
         let surface = unsafe { ash_window::create_surface(&entry, &instance, window, None) }
             .map_err_log(
                 "Surface creation failed",
                 ContextError::MissingInstanceExtensions,
             )?;
+        debug!("Surface created");
 
-        let debugger = Debugger::new(&entry, &instance);
+        // debugger
+
+        let debugger = Debugger::new(&entry, &instance)
+            .map_err_log("Debugger creation failed", ContextError::OutOfMemory)?;
+        debug!("Debugger created");
+
+        // physical device
 
         let surface_loader = khr::Surface::new(&entry, &instance);
         let mut pdevice_names = Vec::new();
@@ -333,6 +381,31 @@ impl Context {
 
             debugger,
         })
+    }
+}
+
+fn enumerate_instance_extension_properties_with_layer(
+    entry: &Entry,
+    p_layer_name: &CStr,
+) -> VkResult<Vec<vk::ExtensionProperties>> {
+    unsafe {
+        let mut num = 0;
+        entry
+            .fp_v1_0()
+            .enumerate_instance_extension_properties(
+                p_layer_name.as_ptr(),
+                &mut num,
+                std::ptr::null_mut(),
+            )
+            .result()?;
+        let mut data = Vec::with_capacity(num as usize);
+        let err_code = entry.fp_v1_0().enumerate_instance_extension_properties(
+            p_layer_name.as_ptr(),
+            &mut num,
+            data.as_mut_ptr(),
+        );
+        data.set_len(num as usize);
+        err_code.result_with_success(data)
     }
 }
 

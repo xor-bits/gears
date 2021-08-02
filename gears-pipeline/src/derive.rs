@@ -50,7 +50,7 @@ pub fn impl_trait_input(ast: DeriveInput) -> TokenStream {
 
     (quote! {
         impl Input for #name {
-            type FIELDS = #tuple;
+            type Fields = #tuple;
             const BINDING_DESCRIPTION: &'static [gears::vk::VertexInputBindingDescription] = &[
                 gears::vk::VertexInputBindingDescription {
                     binding: 0,
@@ -71,7 +71,8 @@ pub fn impl_trait_uniform(ast: DeriveInput) -> TokenStream {
 
     (quote! {
         impl Uniform for #name {
-            type FIELDS = #tuple;
+            type Fields = #tuple;
+            type HasFields = gears::renderer::pipeline::Yes;
         }
     })
     .into()

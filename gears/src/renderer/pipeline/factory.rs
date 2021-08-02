@@ -1,4 +1,4 @@
-use crate::{BufferError, GraphicsPipeline, Input, Module, Output, Renderer};
+use crate::{BufferError, GraphicsPipeline, Input, Module, Output, Renderer, Uniform};
 use std::{borrow::Cow, marker::PhantomData};
 
 // pipeline
@@ -13,6 +13,7 @@ impl Pipeline {
 
 // pipeline builder
 
+#[must_use]
 pub struct PipelineBuilder {}
 
 impl PipelineBuilder {
@@ -23,6 +24,7 @@ impl PipelineBuilder {
 
 // graphics pipeline builder
 
+#[must_use]
 pub struct GPipelineBuilder<
     'a,
     In,
@@ -36,6 +38,9 @@ pub struct GPipelineBuilder<
 > where
     In: Input,
     Out: Output,
+    UfVert: Uniform,
+    UfGeom: Uniform,
+    UfFrag: Uniform,
 {
     vert: Module<'a, UfVert>,
     geom: Option<Module<'a, UfGeom>>,
@@ -52,6 +57,9 @@ impl<'a, In, Out, UfVert, UfGeom, UfFrag, const VERT: bool, const GEOM: bool, co
 where
     In: Input,
     Out: Output,
+    UfVert: Uniform,
+    UfGeom: Uniform,
+    UfFrag: Uniform,
 {
     pub fn new(
         base: PipelineBuilder,
@@ -74,6 +82,9 @@ impl<'a, In, Out, UfVert, UfGeom, UfFrag, const GEOM: bool>
 where
     In: Input,
     Out: Output,
+    UfVert: Uniform,
+    UfGeom: Uniform,
+    UfFrag: Uniform,
 {
     pub fn build(
         self,
@@ -97,6 +108,9 @@ impl<'a, Out, UfVert, UfGeom, UfFrag, const VERT: bool, const GEOM: bool, const 
     GPipelineBuilder<'a, (), Out, UfVert, UfGeom, UfFrag, VERT, GEOM, FRAG>
 where
     Out: Output,
+    UfVert: Uniform,
+    UfGeom: Uniform,
+    UfFrag: Uniform,
 {
     pub fn input<In>(
         self,
@@ -121,6 +135,9 @@ impl<'a, In, UfVert, UfGeom, UfFrag, const VERT: bool, const GEOM: bool, const F
     GPipelineBuilder<'a, In, (), UfVert, UfGeom, UfFrag, VERT, GEOM, FRAG>
 where
     In: Input,
+    UfVert: Uniform,
+    UfGeom: Uniform,
+    UfFrag: Uniform,
 {
     pub fn output<Out>(
         self,
@@ -148,6 +165,9 @@ impl<'a, In, Out, UfVert, UfGeom, UfFrag, const GEOM: bool, const FRAG: bool>
 where
     In: Input,
     Out: Output,
+    UfVert: Uniform,
+    UfGeom: Uniform,
+    UfFrag: Uniform,
 {
     pub fn vertex(
         self,
@@ -170,7 +190,10 @@ where
         spirv: Cow<'a, [u8]>,
         initial_uniform_data: NewUfVert,
         binding: u32,
-    ) -> GPipelineBuilder<'a, In, Out, NewUfVert, UfGeom, UfFrag, true, GEOM, FRAG> {
+    ) -> GPipelineBuilder<'a, In, Out, NewUfVert, UfGeom, UfFrag, true, GEOM, FRAG>
+    where
+        NewUfVert: Uniform,
+    {
         GPipelineBuilder {
             vert: Module::with(spirv, initial_uniform_data, binding),
             geom: self.geom,
@@ -197,7 +220,10 @@ impl PipelineBuilder {
         spirv: Cow<'a, [u8]>,
         initial_uniform_data: UfVert,
         binding: u32,
-    ) -> GPipelineBuilder<'a, (), (), UfVert, (), (), true, false, false> {
+    ) -> GPipelineBuilder<'a, (), (), UfVert, (), (), true, false, false>
+    where
+        UfVert: Uniform,
+    {
         self.graphics_builder()
             .vertex_uniform(spirv, initial_uniform_data, binding)
     }
@@ -210,6 +236,9 @@ impl<'a, In, Out, UfVert, UfGeom, UfFrag, const VERT: bool, const GEOM: bool>
 where
     In: Input,
     Out: Output,
+    UfVert: Uniform,
+    UfGeom: Uniform,
+    UfFrag: Uniform,
 {
     pub fn fragment(
         self,
@@ -232,7 +261,10 @@ where
         spirv: Cow<'a, [u8]>,
         initial_uniform_data: NewUfFrag,
         binding: u32,
-    ) -> GPipelineBuilder<'a, In, Out, UfVert, UfGeom, NewUfFrag, VERT, GEOM, true> {
+    ) -> GPipelineBuilder<'a, In, Out, UfVert, UfGeom, NewUfFrag, VERT, GEOM, true>
+    where
+        NewUfFrag: Uniform,
+    {
         GPipelineBuilder {
             vert: self.vert,
             geom: self.geom,
@@ -259,7 +291,10 @@ impl PipelineBuilder {
         spirv: Cow<'a, [u8]>,
         initial_uniform_data: UfFrag,
         binding: u32,
-    ) -> GPipelineBuilder<'a, (), (), (), (), UfFrag, false, false, true> {
+    ) -> GPipelineBuilder<'a, (), (), (), (), UfFrag, false, false, true>
+    where
+        UfFrag: Uniform,
+    {
         self.graphics_builder()
             .fragment_uniform(spirv, initial_uniform_data, binding)
     }
@@ -272,6 +307,9 @@ impl<'a, In, Out, UfVert, UfGeom, UfFrag, const VERT: bool, const FRAG: bool>
 where
     In: Input,
     Out: Output,
+    UfVert: Uniform,
+    UfGeom: Uniform,
+    UfFrag: Uniform,
 {
     pub fn geometry(
         self,
@@ -294,7 +332,10 @@ where
         spirv: Cow<'a, [u8]>,
         initial_uniform_data: NewUfGeom,
         binding: u32,
-    ) -> GPipelineBuilder<'a, In, Out, UfVert, NewUfGeom, UfFrag, VERT, true, FRAG> {
+    ) -> GPipelineBuilder<'a, In, Out, UfVert, NewUfGeom, UfFrag, VERT, true, FRAG>
+    where
+        NewUfGeom: Uniform,
+    {
         GPipelineBuilder {
             vert: self.vert,
             geom: Some(Module::with(spirv, initial_uniform_data, binding)),
@@ -321,7 +362,10 @@ impl PipelineBuilder {
         spirv: Cow<'a, [u8]>,
         initial_uniform_data: UfGeom,
         binding: u32,
-    ) -> GPipelineBuilder<'a, (), (), (), UfGeom, (), false, true, false> {
+    ) -> GPipelineBuilder<'a, (), (), (), UfGeom, (), false, true, false>
+    where
+        UfGeom: Uniform,
+    {
         self.graphics_builder()
             .geometry_uniform(spirv, initial_uniform_data, binding)
     }

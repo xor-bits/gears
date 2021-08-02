@@ -168,7 +168,7 @@ pub fn module(input: TokenStream) -> TokenStream {
 ///     active: i32,
 /// }
 ///
-/// assert_type_eq_all!(<VertexData as Input>::FIELDS, (f32, Vec2, i32));
+/// assert_type_eq_all!(<VertexData as Input>::Fields, (f32, Vec2, i32));
 /// ```
 /// ### Single field
 /// ```
@@ -178,7 +178,7 @@ pub fn module(input: TokenStream) -> TokenStream {
 ///		value: Vec3,
 /// }
 ///
-/// assert_type_eq_all!(<VertexData as Input>::FIELDS, (Vec3,));
+/// assert_type_eq_all!(<VertexData as Input>::Fields, (Vec3,));
 /// ```
 /// ### No fields
 /// ```
@@ -186,7 +186,7 @@ pub fn module(input: TokenStream) -> TokenStream {
 /// #[derive(Input)]
 /// pub struct VertexData {}
 ///
-/// assert_type_eq_all!(<VertexData as Input>::FIELDS, ());
+/// assert_type_eq_all!(<VertexData as Input>::Fields, ());
 /// ```
 /// ### Invalid fields
 /// ```compile_fail
@@ -196,7 +196,7 @@ pub fn module(input: TokenStream) -> TokenStream {
 ///     invalid: bool,
 /// }
 ///
-/// assert_type_eq_all!(<VertexData as Input>::FIELDS, (bool,));
+/// assert_type_eq_all!(<VertexData as Input>::Fields, (bool,));
 /// ```
 #[proc_macro_derive(Input)]
 pub fn derive_input(input: TokenStream) -> TokenStream {
@@ -220,7 +220,7 @@ pub fn derive_output(_input: TokenStream) -> TokenStream {
 ///     active: i32,
 /// }
 ///
-/// assert_type_eq_all!(<UniformData as Uniform>::FIELDS, (f32, Vec2, i32));
+/// assert_type_eq_all!(<UniformData as Uniform>::Fields, (f32, Vec2, i32));
 /// ```
 /// ```
 /// # use gears::{glam::Vec3, Uniform, FormatOf, static_assertions::assert_type_eq_all};
@@ -229,14 +229,14 @@ pub fn derive_output(_input: TokenStream) -> TokenStream {
 ///		value: Vec3,
 /// }
 ///
-/// assert_type_eq_all!(<UniformData as Uniform>::FIELDS, (Vec3,));
+/// assert_type_eq_all!(<UniformData as Uniform>::Fields, (Vec3,));
 /// ```
 /// ```
 /// # use gears::{Uniform, FormatOf, static_assertions::assert_type_eq_all};
 /// #[derive(Uniform)]
 /// pub struct UniformData {}
 ///
-/// assert_type_eq_all!(<UniformData as Uniform>::FIELDS, ());
+/// assert_type_eq_all!(<UniformData as Uniform>::Fields, ());
 /// ```
 #[proc_macro_derive(Uniform)]
 pub fn derive_uniform(input: TokenStream) -> TokenStream {

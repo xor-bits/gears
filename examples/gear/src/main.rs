@@ -2,10 +2,10 @@ use gears::{
     glam::{Mat4, Vec3},
     load_obj, Buffer, ContextGPUPick, ContextValidation, EventLoopTarget, Frame, FrameLoop,
     FrameLoopTarget, FramePerfReport, ImmediateFrameInfo, InputState, KeyboardInput,
-    RenderRecordInfo, Renderer, RendererRecord, SyncMode, UpdateRecordInfo, VertexBuffer,
-    VirtualKeyCode, WindowEvent,
+    MultiWriteBuffer, RenderRecordInfo, Renderer, RendererRecord, SyncMode, UpdateRecordInfo,
+    VertexBuffer, VirtualKeyCode, WindowEvent,
 };
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use std::{sync::Arc, time::Instant};
 
 mod shader {
@@ -14,14 +14,14 @@ mod shader {
         module, pipeline, FormatOf, Input, RGBAOutput, Uniform,
     };
 
-    #[derive(Input, Default)]
+    #[derive(Input, PartialEq, Default)]
     #[repr(C)]
     pub struct VertexData {
         pub pos: Vec3,
         pub norm: Vec3,
     }
 
-    #[derive(Uniform, Default)]
+    #[derive(Uniform, PartialEq, Default)]
     #[repr(C)]
     pub struct UniformData {
         pub model_matrix: Mat4,
@@ -55,48 +55,53 @@ const MAX_VBO_LEN: usize = 50_000;
 struct App {
     frame: Frame,
     renderer: Renderer,
-    input: Arc<RwLock<InputState>>,
+    input: RwLock<InputState>,
 
-    vb: VertexBuffer<shader::VertexData>,
     shader: shader::DefaultPipeline,
+    vb: RwLock<VertexBuffer<shader::VertexData>>,
 
-    delta_time: Mutex<Instant>,
-    distance: Mutex<f32>,
-    position: Mutex<Vec3>,
+    delta_time: RwLock<Instant>,
+    distance: RwLock<f32>,
+    position: RwLock<Vec3>,
 }
 
 impl App {
-    fn init(frame: Frame, renderer: Renderer, input: Arc<RwLock<InputState>>) -> Arc<RwLock<Self>> {
-        let vb = VertexBuffer::new(&renderer, MAX_VBO_LEN).unwrap();
+    fn init(frame: Frame, renderer: Renderer) -> Arc<RwLock<Self>> {
+        let input = InputState::new();
         let shader = shader::DefaultPipeline::build(&renderer).unwrap();
+        let vb = RwLock::new(
+            shader
+                .create_vbo_with(Self::vertex_data().as_slice())
+                .unwrap(),
+        );
 
-        let mut app = Self {
+        Arc::new(RwLock::new(Self {
             frame,
             renderer,
             input,
 
-            vb,
             shader,
+            vb,
 
-            delta_time: Mutex::new(Instant::now()),
-            distance: Mutex::new(2.5),
-            position: Mutex::new(Vec3::new(0.0, 0.0, 0.0)),
-        };
-
-        app.reload_mesh();
-
-        Arc::new(RwLock::new(app))
+            delta_time: RwLock::new(Instant::now()),
+            distance: RwLock::new(2.5),
+            position: RwLock::new(Vec3::new(0.0, 0.0, 0.0)),
+        }))
     }
 
-    fn reload_mesh(&mut self) {
-        let vertices = load_obj(include_str!("res/gear.obj"), None, |position, normal| {
+    fn vertex_data() -> Vec<shader::VertexData> {
+        load_obj(include_str!("../res/gear.obj"), None, |position, normal| {
             shader::VertexData {
                 pos: position,
                 norm: normal,
             }
-        });
+        })
+    }
 
+    fn reload_mesh(&self) {
+        let vertices = Self::vertex_data();
         self.vb
+            .write()
             .write(0, &vertices[..vertices.len().min(MAX_VBO_LEN)])
             .unwrap();
     }
@@ -104,13 +109,13 @@ impl App {
 
 impl RendererRecord for App {
     fn immediate(&self, imfi: &ImmediateFrameInfo) {
+        let aspect = self.frame.aspect();
         let dt_s = {
-            let mut delta_time = self.delta_time.lock();
+            let mut delta_time = self.delta_time.write();
             let dt_s = delta_time.elapsed().as_secs_f32();
             *delta_time = Instant::now();
             dt_s
         };
-        let aspect = self.frame.aspect();
 
         let mut distance_delta = 0.0;
         let mut velocity = Vec3::new(0.0, 0.0, 0.0);
@@ -139,12 +144,12 @@ impl RendererRecord for App {
             }
         }
         let distance = {
-            let mut distance = self.distance.lock();
+            let mut distance = self.distance.write();
             *distance += distance_delta * 3.0 * dt_s;
             *distance
         };
         let position = {
-            let mut position = self.position.lock();
+            let mut position = self.position.write();
 
             *position += velocity * 3.0 * dt_s;
             position.y = position
@@ -173,20 +178,24 @@ impl RendererRecord for App {
         self.shader.write_vertex_uniform(imfi, &ubo).unwrap();
     }
 
-    fn update(&self, uri: &UpdateRecordInfo) -> bool {
-        unsafe { self.shader.update(uri) || self.vb.update(uri) }
+    unsafe fn update(&self, uri: &UpdateRecordInfo) -> bool {
+        [self.shader.update(uri), self.vb.write().update(uri)]
+            .iter()
+            .any(|b| *b)
     }
 
-    fn record(&self, rri: &RenderRecordInfo) {
-        unsafe {
-            self.shader.bind(rri);
-            self.vb.draw(rri);
-        }
+    unsafe fn record(&self, rri: &RenderRecordInfo) {
+        self.shader
+            .draw(rri)
+            .vertex(&self.vb.read())
+            .direct(self.vb.read().len() as u32, 0)
+            .execute();
     }
 }
 
 impl EventLoopTarget for App {
-    fn event(&mut self, event: &WindowEvent) {
+    fn event(&self, event: &WindowEvent) {
+        self.input.write().update(event);
         match event {
             WindowEvent::KeyboardInput {
                 input:
@@ -226,12 +235,10 @@ fn main() {
         .build(context)
         .unwrap();
 
-    let input = InputState::new();
-    let app = App::init(frame, renderer, input.clone());
+    let app = App::init(frame, renderer);
 
     FrameLoop::new()
         .with_event_loop(event_loop)
-        .with_event_target(input)
         .with_event_target(app.clone())
         .with_frame_target(app)
         .build()

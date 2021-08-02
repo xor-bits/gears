@@ -1,26 +1,29 @@
-use ash::{version::DeviceV1_0, vk};
-use std::{
-    mem,
-    sync::atomic::{AtomicBool, Ordering},
-};
-
-use log::debug;
-
-use crate::renderer::{device::Dev, RenderRecordInfo, Renderer, UpdateRecordInfo};
-
 use super::{create_buffer, stage::StageBuffer, Buffer, BufferError, WriteType};
+use crate::{
+    renderer::{device::Dev, RenderRecordInfo, Renderer, UpdateRecordInfo},
+    MultiWriteBuffer,
+};
+use ash::{version::DeviceV1_0, vk};
+use log::debug;
+use std::mem;
 
-pub struct VertexBuffer<T> {
+pub struct VertexBuffer<T>
+where
+    T: PartialEq,
+{
     device: Dev,
 
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
 
-    requested_copy: AtomicBool,
+    requested_copy: bool,
     stage: StageBuffer<T>,
 }
 
-impl<T> VertexBuffer<T> {
+impl<T> VertexBuffer<T>
+where
+    T: PartialEq,
+{
     pub fn new(renderer: &Renderer, size: usize) -> Result<Self, BufferError> {
         Self::new_with_device(renderer.rdevice.clone(), size)
     }
@@ -49,25 +52,9 @@ impl<T> VertexBuffer<T> {
             buffer,
             memory,
 
-            requested_copy: AtomicBool::new(false),
+            requested_copy: false,
             stage,
         })
-    }
-
-    pub fn write(&mut self, offset: usize, data: &[T]) -> Result<WriteType, BufferError> {
-        let result = self.stage.write_slice(offset, data);
-        if let Ok(WriteType::Write) = result {
-            self.requested_copy.store(true, Ordering::SeqCst);
-        }
-        result
-    }
-
-    pub fn len(&self) -> usize {
-        self.stage.len()
-    }
-
-    pub fn capacity(&self) -> usize {
-        self.stage.capacity()
     }
 
     pub unsafe fn bind(&self, rri: &RenderRecordInfo) {
@@ -81,38 +68,49 @@ impl<T> VertexBuffer<T> {
         self.device
             .cmd_bind_vertex_buffers(rri.command_buffer, 0, &buffer, &offsets);
     }
+}
 
-    pub unsafe fn draw(&self, rri: &RenderRecordInfo) {
-        self.bind(rri);
-
-        rri.triangles.fetch_add(self.len() / 3, Ordering::SeqCst);
-
-        if rri.debug_calls {
-            debug!("cmd_draw");
-        }
-
-        self.device
-            .cmd_draw(rri.command_buffer, self.len() as u32, 1, 0, 0);
+impl<T> MultiWriteBuffer<T> for VertexBuffer<T>
+where
+    T: PartialEq,
+{
+    fn write(&mut self, offset: usize, data: &[T]) -> Result<WriteType, BufferError> {
+        let result = self.stage.write_slice(offset, data);
+        self.requested_copy = result == Ok(WriteType::Write) || self.requested_copy;
+        result
     }
 }
 
-impl<T> Buffer for VertexBuffer<T> {
-    unsafe fn update(&self, uri: &UpdateRecordInfo) -> bool {
-        let requested_copy = self.requested_copy.swap(false, Ordering::SeqCst);
-
-        if requested_copy {
+impl<T> Buffer<T> for VertexBuffer<T>
+where
+    T: PartialEq,
+{
+    unsafe fn update(&mut self, uri: &UpdateRecordInfo) -> bool {
+        let req = self.requested_copy;
+        if req {
+            self.requested_copy = false;
             self.stage.copy_to(uri, self);
         }
-
-        requested_copy
+        req
     }
 
-    fn get(&self) -> vk::Buffer {
+    fn buffer(&self) -> vk::Buffer {
         self.buffer
+    }
+
+    fn len(&self) -> usize {
+        self.stage.len()
+    }
+
+    fn capacity(&self) -> usize {
+        self.stage.capacity()
     }
 }
 
-impl<T> Drop for VertexBuffer<T> {
+impl<T> Drop for VertexBuffer<T>
+where
+    T: PartialEq,
+{
     fn drop(&mut self) {
         unsafe {
             self.device.free_memory(self.memory, None);

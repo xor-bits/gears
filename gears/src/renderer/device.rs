@@ -1,6 +1,6 @@
 use ash::{extensions::khr, version::InstanceV1_0, vk};
 use log::{debug, error};
-use std::{ffi::CStr, ops, sync::Arc};
+use std::{ffi::CStr, ops, os::raw::c_char, sync::Arc};
 
 use crate::{
     context::{Context, ContextError},
@@ -59,7 +59,7 @@ pub type Dev = Arc<RenderDevice>;
 
 impl RenderDevice {
     // safe if ptrs are not used after instance_layers is modified or dropped
-    unsafe fn device_layers(instance_layers: &Vec<&CStr>) -> Vec<*const i8> {
+    unsafe fn device_layers(instance_layers: &Vec<&CStr>) -> Vec<*const c_char> {
         instance_layers
             .iter()
             .map(|raw_name| raw_name.as_ptr())
@@ -70,7 +70,7 @@ impl RenderDevice {
     unsafe fn device_extensions(
         instance: &ash::Instance,
         pdevice: vk::PhysicalDevice,
-    ) -> Result<Vec<*const i8>, ContextError> {
+    ) -> Result<Vec<*const c_char>, ContextError> {
         let available = instance
             .enumerate_device_extension_properties(pdevice)
             .map_err_log(
@@ -79,7 +79,7 @@ impl RenderDevice {
             )?;
 
         let requested = vec![khr::Swapchain::name()];
-        let requested_raw: Vec<*const i8> =
+        let requested_raw: Vec<*const c_char> =
             requested.iter().map(|raw_name| raw_name.as_ptr()).collect();
 
         let missing: Vec<_> = requested

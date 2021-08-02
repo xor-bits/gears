@@ -1,16 +1,25 @@
 use crate::{
-    pipeline::shader_module, renderer::device::Dev, Buffer, BufferError, ImmediateFrameInfo, Input,
-    Module, Output, RenderRecordInfo, Uniform, UniformBuffer, UpdateRecordInfo, WriteType,
+    pipeline::shader_module, renderer::device::Dev, Buffer, BufferError, ImmediateFrameInfo,
+    IndexBuffer, IndirectBuffer, Input, Module, MultiWriteBuffer, Output, RenderRecordInfo, UInt,
+    Uniform, UniformBuffer, UpdateRecordInfo, VertexBuffer, WriteBuffer, WriteType, Yes,
 };
 use ash::{version::DeviceV1_0, vk};
 use log::debug;
 use parking_lot::RwLock;
 use std::marker::PhantomData;
 
+pub mod draw;
+
+#[cfg(feature = "short_namespaces")]
+pub use draw::*;
+
 pub struct GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
 where
     In: Input,
     Out: Output,
+    UfVert: Uniform,
+    UfGeom: Uniform,
+    UfFrag: Uniform,
 {
     device: Dev,
     ubos: GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag>,
@@ -21,16 +30,17 @@ where
     pipeline_layout: vk::PipelineLayout,
     pipeline_descriptor_layout: vk::DescriptorSetLayout,
 
-    _p0: PhantomData<In>,
-    _p1: PhantomData<Out>,
-    _p2: PhantomData<UfVert>,
-    _p3: PhantomData<UfGeom>,
-    _p4: PhantomData<UfFrag>,
+    _p: PhantomData<(In, Out, UfVert, UfGeom, UfFrag)>,
 }
 
-struct UBOModule<Uf>(Option<(Vec<RwLock<UniformBuffer<Uf>>>, u32)>);
+struct UBOModule<Uf>(Option<(Vec<RwLock<UniformBuffer<Uf>>>, u32)>)
+where
+    Uf: Uniform;
 
-impl<Uf> UBOModule<Uf> {
+impl<Uf> UBOModule<Uf>
+where
+    Uf: Uniform,
+{
     fn write(&self, imfi: &ImmediateFrameInfo, data: &Uf) -> Result<WriteType, BufferError> {
         let ubo = self
             .0
@@ -49,14 +59,19 @@ impl<Uf> UBOModule<Uf> {
             .map(|(sets, _)| sets.get(uri.image_index))
             .flatten();
         if let Some(ubo) = ubo {
-            ubo.read().update(uri)
+            ubo.write().update(uri)
         } else {
             false
         }
     }
 }
 
-struct GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag> {
+struct GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag>
+where
+    UfVert: Uniform,
+    UfGeom: Uniform,
+    UfFrag: Uniform,
+{
     vert: UBOModule<UfVert>,
     geom: UBOModule<UfGeom>,
     frag: UBOModule<UfFrag>,
@@ -67,6 +82,9 @@ impl<In, Out, UfVert, UfGeom, UfFrag> GraphicsPipeline<In, Out, UfVert, UfGeom, 
 where
     In: Input,
     Out: Output,
+    UfVert: Uniform,
+    UfGeom: Uniform,
+    UfFrag: Uniform,
 {
     pub fn new(
         device: Dev,
@@ -244,22 +262,18 @@ where
             pipeline_layout,
             pipeline_descriptor_layout: pipeline_descriptor_layouts[0],
 
-            _p0: PhantomData {},
-            _p1: PhantomData {},
-            _p2: PhantomData {},
-            _p3: PhantomData {},
-            _p4: PhantomData {},
+            _p: PhantomData {},
         })
     }
 
     pub unsafe fn update(&self, uri: &UpdateRecordInfo) -> bool {
-        let mut updates = false;
-
-        updates = updates || self.ubos.vert.update(uri);
-        updates = updates || self.ubos.geom.update(uri);
-        updates = updates || self.ubos.frag.update(uri);
-
-        updates
+        [
+            self.ubos.vert.update(uri),
+            self.ubos.geom.update(uri),
+            self.ubos.frag.update(uri),
+        ]
+        .iter()
+        .any(|u| *u)
     }
 
     pub unsafe fn bind(&self, rri: &RenderRecordInfo) {
@@ -298,14 +312,121 @@ where
         }
     }
 
-    pub unsafe fn draw(&self, count: u32, rri: &RenderRecordInfo) {
-        if rri.debug_calls {
-            debug!("cmd_bind_pipeline");
-        }
-
-        self.device.cmd_draw(rri.command_buffer, count, 1, 0, 0);
+    pub fn create_vertex_buffer(&self, size: usize) -> Result<VertexBuffer<In>, BufferError> {
+        VertexBuffer::new_with_device(self.device.clone(), size)
     }
 
+    pub fn create_vbo_with(&self, data: &[In]) -> Result<VertexBuffer<In>, BufferError> {
+        let mut vbo = self.create_vertex_buffer(data.len())?;
+        vbo.write(0, data)?;
+        Ok(vbo)
+    }
+
+    pub fn create_index_buffer<I: UInt>(&self, size: usize) -> Result<IndexBuffer<I>, BufferError> {
+        IndexBuffer::new_with_device(self.device.clone(), size)
+    }
+
+    pub fn create_index_buffer_with<I: UInt>(
+        &self,
+        data: &[I],
+    ) -> Result<IndexBuffer<I>, BufferError> {
+        let mut vbo = self.create_index_buffer(data.len())?;
+        vbo.write(0, data)?;
+        Ok(vbo)
+    }
+
+    pub fn create_indirect_buffer(&self) -> Result<IndirectBuffer, BufferError> {
+        self.create_indirect_buffer_with(0, 0)
+    }
+
+    pub fn create_indirect_buffer_with(
+        &self,
+        count: u32,
+        offset: u32,
+    ) -> Result<IndirectBuffer, BufferError> {
+        IndirectBuffer::new_with_device(self.device.clone(), count, offset)
+    }
+}
+
+// draw
+
+impl<In, Out, UfVert, UfGeom, UfFrag> GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
+where
+    In: Input,
+    Out: Output,
+    UfVert: Uniform,
+    UfGeom: Uniform,
+    UfFrag: Uniform,
+{
+    pub unsafe fn draw<'a>(&'a self, rri: &'a RenderRecordInfo) -> DGDrawCommand<'a, In> {
+        self.bind(rri);
+        DrawCommand::new(&self.device, rri)
+    }
+}
+
+// uniforms
+
+impl<In, Out, UfVert, UfGeom, UfFrag> GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
+where
+    In: Input,
+    Out: Output,
+    UfVert: Uniform<HasFields = Yes>,
+    UfGeom: Uniform,
+    UfFrag: Uniform,
+{
+    pub fn write_vertex_uniform(
+        &self,
+        imfi: &ImmediateFrameInfo,
+        data: &UfVert,
+    ) -> Result<WriteType, BufferError> {
+        self.ubos.vert.write(imfi, data)
+    }
+}
+
+impl<In, Out, UfVert, UfGeom, UfFrag> GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
+where
+    In: Input,
+    Out: Output,
+    UfGeom: Uniform<HasFields = Yes>,
+    UfVert: Uniform,
+    UfFrag: Uniform,
+{
+    pub fn write_geometry_uniform(
+        &self,
+        imfi: &ImmediateFrameInfo,
+        data: &UfGeom,
+    ) -> Result<WriteType, BufferError> {
+        self.ubos.geom.write(imfi, data)
+    }
+}
+
+impl<In, Out, UfVert, UfGeom, UfFrag> GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
+where
+    In: Input,
+    Out: Output,
+    UfFrag: Uniform<HasFields = Yes>,
+    UfVert: Uniform,
+    UfGeom: Uniform,
+{
+    pub fn write_fragment_uniform(
+        &self,
+        imfi: &ImmediateFrameInfo,
+        data: &UfFrag,
+    ) -> Result<WriteType, BufferError> {
+        self.ubos.frag.write(imfi, data)
+    }
+}
+
+// privates
+
+impl<In, Out, UfVert, UfGeom, UfFrag> GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
+where
+    In: Input,
+    Out: Output,
+    UfVert: Uniform,
+    UfGeom: Uniform,
+    UfFrag: Uniform,
+{
     fn get_ubos(
         device: &Dev,
         set_count: usize,
@@ -462,9 +583,11 @@ where
         desc_sets: &[vk::DescriptorSet],
         ubo: &Vec<RwLock<UniformBuffer<Uf>>>,
         binding: u32,
-    ) {
+    ) where
+        Uf: PartialEq,
+    {
         for (&desc_set, ubo) in desc_sets.iter().zip(ubo.iter()) {
-            let buffer = ubo.read().get();
+            let buffer = ubo.read().buffer();
 
             let buffer_info = [vk::DescriptorBufferInfo::builder()
                 .offset(0)
@@ -503,55 +626,13 @@ where
     }
 }
 
-impl<In, Out, UfVert, UfGeom, UfFrag> GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
-where
-    In: Input,
-    Out: Output,
-    UfVert: Uniform,
-{
-    pub fn write_vertex_uniform(
-        &self,
-        imfi: &ImmediateFrameInfo,
-        data: &UfVert,
-    ) -> Result<WriteType, BufferError> {
-        self.ubos.vert.write(imfi, data)
-    }
-}
-
-impl<In, Out, UfVert, UfGeom, UfFrag> GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
-where
-    In: Input,
-    Out: Output,
-    UfGeom: Uniform,
-{
-    pub fn write_geometry_uniform(
-        &self,
-        imfi: &ImmediateFrameInfo,
-        data: &UfGeom,
-    ) -> Result<WriteType, BufferError> {
-        self.ubos.geom.write(imfi, data)
-    }
-}
-
-impl<In, Out, UfVert, UfGeom, UfFrag> GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
-where
-    In: Input,
-    Out: Output,
-    UfFrag: Uniform,
-{
-    pub fn write_fragment_uniform(
-        &self,
-        imfi: &ImmediateFrameInfo,
-        data: &UfFrag,
-    ) -> Result<WriteType, BufferError> {
-        self.ubos.frag.write(imfi, data)
-    }
-}
-
 impl<In, Out, UfVert, UfGeom, UfFrag> Drop for GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
 where
     In: Input,
     Out: Output,
+    UfVert: Uniform,
+    UfGeom: Uniform,
+    UfFrag: Uniform,
 {
     fn drop(&mut self) {
         unsafe {

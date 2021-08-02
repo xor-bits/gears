@@ -1,3 +1,4 @@
+pub mod batch;
 pub mod buffer;
 mod device;
 pub mod object;
@@ -5,6 +6,8 @@ pub mod pipeline;
 pub mod query;
 pub mod queue;
 
+#[cfg(feature = "short_namespaces")]
+pub use batch::*;
 #[cfg(feature = "short_namespaces")]
 pub use buffer::*;
 #[cfg(feature = "short_namespaces")]
@@ -126,7 +129,7 @@ pub trait RendererRecord {
     fn immediate(&self, imfi: &ImmediateFrameInfo) {}
 
     #[allow(unused_variables)]
-    fn update(&self, uri: &UpdateRecordInfo) -> bool {
+    unsafe fn update(&self, uri: &UpdateRecordInfo) -> bool {
         // 'any' all object updates and return the result of that
         false
     }
@@ -140,7 +143,7 @@ pub trait RendererRecord {
     }
 
     #[allow(unused_variables)]
-    fn record(&self, rri: &RenderRecordInfo) {}
+    unsafe fn record(&self, rri: &RenderRecordInfo) {}
 }
 
 pub struct RendererData {
@@ -457,7 +460,7 @@ impl Renderer {
             command_buffer: render_object.update_cb,
             image_index,
         };
-        render_object.update_cb_pending = recorder.update(&uri);
+        render_object.update_cb_pending = unsafe { recorder.update(&uri) };
 
         if render_object.update_cb_pending {
             render_object.update_cb_recording = false;
@@ -558,8 +561,8 @@ impl Renderer {
             );
         }
 
-        recorder.record(&rri);
         unsafe {
+            recorder.record(&rri);
             render_object.perf.bind(&rri);
         }
         render_object.triangles = rri.triangles.load(Ordering::SeqCst);

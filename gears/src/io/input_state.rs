@@ -1,9 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
-
+/* use crate::loops::frame::EventLoopTarget; */
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use winit::event::{ElementState, KeyboardInput, VirtualKeyCode, WindowEvent};
-
-use crate::loops::frame::EventLoopTarget;
 
 pub struct InputState {
     keymap: HashMap<VirtualKeyCode, bool>,
@@ -11,11 +9,11 @@ pub struct InputState {
 }
 
 impl InputState {
-    pub fn new() -> Arc<RwLock<Self>> {
-        Arc::new(RwLock::new(Self {
+    pub fn new() -> RwLock<Self> {
+        RwLock::new(Self {
             keymap: HashMap::new(),
             window_focused: false,
-        }))
+        })
     }
 
     pub fn window_focused(&self) -> bool {
@@ -51,8 +49,8 @@ impl InputState {
     }
 }
 
-impl EventLoopTarget for InputState {
-    fn event(&mut self, event: &WindowEvent) {
+/* impl EventLoopTarget for InputState {
+    fn event(&self, event: &WindowEvent) {
         self.update(event);
     }
-}
+} */

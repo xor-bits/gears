@@ -1,13 +1,19 @@
+pub mod debug;
 pub mod image;
 pub mod index;
+pub mod indirect;
 pub mod stage;
 pub mod uniform;
 pub mod vertex;
 
 #[cfg(feature = "short_namespaces")]
+pub use debug::*;
+#[cfg(feature = "short_namespaces")]
 pub use image::*;
 #[cfg(feature = "short_namespaces")]
 pub use index::*;
+#[cfg(feature = "short_namespaces")]
+pub use indirect::*;
 #[cfg(feature = "short_namespaces")]
 pub use stage::*;
 #[cfg(feature = "short_namespaces")]
@@ -20,13 +26,13 @@ use log::warn;
 
 use super::{device::Dev, UpdateRecordInfo};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum WriteType {
     NoWrite,
     Write,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum BufferError {
     NoUBOs,
     InvalidSize,
@@ -35,9 +41,20 @@ pub enum BufferError {
     NoMemoryType(vk::MemoryPropertyFlags),
 }
 
-pub trait Buffer {
-    unsafe fn update(&self, uri: &UpdateRecordInfo) -> bool;
-    fn get(&self) -> vk::Buffer;
+pub trait MultiWriteBuffer<T>: Buffer<T> {
+    fn write(&mut self, offset: usize, data: &[T]) -> Result<WriteType, BufferError>;
+}
+
+pub trait WriteBuffer<T>: Buffer<T> {
+    fn write(&mut self, data: &T) -> Result<WriteType, BufferError>;
+}
+
+pub trait Buffer<T> {
+    unsafe fn update(&mut self, uri: &UpdateRecordInfo) -> bool;
+
+    fn buffer(&self) -> vk::Buffer;
+    fn len(&self) -> usize;
+    fn capacity(&self) -> usize;
 }
 
 fn create_buffer(

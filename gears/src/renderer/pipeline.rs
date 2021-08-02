@@ -73,42 +73,46 @@ pub struct ShaderData {} */
 
 // compile time shaders
 
+#[derive(Debug, PartialEq)]
 pub struct RGBAOutput {
     _color: Vec4,
 }
 
-pub trait Input {
-    type FIELDS;
+pub struct Yes;
+pub struct No;
+
+pub trait Input: PartialEq + Default {
+    type Fields;
     const BINDING_DESCRIPTION: &'static [vk::VertexInputBindingDescription];
     const ATTRIBUTE_DESCRIPTION: &'static [vk::VertexInputAttributeDescription];
 }
 
-pub trait Output {
-    type FIELDS;
+pub trait Output: PartialEq {
+    type Fields;
 }
 
-pub trait Uniform {
-    type FIELDS;
-    const IS_EMPTY: bool = false;
+pub trait Uniform: PartialEq + Default {
+    type Fields;
+    type HasFields;
 }
 
 impl Input for () {
-    type FIELDS = ();
+    type Fields = ();
     const BINDING_DESCRIPTION: &'static [vk::VertexInputBindingDescription] = &[];
     const ATTRIBUTE_DESCRIPTION: &'static [vk::VertexInputAttributeDescription] = &[];
 }
 
 impl Output for () {
-    type FIELDS = ();
+    type Fields = ();
 }
 
 impl Uniform for () {
-    type FIELDS = ();
-    const IS_EMPTY: bool = true;
+    type Fields = ();
+    type HasFields = No;
 }
 
 impl Output for RGBAOutput {
-    type FIELDS = (Vec4,);
+    type Fields = (Vec4,);
 }
 
 // shader builder

@@ -1,4 +1,4 @@
-use ash::{extensions::ext, vk};
+use ash::{extensions::ext, prelude::VkResult, vk};
 use log::{log, Level};
 use std::{borrow::Cow, ffi::CStr};
 
@@ -42,7 +42,7 @@ unsafe extern "system" fn vulkan_debug_callback(
     #[cfg(feature = "validation_panic")]
     if level == Level::Error {
         panic!("Validation error");
-    }
+    };
 
     vk::FALSE
 }
@@ -53,7 +53,7 @@ pub struct Debugger {
 }
 
 impl Debugger {
-    pub fn new(entry: &ash::Entry, instance: &ash::Instance) -> Self {
+    pub fn new(entry: &ash::Entry, instance: &ash::Instance) -> VkResult<Self> {
         let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
             .message_severity(
                 vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
@@ -65,12 +65,12 @@ impl Debugger {
 
         let debug_utils = ext::DebugUtils::new(entry, instance);
         let debug_messenger =
-            unsafe { debug_utils.create_debug_utils_messenger(&debug_info, None) }.unwrap();
+            unsafe { debug_utils.create_debug_utils_messenger(&debug_info, None)? };
 
-        Self {
+        Ok(Self {
             debug_utils,
             debug_messenger,
-        }
+        })
     }
 }
 

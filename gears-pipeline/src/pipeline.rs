@@ -185,7 +185,7 @@ impl PipelineInput {
                 ..
             } => {
                 let uniform = &uniform.in_module.in_struct;
-                quote! { gears::static_assertions::assert_type_eq_all!(<#uniform as gears::renderer::pipeline::Uniform>::FIELDS, #module_name::UNIFORM); }
+                quote! { gears::static_assertions::assert_type_eq_all!(<#uniform as gears::renderer::pipeline::Uniform>::Fields, #module_name::UNIFORM); }
             }
             _ => quote! {},
         }
@@ -288,8 +288,8 @@ impl PipelineInput {
 			pub struct #name (#target_type);
             impl #name {
 				pub fn build(renderer: &gears::renderer::Renderer) -> Result<Self, gears::renderer::pipeline::PipelineError> {
-					gears::static_assertions::assert_type_eq_all!(<#input as gears::renderer::pipeline::Input>::FIELDS, #vert::INPUT);
-					gears::static_assertions::assert_type_eq_all!(<#output as gears::renderer::pipeline::Output>::FIELDS, #frag::OUTPUT);
+					gears::static_assertions::assert_type_eq_all!(<#input as gears::renderer::pipeline::Input>::Fields, #vert::INPUT);
+					gears::static_assertions::assert_type_eq_all!(<#output as gears::renderer::pipeline::Output>::Fields, #frag::OUTPUT);
 					
 					#stage_asserts
 		

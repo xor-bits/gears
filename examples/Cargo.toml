@@ -5,12 +5,16 @@ authors = ["Overpeek <overpeek.fin@gmail.com>"]
 edition = "2018"
 
 [[bin]]
+name = "ecs"
+path = "ecs/src/main.rs"
+
+[[bin]]
 name = "gear"
-path = "gear/main.rs"
+path = "gear/src/main.rs"
 
 [[bin]]
 name = "voxel"
-path = "voxel/main.rs"
+path = "voxel/src/main.rs"
 
 [dependencies]
 # noise = "0.7.0"
@@ -21,4 +25,5 @@ log = "~0.4"
 rand = "~0.8"
 env_logger = "~0.9"
 parking_lot = "~0.11"
+specs = { version = "~0.17", features = [ "parallel", "derive" ] }
 gears = { path = "../gears", features = [ "short_namespaces", "validation_panic" ] }

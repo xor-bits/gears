@@ -18,7 +18,7 @@ pub trait FrameLoopTarget {
 
 pub trait EventLoopTarget {
     #[allow(unused_variables)]
-    fn event(&mut self, event: &WindowEvent);
+    fn event(&self, event: &WindowEvent);
 }
 
 pub struct FrameLoop {
@@ -56,7 +56,7 @@ impl FrameLoop {
             match event {
                 Event::WindowEvent { event, .. } => {
                     for target in event_targets.iter() {
-                        target.write().event(&event);
+                        target.read().event(&event);
                     }
 
                     match event {

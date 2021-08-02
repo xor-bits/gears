@@ -11,7 +11,7 @@ use std::{
 use crate::{ExpectLog, UpdateRate};
 
 pub trait UpdateLoopTarget {
-    fn update(&mut self, delta_time: &Duration);
+    fn update(&self, delta_time: &Duration);
 }
 
 pub struct UpdateLoop {
@@ -19,9 +19,10 @@ pub struct UpdateLoop {
     base: UpdateLoopBuilder,
 }
 
+pub type Target = Arc<RwLock<dyn UpdateLoopTarget + Send + Sync>>;
 pub struct UpdateLoopBuilder {
     rate: UpdateRate,
-    targets: Vec<Arc<RwLock<dyn UpdateLoopTarget + Send + Sync>>>,
+    targets: Vec<Target>,
 }
 
 pub struct UpdateLoopStopper {
@@ -60,7 +61,7 @@ impl UpdateLoop {
                 // thread_tps.lock().insert(u, begin);
 
                 for target in targets.iter() {
-                    target.write().update(&interval);
+                    target.read().update(&interval);
                 }
 
                 let update_time = begin.elapsed();
@@ -105,7 +106,7 @@ impl UpdateLoopBuilder {
         self
     }
 
-    pub fn with_target(mut self, target: Arc<RwLock<dyn UpdateLoopTarget + Send + Sync>>) -> Self {
+    pub fn with_target(mut self, target: Target) -> Self {
         self.targets.push(target);
         self
     }
