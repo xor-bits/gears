@@ -330,8 +330,8 @@ pub struct SortedLayout {
 
 pub fn get_layout(source: &str) -> SortedLayout {
     // warning: regex monsters
-    let comment_remover = Regex::new(r#"//.*(.|\n)"#).unwrap();
-    let comment_block_remover = Regex::new(r#"/\*(.|\n)*?\*/"#).unwrap();
+    // let comment_remover = Regex::new(r#"//.*(.|\n)"#).unwrap();
+    // let comment_block_remover = Regex::new(r#"/\*(.|\n)*?\*/"#).unwrap();
     let io_layout_finder =
         Regex::new(r#"layout(\s|)*?\(.*?\)(\s|)*?(in|out)(\s|)*?[a-zA-Z0-9_].*?;"#).unwrap();
     let uniform_layout_finder = Regex::new(
@@ -339,8 +339,8 @@ pub fn get_layout(source: &str) -> SortedLayout {
     )
     .unwrap();
 
-    let source = comment_remover.replace_all(&source, "");
-    let source = comment_block_remover.replace_all(&source, "");
+    // let source = comment_remover.replace_all(&source, "");
+    // let source = comment_block_remover.replace_all(&source, "");
 
     let mut layout = Layout {
         inputs: Vec::new(),

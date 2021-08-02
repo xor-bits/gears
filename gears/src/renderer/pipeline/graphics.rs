@@ -512,10 +512,11 @@ where
     }
 
     fn get_sizes(
+        set_count: usize,
         ubos: &GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag>,
     ) -> Vec<vk::DescriptorPoolSize> {
-        const CLONE: vk::DescriptorPoolSize = vk::DescriptorPoolSize {
-            descriptor_count: 1,
+        let CLONE: vk::DescriptorPoolSize = vk::DescriptorPoolSize {
+            descriptor_count: set_count as u32,
             ty: vk::DescriptorType::UNIFORM_BUFFER,
         };
 
@@ -552,7 +553,7 @@ where
         set_count: usize,
         ubos: &GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag>,
     ) -> vk::DescriptorPool {
-        let sizes = Self::get_sizes(ubos);
+        let sizes = Self::get_sizes(set_count, ubos);
 
         let desc_pool_info = vk::DescriptorPoolCreateInfo::builder()
             .max_sets(set_count as u32)

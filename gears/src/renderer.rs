@@ -834,6 +834,15 @@ impl RendererBuilder {
             surface_caps.current_transform
         };
 
+        let composite_alpha = if surface_caps
+            .supported_composite_alpha
+            .contains(vk::CompositeAlphaFlagsKHR::OPAQUE)
+        {
+            vk::CompositeAlphaFlagsKHR::OPAQUE
+        } else {
+            vk::CompositeAlphaFlagsKHR::INHERIT
+        };
+
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::builder()
             .surface(surface)
             .min_image_count(min_swapchain_len)
@@ -843,7 +852,7 @@ impl RendererBuilder {
             .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .pre_transform(transform)
-            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+            .composite_alpha(composite_alpha)
             .present_mode(present)
             .clipped(true)
             .image_array_layers(1);

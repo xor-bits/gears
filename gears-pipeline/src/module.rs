@@ -1,5 +1,5 @@
 use gears_spirv::{
-    compiler::{compile_shader_module, DefinesInput},
+    compiler::{compile_shader_module, preprocess_shader_module, DefinesInput},
     parse::{get_layout, kind_to_name, name_to_kind, SortedLayout},
 };
 use proc_macro::TokenStream;
@@ -235,7 +235,29 @@ fn pre_compile_module(
     mod_name: String,
     shader_defines: &DefinesInput,
 ) -> TokenStream {
-    let layout = get_layout(source.as_str());
+    // preprocess module
+    let layout = match preprocess_shader_module(
+        &source,
+        mod_name.as_str(),
+        "main",
+        Some(path.clone()),
+        &shader_defines,
+    ) {
+        Err(err) => {
+            return Error::new(Span::call_site(), err)
+                .into_compile_error()
+                .into()
+        }
+        Ok(source) => {
+            if debug {
+                return Error::new(Span::call_site(), source)
+                    .into_compile_error()
+                    .into();
+            } else {
+                get_layout(source.as_str())
+            }
+        }
+    };
 
     // compile module
     let artifact = compile_shader_module(
@@ -245,7 +267,6 @@ fn pre_compile_module(
         "main",
         Some(path.clone()),
         &shader_defines,
-        debug,
     );
 
     // tokens

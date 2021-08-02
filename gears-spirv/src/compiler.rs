@@ -5,17 +5,11 @@ pub type DefinesInput = Vec<(String, Option<String>)>;
 
 const LIBRARIES: &[(&str, &str)] = &[("rand", include_str!("../res/rand.glsl"))];
 
-pub fn compile_shader_module(
-    kind: ShaderKind,
-    source: &str,
-    name: &str,
-    entry: &str,
-    include_path: Option<PathBuf>,
-    defines: &DefinesInput,
-    debug: bool,
-) -> Result<shaderc::CompilationArtifact, String> {
-    let mut compiler = shaderc::Compiler::new().unwrap();
+fn compiler() -> shaderc::Compiler {
+    shaderc::Compiler::new().unwrap()
+}
 
+fn options(include_path: Option<PathBuf>, defines: &DefinesInput) -> shaderc::CompileOptions<'_> {
     let mut options = shaderc::CompileOptions::new()
         .unwrap_or_else(|| panic!("Could not create a shaderc CompileOptions"));
     options.set_optimization_level(shaderc::OptimizationLevel::Zero);
@@ -62,32 +56,39 @@ pub fn compile_shader_module(
         options.add_macro_definition(define, val.as_ref().map_or(None, |s| Some(s.as_str())));
     }
 
-    let result = if debug {
-        compiler
-            .preprocess(source, name, entry, Some(&options))
-            .map_or_else(|err| Err(format!("{}", err)), |res| Err(res.as_text()))
-    } else {
-        compiler
-            .compile_into_spirv(source, kind, name, entry, Some(&options))
-            .or_else(|err| Err(format!("{}", err)))
-    };
+    options
+}
 
-    result.or_else(|err| {
-        let source_with_lines: String = source
-            .lines()
-            .enumerate()
-            .map(|(i, line)| format!("{:-4}: {}\n", i + 1, line))
-            .collect();
+pub fn preprocess_shader_module(
+    source: &str,
+    name: &str,
+    entry: &str,
+    include_path: Option<PathBuf>,
+    defines: &DefinesInput,
+) -> Result<String, String> {
+    let mut compiler = compiler();
+    let options = options(include_path, defines);
 
-        Err(format!(
-            "\n{}:\n{}\nSource code:\n{}",
-            if debug {
-                "Preprocessed code"
-            } else {
-                "Shaderc error"
-            },
-            err,
-            source_with_lines.trim_end()
-        ))
-    })
+    let result = compiler
+        .preprocess(source, name, entry, Some(&options))
+        .map_err(|err| err.to_string())?;
+
+    Ok(result.as_text())
+}
+
+pub fn compile_shader_module(
+    kind: ShaderKind,
+    source: &str,
+    name: &str,
+    entry: &str,
+    include_path: Option<PathBuf>,
+    defines: &DefinesInput,
+) -> Result<shaderc::CompilationArtifact, String> {
+    let mut compiler = compiler();
+    let options = options(include_path, defines);
+
+    let result = compiler
+        .compile_into_spirv(source, kind, name, entry, Some(&options))
+        .map_err(|err| err.to_string())?;
+    Ok(result)
 }
