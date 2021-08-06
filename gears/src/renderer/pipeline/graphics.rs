@@ -1,7 +1,8 @@
 use crate::{
     pipeline::shader_module, renderer::device::Dev, Buffer, BufferError, ImmediateFrameInfo,
-    IndexBuffer, IndirectBuffer, Input, Module, MultiWriteBuffer, Output, RenderRecordInfo, UInt,
-    Uniform, UniformBuffer, UpdateRecordInfo, VertexBuffer, WriteBuffer, WriteType, Yes,
+    IndexBuffer, IndirectBuffer, Input, Module, MultiWriteBuffer, Output, RenderPass,
+    RenderRecordInfo, UInt, Uniform, UniformBuffer, UpdateRecordInfo, VertexBuffer, WriteBuffer,
+    WriteType, Yes,
 };
 use ash::{version::DeviceV1_0, vk};
 use log::debug;
@@ -88,7 +89,7 @@ where
 {
     pub fn new(
         device: Dev,
-        render_pass: vk::RenderPass,
+        render_pass: RenderPass,
         set_count: usize,
         vert: Module<UfVert>,
         geom: Option<Module<UfGeom>>,
@@ -202,21 +203,8 @@ where
         let color_blend_state =
             vk::PipelineColorBlendStateCreateInfo::builder().attachments(&color_blend_attachment);
 
-        let tmp_viewport = [vk::Viewport::builder()
-            .width(32.0)
-            .height(32.0)
-            .x(0.0)
-            .y(0.0)
-            .min_depth(0.0)
-            .max_depth(1.0)
-            .build()];
-        let tmp_scissors = [vk::Rect2D::builder()
-            .offset(vk::Offset2D { x: 0, y: 0 })
-            .extent(vk::Extent2D {
-                width: 32,
-                height: 32,
-            })
-            .build()];
+        let tmp_viewport = [render_pass.viewport];
+        let tmp_scissors = [render_pass.scissor];
         let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
             .viewports(&tmp_viewport)
             .scissors(&tmp_scissors);
@@ -227,7 +215,7 @@ where
 
         let pipeline_info = [vk::GraphicsPipelineCreateInfo::builder()
             .subpass(0)
-            .render_pass(render_pass)
+            .render_pass(render_pass.render_pass)
             .layout(pipeline_layout)
             .stages(&shader_stages[..])
             .vertex_input_state(&vertex_state)
@@ -313,7 +301,7 @@ where
     }
 
     pub fn create_vertex_buffer(&self, size: usize) -> Result<VertexBuffer<In>, BufferError> {
-        VertexBuffer::new_with_device(self.device.clone(), size)
+        VertexBuffer::new(&self.device, size)
     }
 
     pub fn create_vbo_with(&self, data: &[In]) -> Result<VertexBuffer<In>, BufferError> {
@@ -323,7 +311,7 @@ where
     }
 
     pub fn create_index_buffer<I: UInt>(&self, size: usize) -> Result<IndexBuffer<I>, BufferError> {
-        IndexBuffer::new_with_device(self.device.clone(), size)
+        IndexBuffer::new(&self.device, size)
     }
 
     pub fn create_index_buffer_with<I: UInt>(
@@ -344,7 +332,7 @@ where
         count: u32,
         offset: u32,
     ) -> Result<IndirectBuffer, BufferError> {
-        IndirectBuffer::new_with_device(self.device.clone(), count, offset)
+        IndirectBuffer::new_with(&self.device, count, offset)
     }
 }
 
@@ -444,7 +432,7 @@ where
         if let Some((_, binding)) = vert.uniform {
             target.vert.0 = Some((
                 (0..set_count)
-                    .map(|_| Ok(RwLock::new(UniformBuffer::new_with_device(device.clone())?)))
+                    .map(|_| Ok(RwLock::new(UniformBuffer::new_single(device)?)))
                     .collect::<Result<_, _>>()?,
                 binding,
             ));
@@ -457,7 +445,7 @@ where
             }) => {
                 target.geom.0 = Some((
                     (0..set_count)
-                        .map(|_| Ok(RwLock::new(UniformBuffer::new_with_device(device.clone())?)))
+                        .map(|_| Ok(RwLock::new(UniformBuffer::new_single(device)?)))
                         .collect::<Result<_, _>>()?,
                     *binding,
                 ));
@@ -468,7 +456,7 @@ where
         if let Some((_, binding)) = frag.uniform {
             target.frag.0 = Some((
                 (0..set_count)
-                    .map(|_| Ok(RwLock::new(UniformBuffer::new_with_device(device.clone())?)))
+                    .map(|_| Ok(RwLock::new(UniformBuffer::new_single(device)?)))
                     .collect::<Result<_, _>>()?,
                 binding,
             ));
@@ -481,11 +469,6 @@ where
     fn get_bindings(
         ubos: &GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag>,
     ) -> Vec<vk::DescriptorSetLayoutBinding> {
-        /* TODO: let CLONE: vk::DescriptorSetLayoutBinding = vk::DescriptorSetLayoutBinding {
-            binding: 0,
-            ..Default::default()
-        }; */
-
         let mut vec = Vec::new();
         if let Some((_, binding)) = ubos.vert.0 {
             vec.push(
@@ -515,12 +498,12 @@ where
         set_count: usize,
         ubos: &GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag>,
     ) -> Vec<vk::DescriptorPoolSize> {
-        let CLONE: vk::DescriptorPoolSize = vk::DescriptorPoolSize {
+        let clone: vk::DescriptorPoolSize = vk::DescriptorPoolSize {
             descriptor_count: set_count as u32,
             ty: vk::DescriptorType::UNIFORM_BUFFER,
         };
 
-        vec![CLONE; ubos.count]
+        vec![clone; ubos.count]
     }
 
     fn pipeline_layout(

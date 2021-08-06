@@ -23,11 +23,7 @@ impl<T> Buffer<T> for Vec<T> {
         unimplemented!()
     }
 
-    fn len(&self) -> usize {
-        self.len()
-    }
-
-    fn capacity(&self) -> usize {
+    fn elem_capacity(&self) -> usize {
         self.capacity()
     }
 }

@@ -1,11 +1,8 @@
+use super::{find_mem_type, BufferError};
+use crate::{renderer::device::Dev, DerefDev};
 use ash::{version::DeviceV1_0, vk};
 use bitflags::bitflags;
-use log::*;
 use std::marker::PhantomData;
-
-use crate::renderer::{device::Dev, Renderer};
-
-use super::{find_mem_type, BufferError};
 
 pub trait BaseFormat {
     fn format(&self) -> vk::Format;
@@ -169,14 +166,13 @@ impl BaseFormat for ImageFormat<i32> {
 }
 
 impl ImageBuilder {
-    pub fn new(renderer: &Renderer) -> Self {
+    pub fn new<D>(device: &D) -> Self
+    where
+        D: DerefDev,
+    {
         Self {
-            device: renderer.rdevice.clone(),
+            device: device.deref_dev().clone(),
         }
-    }
-
-    pub fn new_with_device(device: Dev) -> Self {
-        Self { device }
     }
 
     pub fn with_width(self, width: u32) -> ImageBuilder1D {
@@ -364,7 +360,7 @@ impl Image {
             .build();
 
         let image = unsafe { device.create_image(&image_info, None) }.or_else(|err| {
-            error!("Image ({:?}) creation failed: {:?}", image_info, err);
+            log::error!("Image ({:?}) creation failed: {:?}", image_info, err);
             Err(BufferError::OutOfMemory)
         })?;
 

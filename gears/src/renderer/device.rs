@@ -5,7 +5,7 @@ use std::{ffi::CStr, ops, os::raw::c_char, sync::Arc};
 use crate::{
     context::{Context, ContextError},
     debug::Debugger,
-    MapErrorLog,
+    MapErrorLog, SurfaceBuilder,
 };
 
 use super::queue::{QueueFamilies, Queues};
@@ -23,7 +23,7 @@ pub struct ReducedContext {
 }
 
 impl ReducedContext {
-    pub fn new(context: Context) -> (ReducedContext, vk::SurfaceKHR, khr::Surface, vk::Extent2D) {
+    pub fn new(context: Context) -> (ReducedContext, SurfaceBuilder) {
         (
             ReducedContext {
                 debugger: context.debugger,
@@ -36,9 +36,11 @@ impl ReducedContext {
 
                 entry: context.entry,
             },
-            context.surface,
-            context.surface_loader,
-            context.extent,
+            SurfaceBuilder {
+                surface: context.surface,
+                loader: context.surface_loader,
+                extent: context.extent,
+            },
         )
     }
 }
@@ -52,10 +54,22 @@ pub struct RenderDevice {
 
     device: ash::Device,
     pub instance: ash::Instance,
-    _entry: ash::Entry,
+    pub entry: ash::Entry,
+
+    pub set_count: usize,
 }
 
 pub type Dev = Arc<RenderDevice>;
+
+pub trait DerefDev {
+    fn deref_dev(&self) -> &Dev;
+}
+
+impl DerefDev for Dev {
+    fn deref_dev(&self) -> &Dev {
+        self
+    }
+}
 
 impl RenderDevice {
     // safe if ptrs are not used after instance_layers is modified or dropped
@@ -118,7 +132,10 @@ impl RenderDevice {
         memory_properties
     }
 
-    pub fn from_context(context: ReducedContext) -> Result<Dev, ContextError> {
+    pub fn from_context(
+        context: ReducedContext,
+        frames_in_flight: usize,
+    ) -> Result<Dev, ContextError> {
         // legacy device layers
         // unsafe: instance_layers is dropped in this function
         let instance_layers = unsafe { Self::device_layers(&context.instance_layers) };
@@ -171,7 +188,9 @@ impl RenderDevice {
 
             device,
             instance: context.instance,
-            _entry: context.entry,
+            entry: context.entry,
+
+            set_count: frames_in_flight,
         });
 
         Ok(rdevice)

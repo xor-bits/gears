@@ -30,6 +30,8 @@ impl DrawCommand {
     }
 }
 
+pub type DGDrawCommand<'a, V> = GDrawCommand<'a, V, u32, false, false, 0>;
+
 #[must_use]
 pub struct GDrawCommand<'a, V, I, const VERTEX: bool, const INDEX: bool, const INDIRECT: u8>
 where
@@ -46,8 +48,6 @@ where
     index_buffer: Option<&'a IndexBuffer<I>>,
     indirect_buffer: Option<&'a IndirectBuffer>,
 }
-
-pub type DGDrawCommand<'a, V> = GDrawCommand<'a, V, u32, false, false, 0>;
 
 // init
 

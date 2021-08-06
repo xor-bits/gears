@@ -91,9 +91,9 @@ where
         renderer: &Renderer,
     ) -> Result<GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>, BufferError> {
         GraphicsPipeline::new(
-            renderer.rdevice.clone(),
-            renderer.data.read().swapchain_objects.read().render_pass,
-            renderer.data.read().render_objects.len(),
+            renderer.device.clone(),
+            renderer.render_pass(),
+            renderer.parallel_object_count(),
             self.vert,
             self.geom,
             self.frag,

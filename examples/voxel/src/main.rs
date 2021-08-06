@@ -180,8 +180,8 @@ impl App {
         let (vertices, indices) = generate_cubes(&voxels);
         let voxels = RwLock::new(voxels);
 
-        let vb = RwLock::new(VertexBuffer::new_with_data(&renderer, &vertices[..]).unwrap());
-        let ib = RwLock::new(IndexBuffer::new_with_data(&renderer, &indices[..]).unwrap());
+        let vb = RwLock::new(VertexBuffer::new_with(&renderer, &vertices[..]).unwrap());
+        let ib = RwLock::new(IndexBuffer::new_with(&renderer, &indices[..]).unwrap());
 
         let fill_shader = shader::DefaultPipeline::build(&renderer).unwrap();
         let line_shader = shader::DebugPipeline::build(&renderer).unwrap();
@@ -220,28 +220,9 @@ impl App {
     fn re_mesh(&self) {
         let (vertices, indices) = self.mesh.read().gen_mesh(&self.voxels.read());
 
-        // TODO: impl VertexBuffer::resize
-        let vb_resize = self.vb.read().len() < vertices.len();
-        let ib_resize = self.ib.read().len() < indices.len();
-        if vb_resize || ib_resize {
-            self.renderer.wait();
-            if vb_resize {
-                *self.vb.write() =
-                    VertexBuffer::new_with_data(&self.renderer, &vertices[..]).unwrap();
-            }
-            if ib_resize {
-                *self.ib.write() =
-                    IndexBuffer::new_with_data(&self.renderer, &indices[..]).unwrap();
-            }
-            self.renderer.request_rerecord();
-        }
-
-        if !vb_resize {
-            self.vb.write().write(0, &vertices[..]).unwrap();
-        }
-        if !ib_resize {
-            self.ib.write().write(0, &indices[..]).unwrap();
-        }
+        self.vb.write().write(0, &vertices[..]).unwrap();
+        self.ib.write().write(0, &indices[..]).unwrap();
+        self.renderer.request_rerecord();
     }
 }
 
@@ -299,7 +280,7 @@ impl RendererRecord for App {
         }
         .vertex(&self.vb.read())
         .index(&self.ib.read())
-        .direct(self.ib.read().len() as u32, 0)
+        .direct(self.ib.read().elem_capacity() as u32, 0)
         .execute();
     }
 }

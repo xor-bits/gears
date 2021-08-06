@@ -1,8 +1,7 @@
-use super::{stage::StageBuffer, BufferError};
-use crate::{
-    renderer::{device::Dev, Renderer, UpdateRecordInfo},
-    Buffer, WriteBuffer, WriteType,
-};
+use std::ops::{Deref, DerefMut};
+
+use super::BufferError;
+use crate::{DerefDev, GenericBuffer, WriteBuffer, WriteType};
 use ash::vk;
 use memoffset::offset_of;
 
@@ -65,32 +64,40 @@ impl CountData {
     }
 }
 
+const USAGE: u32 = vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw();
+const MULTI: bool = false;
+
+type InternalIndirectBuffer = GenericBuffer<CountData, USAGE, MULTI>;
+
 pub struct IndirectBuffer {
-    stage: StageBuffer<CountData>,
+    buffer: InternalIndirectBuffer,
     data: CountData,
 }
 
 impl IndirectBuffer {
-    pub fn new(renderer: &Renderer, count: u32, offset: u32) -> Result<Self, BufferError> {
-        Self::new_with_device(renderer.rdevice.clone(), count, offset)
+    pub fn new<D>(device: &D) -> Result<Self, BufferError>
+    where
+        D: DerefDev,
+    {
+        Ok(Self {
+            buffer: InternalIndirectBuffer::new_single(device)?,
+            data: CountData::new(0, 0),
+        })
     }
 
-    pub fn new_with_device(device: Dev, count: u32, offset: u32) -> Result<Self, BufferError> {
-        Ok(Self {
-            stage: StageBuffer::new_with_usage(
-                device.clone(),
-                vk::BufferUsageFlags::INDIRECT_BUFFER,
-                1,
-                true,
-            )?,
-            data: CountData::new(count, offset),
-        })
+    pub fn new_with<D>(device: &D, count: u32, offset: u32) -> Result<Self, BufferError>
+    where
+        D: DerefDev,
+    {
+        let mut buffer = Self::new(device)?;
+        buffer.write(count, offset)?;
+        Ok(buffer)
     }
 
     pub fn write(&mut self, count: u32, offset: u32) -> Result<WriteType, BufferError> {
         self.data.set(count, offset);
         let data = self.data;
-        (self as &mut dyn WriteBuffer<CountData>).write(&data)
+        self.buffer.write(&data)
     }
 
     pub fn count(&self) -> u32 {
@@ -106,26 +113,16 @@ impl IndirectBuffer {
     }
 }
 
-impl WriteBuffer<CountData> for IndirectBuffer {
-    fn write(&mut self, data: &CountData) -> Result<WriteType, BufferError> {
-        self.stage.write_single(0, data)
+impl Deref for IndirectBuffer {
+    type Target = InternalIndirectBuffer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.buffer
     }
 }
 
-impl Buffer<CountData> for IndirectBuffer {
-    unsafe fn update(&mut self, uri: &UpdateRecordInfo) -> bool {
-        self.stage.update(uri)
-    }
-
-    fn buffer(&self) -> vk::Buffer {
-        self.stage.buffer()
-    }
-
-    fn len(&self) -> usize {
-        self.stage.len()
-    }
-
-    fn capacity(&self) -> usize {
-        self.stage.capacity()
+impl DerefMut for IndirectBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.buffer
     }
 }

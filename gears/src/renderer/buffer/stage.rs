@@ -1,8 +1,11 @@
 use super::{create_buffer_with_fallback, Buffer, BufferError, WriteType};
-use crate::renderer::{device::Dev, UpdateRecordInfo};
+use crate::{
+    renderer::{device::Dev, UpdateRecordInfo},
+    ReAllocatableBuffer, SimpleBuffer,
+};
 use ash::{version::DeviceV1_0, vk};
 use core::slice;
-use std::{marker::PhantomData, mem};
+use std::mem;
 
 pub struct MemMapHandle<'a, T> {
     ptr: *mut T,
@@ -17,43 +20,27 @@ pub struct StageBuffer<T>
 where
     T: PartialEq,
 {
-    device: Dev,
-
-    buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
-
-    // not bytes
-    len: usize,
-    capacity: usize,
-
+    usage: vk::BufferUsageFlags,
     non_coherent: bool,
-    write_optimize: bool,
-
-    _p: PhantomData<T>,
+    buffer: ReAllocatableBuffer<T>,
 }
 
 impl<T> StageBuffer<T>
 where
     T: PartialEq,
 {
-    pub fn new_with_device(
-        device: Dev,
-        size: usize,
-        write_optimize: bool,
-    ) -> Result<Self, BufferError> {
-        Self::new_with_usage(
-            device,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            size,
-            write_optimize,
-        )
+    fn current(&self) -> &'_ SimpleBuffer<T> {
+        &self.buffer.buffer
+    }
+
+    pub fn new_with_device(device: Dev, size: usize) -> Result<Self, BufferError> {
+        Self::new_with_usage(device, vk::BufferUsageFlags::TRANSFER_SRC, size)
     }
 
     pub fn new_with_usage(
         device: Dev,
         usage: vk::BufferUsageFlags,
         size: usize,
-        write_optimize: bool,
     ) -> Result<Self, BufferError> {
         let byte_len = size * mem::size_of::<T>();
         let (buffer, memory, non_coherent) = create_buffer_with_fallback(
@@ -65,57 +52,76 @@ where
             vk::MemoryPropertyFlags::HOST_VISIBLE,
         )?;
 
+        let buffer = ReAllocatableBuffer::new(SimpleBuffer::new(device, buffer, memory, size));
+
         Ok(Self {
-            device,
-
             buffer,
-            memory,
-
-            len: 0,
-            capacity: size,
-
+            usage,
             non_coherent,
-            write_optimize,
-
-            _p: PhantomData::default(),
         })
+    }
+
+    pub fn re_alloc(&mut self, new_size: usize) -> Result<(), BufferError> {
+        let byte_len = new_size * mem::size_of::<T>();
+        let (buffer, memory, _) = create_buffer_with_fallback(
+            &self.current().device,
+            byte_len,
+            self.usage,
+            vk::SharingMode::EXCLUSIVE,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            vk::MemoryPropertyFlags::HOST_VISIBLE,
+        )?;
+
+        let device = self.current().device.clone();
+
+        Ok(self
+            .buffer
+            .re_alloc(SimpleBuffer::new(device, buffer, memory, new_size)))
     }
 
     pub unsafe fn map_buffer(
         &mut self,
         element_count: usize,
         element_offset: usize,
-    ) -> Result<MemMapHandle<'_, T>, BufferError> {
+    ) -> Result<(WriteType, MemMapHandle<'_, T>), BufferError> {
+        // re alloc if it would overflow
         let len = element_offset + element_count;
-        let cap = self.capacity;
-        if len > cap {
-            Err(BufferError::TriedToOverflow)
+        let cap = self.current().capacity;
+        let write_type = if len > cap {
+            self.re_alloc(len)?;
+            WriteType::Resize
         } else {
-            self.len = self.len.max(len);
+            WriteType::Write
+        };
 
-            let size = self.capacity() - element_offset;
-            let mem_size = (mem::size_of::<T>() * size) as u64;
-            let mem_offset = (mem::size_of::<T>() * element_offset) as u64;
+        // pre calc
+        let size = self.elem_capacity() - element_offset;
+        let mem_size = (mem::size_of::<T>() * size) as u64;
+        let mem_offset = (mem::size_of::<T>() * element_offset) as u64;
 
-            let mapping = self
-                .device
-                .map_memory(
-                    self.memory,
-                    mem_offset,
-                    mem_size,
-                    vk::MemoryMapFlags::empty(),
-                )
-                .unwrap() as *mut T;
+        // map
+        let mapping = self
+            .current()
+            .device
+            .map_memory(
+                self.current().memory,
+                mem_offset,
+                mem_size,
+                vk::MemoryMapFlags::empty(),
+            )
+            .unwrap() as *mut T;
 
-            Ok(MemMapHandle {
+        Ok((
+            write_type,
+            MemMapHandle {
                 ptr: mapping,
                 ptr_len: element_count,
 
-                device: &self.device,
-                memory: self.memory,
+                device: &self.current().device,
+                memory: self.current().memory,
                 non_coherent: self.non_coherent,
-            })
-        }
+            },
+        ))
     }
 
     pub unsafe fn write_bytes(
@@ -123,14 +129,13 @@ where
         element_offset: usize,
         elements: &[T],
     ) -> Result<WriteType, BufferError> {
-        let opt = self.write_optimize;
-        let map_handle = self.map_buffer(elements.len(), element_offset)?;
+        let (write_type, map_handle) = self.map_buffer(elements.len(), element_offset)?;
 
-        if opt && slice::from_raw_parts(map_handle.ptr, elements.len()) == elements {
+        if slice::from_raw_parts(map_handle.ptr, elements.len()) == elements {
             Ok(WriteType::NoWrite)
         } else {
             map_handle.copy_from(elements)?;
-            Ok(WriteType::Write)
+            Ok(write_type)
         }
     }
 
@@ -142,16 +147,28 @@ where
         unsafe { self.write_bytes(offset, slice::from_ref(data)) }
     }
 
-    pub unsafe fn copy_to(&self, uri: &UpdateRecordInfo, dst: &dyn Buffer<T>) {
+    pub unsafe fn copy_to_raw(&self, uri: &UpdateRecordInfo, dst: vk::Buffer, size: u64) {
         // TODO: only copy modified regions
         let regions = [vk::BufferCopy::builder()
             .src_offset(0)
             .dst_offset(0)
-            .size((mem::size_of::<T>() * self.capacity()) as u64)
+            .size(size)
             .build()];
 
-        self.device
-            .cmd_copy_buffer(uri.command_buffer, self.buffer, dst.buffer(), &regions);
+        self.current().device.cmd_copy_buffer(
+            uri.command_buffer,
+            self.current().buffer,
+            dst,
+            &regions,
+        );
+    }
+
+    pub unsafe fn copy_to(&self, uri: &UpdateRecordInfo, dst: &dyn Buffer<T>) {
+        self.copy_to_raw(
+            uri,
+            dst.buffer(),
+            self.byte_capacity().min(dst.byte_capacity()) as u64,
+        )
     }
 }
 
@@ -190,18 +207,47 @@ where
     T: PartialEq,
 {
     unsafe fn update(&mut self, _: &UpdateRecordInfo) -> bool {
+        // TODO: copy old buffers to the reallocated one
+        /* let c_cap = self.current().capacity;
+        let c_buffer = self.current().buffer;
+        let device = self.current().device.clone();
+
+        let updates = self.buffer.re_allocates.iter().peekable().peek().is_some();
+
+        let iter = self.buffer.re_allocates.iter_mut().filter_map(|re_alloc| {
+            if let Some((update, buffer)) = re_alloc.as_mut() {
+                if *update {
+                    *update = false;
+                    Some(buffer)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
+
+        for update in iter {
+            let size = c_cap.min(update.capacity) as u64;
+
+            let regions = [vk::BufferCopy::builder()
+                .src_offset(0)
+                .dst_offset(0)
+                .size(size)
+                .build()];
+
+            device.cmd_copy_buffer(uri.command_buffer, update.buffer, c_buffer, &regions);
+        }
+
+        updates */
         false
     }
 
     fn buffer(&self) -> vk::Buffer {
-        self.buffer
+        self.current().buffer
     }
 
-    fn len(&self) -> usize {
-        self.len
-    }
-
-    fn capacity(&self) -> usize {
-        self.capacity
+    fn elem_capacity(&self) -> usize {
+        self.current().capacity
     }
 }

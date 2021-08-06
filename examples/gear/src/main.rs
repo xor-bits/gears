@@ -188,7 +188,7 @@ impl RendererRecord for App {
         self.shader
             .draw(rri)
             .vertex(&self.vb.read())
-            .direct(self.vb.read().len() as u32, 0)
+            .direct(self.vb.read().elem_capacity() as u32, 0)
             .execute();
     }
 }

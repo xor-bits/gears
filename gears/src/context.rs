@@ -132,8 +132,9 @@ impl Context {
         // requested layers
         let khronos_validation_layer =
             CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0").unwrap();
+        let lunarg_monitor_layer = CStr::from_bytes_with_nul(b"VK_LAYER_LUNARG_monitor\0").unwrap();
         let mut requested_layers: Vec<&CStr> = if valid == ContextValidation::WithValidation {
-            vec![khronos_validation_layer]
+            vec![khronos_validation_layer, lunarg_monitor_layer]
         } else {
             vec![]
         };
@@ -164,7 +165,7 @@ impl Context {
         );
         if missing_layers.len() > 0 {
             warn!(
-                "Missing layers: {:?}, continuing without validation layers",
+                "Missing layers: {:?}, continuing without these validation layers",
                 missing_layers
             );
             requested_layers.clear();

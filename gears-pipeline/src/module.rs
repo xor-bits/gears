@@ -143,15 +143,7 @@ pub fn module(input: TokenStream) -> TokenStream {
     };
 
     if let Some(shader_runtime) = shader_runtime {
-        post_compile_module(
-            source,
-            path,
-            kind,
-            debug,
-            name,
-            &shader_defines,
-            shader_runtime,
-        )
+        post_compile_module(source, path, kind, name, &shader_defines, shader_runtime)
     } else {
         pre_compile_module(source, path, kind, debug, name, &shader_defines)
     }
@@ -208,7 +200,6 @@ fn post_compile_module(
     source: String,
     path: PathBuf,
     kind: ShaderKind,
-    debug: bool,
     mod_name: String,
     shader_defines: &DefinesInput,
     shader_runtime: String,
@@ -221,7 +212,6 @@ fn post_compile_module(
         kind,
         shader_runtime,
         shader_defines,
-        debug,
     );
 
     (make_module(&layout, &mod_name, &path, load_spirv)).into()
@@ -293,7 +283,6 @@ fn make_load_spirv(
     kind: ShaderKind,
     shader_runtime: String,
     shader_defines: &DefinesInput,
-    debug: bool,
 ) -> proc_macro2::TokenStream {
     let layout_inputs = &layout.inputs[..];
     let layout_outputs = &layout.outputs[..];
@@ -343,7 +332,6 @@ fn make_load_spirv(
                 "main",
                 Some(std::path::Path::new( #path ).into()),
                 &defines,
-                #debug,
             )
             .map_err(|err| gears::renderer::pipeline::PipelineError::CompileError(err))?
             .as_binary_u8()

@@ -36,43 +36,6 @@ impl Display for PipelineError {
     }
 }
 
-// todo: runtime shader
-
-/* #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModuleInput {
-    Float,
-    Vec2,
-    Vec3,
-    Vec4,
-
-    Mat2,
-    Mat3,
-    Mat4,
-
-    Int,
-    UInt,
-}
-
-pub enum ModuleOutput {
-    Float,
-    Vec2,
-    Vec3,
-    Vec4,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ModuleData {
-    pub source: &'static str,
-    pub spirv: &'static [u8],
-    pub inputs: &'static [ModuleInput],
-    pub uniforms: &'static [ModuleInput],
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ShaderData {} */
-
-// compile time shaders
-
 #[derive(Debug, PartialEq)]
 pub struct RGBAOutput {
     _color: Vec4,
