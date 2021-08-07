@@ -4,3 +4,7 @@ currently supported stages:
 	- vertex
 	- fragment
 	- geometry
+
+todo:
+	- SPIRV-reflect
+	- samplers
