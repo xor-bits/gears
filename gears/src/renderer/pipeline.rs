@@ -1,25 +1,73 @@
-pub mod compute;
+/* pub mod compute;
 pub mod factory;
-pub mod graphics;
+pub mod graphics; */
 
-use std::{borrow::Cow, ffi::CStr, fmt::Display, io::Cursor};
-
-#[cfg(feature = "short_namespaces")]
-pub use compute::*;
-#[cfg(feature = "short_namespaces")]
-pub use factory::*;
 use glam::Vec4;
-#[cfg(feature = "short_namespaces")]
-pub use graphics::*;
-
-use crate::BufferError;
-
-use super::device::Dev;
-use ash::{util::read_spv, version::DeviceV1_0, vk};
+use std::{borrow::Cow, ffi::CStr, fmt::Display, io::Cursor, sync::Arc};
+use vulkano::{
+    buffer::{BufferUsage, CpuAccessibleBuffer},
+    device::Device,
+    pipeline::{
+        vertex::{VertexDefinition, VertexInput},
+        viewport::Viewport,
+        GraphicsPipeline,
+    },
+    render_pass::Subpass,
+};
 
 // pipeline error
 
-#[derive(Debug)]
+fn x(device: Arc<Device>) {
+    mod vertex_shader {
+        vulkano_shaders::shader! {
+           ty: "vertex",
+           path: "../examples/gear/res/default.vert.glsl"
+        }
+    }
+
+    mod fragment_shader {
+        vulkano_shaders::shader! {
+            ty: "fragment",
+            path: "../examples/gear/res/default.frag.glsl"
+        }
+    }
+    use vulkano::descriptor_set::PersistentDescriptorSet;
+    // use ;
+    use vulkano::pipeline::layout::PipelineLayout;
+
+    let vert_shader_module = vertex_shader::Shader::load(device.clone())
+        .expect("failed to create vertex shader module!");
+    let frag_shader_module = fragment_shader::Shader::load(device.clone())
+        .expect("failed to create fragment shader module!");
+
+    let buffer_a = CpuAccessibleBuffer::from_data(
+        device,
+        BufferUsage::uniform_buffer_transfer_destination(),
+        false,
+        (32, 22, 11),
+    )
+    .unwrap();
+
+    let x = Arc::new(
+        GraphicsPipeline::start()
+            .vertex_input_single_buffer()
+            .vertex_shader(vert_shader_module.main_entry_point(), ())
+            .fragment_shader(frag_shader_module.main_entry_point(), ())
+            .viewports_dynamic_scissors_irrelevant(1)
+            .build(device.clone())
+            .unwrap(),
+    );
+
+    let set0 = Arc::new(
+        PersistentDescriptorSet::start(x.clone())
+            .add_buffer(buffer_a)
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+}
+
+/* #[derive(Debug)]
 pub enum PipelineError {
     BufferError(BufferError),
     LayoutMismatch(String),
@@ -128,3 +176,4 @@ fn shader_module(
 
     (module, stage)
 }
+ */

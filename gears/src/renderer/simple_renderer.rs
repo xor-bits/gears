@@ -1,160 +1,131 @@
-use std::{
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
-    time::Instant,
-};
-
+use super::{device::Dev, query::PerfQuery, target::window::WindowTarget};
 use crate::{
-    buffer::Image,
-    device::{Dev, ReducedContext, RenderDevice},
-    query::{PerfQuery, PerfQueryResult},
-    Context, ContextError, DerefDev, FramePerfReport, ImageBuilder, ImageFormat, ImageUsage,
-    ImmediateFrameInfo, MapErrorLog, RenderPass, RenderRecordInfo, RendererRecord, Surface,
-    Swapchain, SyncMode, UpdateRecordInfo,
+    context::{Context, ContextError, ContextValidation},
+    cstr,
+    renderer::device::{ReducedContext, RenderDevice},
+    SyncMode,
 };
-use ash::{version::DeviceV1_0, vk};
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::Mutex;
+use std::sync::{atomic::AtomicBool, Arc};
+use vulkano::{
+    command_buffer::{
+        AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, SubpassContents,
+    },
+    format::ClearValue,
+    image::{view::ImageView, SwapchainImage},
+    render_pass::{Framebuffer, FramebufferAbstract, RenderPass},
+    single_pass_renderpass,
+    sync::{self, GpuFuture},
+};
 use winit::window::Window;
 
 struct SwapchainObjects {
-    render_pass: RenderPass,
-    surface: Surface,
-    swapchain: Option<Swapchain>,
+    render_pass: Arc<RenderPass>,
+    window_target: WindowTarget,
 }
 
 struct RenderTarget {
-    // fence for waiting until the gpu is done with this frame
-    frame_done_fence: vk::Fence,
-
     // the actual render target
-    _color_image: Image,
-    _depth_image: Image,
-    framebuffer: vk::Framebuffer,
+    framebuffer: Arc<dyn FramebufferAbstract>,
 
     // gpu commands
-    render_cb: vk::CommandBuffer,
-    update_cb: vk::CommandBuffer,
+    render_cb: Arc<PrimaryAutoCommandBuffer>,
+    update_cb: Arc<PrimaryAutoCommandBuffer>,
     update_cb_recording: bool,
     update_cb_pending: bool,
-    command_pool: vk::CommandPool,
 
     // performance debugging
     perf: PerfQuery,
     triangles: usize,
-
-    // device handle for uninitialization
-    device: Dev,
 }
 
 impl RenderTarget {
     fn new(
         device: Dev,
-        render_pass: &RenderPass,
-        color_image: vk::Image,
-        color_format: vk::Format,
-        extent: vk::Extent2D,
-    ) -> Result<Self, ContextError> {
-        let _color_image = ImageBuilder::new(&device)
-            .build_with_image(color_image, ImageUsage::WRITE, color_format)
-            .map_err_log("Color image creation failed", ContextError::OutOfMemory)?;
+        render_pass: Arc<RenderPass>,
+        color_image: Arc<SwapchainImage<Arc<Window>>>,
+        validation: ContextValidation,
+    ) -> Self {
+        // images
+        let color_image = color_image;
+        /* let depth_image = AttachmentImage::new(
+            device.logical().clone(),
+            color_image.dimensions(),
+            Format::D24Unorm_S8Uint,
+        )
+        .unwrap(); */
 
-        let _depth_image = ImageBuilder::new(&device)
-            .with_width(extent.width)
-            .with_height(extent.height)
-            .build(ImageUsage::WRITE, ImageFormat::<f32>::D)
-            .map_err_log("Depth image creation failed", ContextError::OutOfMemory)?;
+        // image views
+        let color_image = ImageView::new(color_image).unwrap();
+        /* let depth_image = ImageView::new(depth_image).unwrap(); */
 
-        let attachments = [_color_image.view(), _depth_image.view()];
+        // framebuffer
+        let framebuffer = Arc::new(
+            Framebuffer::start(render_pass)
+                .add(color_image)
+                .unwrap()
+                /* .add(depth_image)
+                .unwrap() */
+                .build()
+                .unwrap(),
+        );
 
-        let framebuffer_info = vk::FramebufferCreateInfo::builder()
-            .attachments(&attachments)
-            .render_pass(render_pass.render_pass)
-            .width(extent.width)
-            .height(extent.height)
-            .layers(1);
+        // command buffer for copying, etc.
+        let update_cb = Arc::new(
+            AutoCommandBufferBuilder::primary(
+                device.logical().clone(),
+                device.queues.graphics.family(),
+                CommandBufferUsage::SimultaneousUse, /* MultipleSubmit */
+            )
+            .unwrap()
+            .build()
+            .unwrap(),
+        );
 
-        let framebuffer = unsafe { device.create_framebuffer(&framebuffer_info, None) }
-            .map_err_log("Framebuffer creation failed", ContextError::OutOfMemory)?;
+        // command buffer for drawing
+        let mut render_cb = AutoCommandBufferBuilder::primary(
+            device.logical().clone(),
+            device.queues.graphics.family(),
+            CommandBufferUsage::SimultaneousUse, /* MultipleSubmit */
+        )
+        .unwrap();
 
-        let command_pool_info = vk::CommandPoolCreateInfo::builder()
-            .queue_family_index(device.queues.graphics_family as u32)
-            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
-
-        let command_pool = unsafe { device.create_command_pool(&command_pool_info, None) }
-            .map_err_log("Command pool creation failed", ContextError::OutOfMemory)?;
-
-        let command_buffer_info = vk::CommandBufferAllocateInfo::builder()
-            .command_buffer_count(2)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_pool(command_pool);
-
-        let mut command_buffers = unsafe { device.allocate_command_buffers(&command_buffer_info) }
-            .map_err_log(
-                "Command buffer allocation failed",
-                ContextError::OutOfMemory,
-            )?;
-
-        if command_buffers.len() != 2 {
-            unreachable!("Allocated command buffer count not 1");
+        // record some initial commands
+        render_cb
+            .begin_render_pass(
+                framebuffer.clone(),
+                SubpassContents::Inline,
+                [
+                    ClearValue::Float([0.0, 0.0, 0.0, 0.0]),
+                    /* ClearValue::DepthStencil((1.0, 0)), */
+                ]
+                .iter()
+                .cloned(),
+            )
+            .unwrap();
+        if validation == ContextValidation::WithValidation {
+            render_cb
+                .debug_marker_insert(
+                    cstr!("Empty render command buffer wasn't meant to be used"),
+                    [1.0, 0.7, 0.0, 1.0],
+                )
+                .unwrap();
         }
+        render_cb.end_render_pass().unwrap();
 
-        let update_cb = command_buffers.remove(0);
-        let render_cb = command_buffers.remove(0);
+        let render_cb = Arc::new(render_cb.build().unwrap());
 
-        Ok(Self {
-            frame_done_fence: vk::Fence::null(),
-
-            _color_image,
-            _depth_image,
+        Self {
             framebuffer,
 
             render_cb,
             update_cb,
             update_cb_recording: false,
             update_cb_pending: false,
-            command_pool,
 
-            perf: PerfQuery::new_with_device(device.clone()),
+            perf: PerfQuery::new_with_device(&device),
             triangles: 0,
-
-            device,
-        })
-    }
-}
-
-struct FrameSync {
-    // fence for waiting until the gpu is done with this image
-    frame_done_fence: vk::Fence,
-
-    // for gpu to wait for image to be ready
-    image_semaphore: vk::Semaphore,
-
-    // for gpu to wait for update to complete
-    update_semaphore: vk::Semaphore,
-
-    // for gpu to wait for render to complete
-    render_semaphore: vk::Semaphore,
-
-    // device handle for uninitialization
-    device: Dev,
-}
-
-impl FrameSync {
-    fn new(device: Dev) -> Result<Self, ContextError> {
-        let semaphore_info = vk::SemaphoreCreateInfo::builder();
-        let fence_info = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
-
-        Ok(Self {
-            frame_done_fence: unsafe { device.create_fence(&fence_info, None) }
-                .map_err_log("Fence creation failed", ContextError::OutOfMemory)?,
-            image_semaphore: unsafe { device.create_semaphore(&semaphore_info, None) }
-                .map_err_log("Semaphore creation failed", ContextError::OutOfMemory)?,
-            update_semaphore: unsafe { device.create_semaphore(&semaphore_info, None) }
-                .map_err_log("Semaphore creation failed", ContextError::OutOfMemory)?,
-            render_semaphore: unsafe { device.create_semaphore(&semaphore_info, None) }
-                .map_err_log("Semaphore creation failed", ContextError::OutOfMemory)?,
-
-            device,
-        })
+        }
     }
 }
 
@@ -162,50 +133,75 @@ pub struct Renderer {
     swapchain_objects: Mutex<SwapchainObjects>,
 
     // one render target per swapchain image
-    render_targets: Box<[Mutex<RenderTarget>]>,
-    // rerecord the render command buffers
-    rerecord_render_targets: Box<[AtomicBool]>,
+    // and a bool to tell to rerecord the render command buffers
+    render_targets: Box<[(Mutex<RenderTarget>, AtomicBool)]>,
 
-    // one set of sync objects for each frame in flight
-    frame_syncs: Box<[Mutex<FrameSync>]>,
+    // future for the previous frame
+    previous_frame: Option<Box<dyn GpuFuture>>,
 
-    // current frame in flight
-    frame: AtomicUsize,
+    validation: ContextValidation,
 
-    /* // next free sync object
-    frame: AtomicUsize, */
     pub device: Dev,
 }
 
 pub struct RendererBuilder {
     sync: SyncMode,
-    frames_in_flight: usize,
-}
-
-impl DerefDev for Renderer {
-    fn deref_dev(&self) -> &Dev {
-        &self.device
-    }
 }
 
 impl Renderer {
     pub fn new() -> RendererBuilder {
         RendererBuilder {
             sync: SyncMode::Mailbox,
-            frames_in_flight: 3,
         }
     }
 
-    pub fn render_pass(&self) -> RenderPass {
+    pub fn render_pass(&self) -> Arc<RenderPass> {
         self.swapchain_objects.lock().render_pass.clone()
     }
 
-    pub fn parallel_object_count(&self) -> usize {
-        self.device.set_count
-        /* self.render_targets.len() */
+    /// swapchain images
+    pub fn image_count(&self) -> usize {
+        self.render_targets.len()
     }
 
-    pub fn frame<T>(&self, recorder: &T) -> FramePerfReport
+    pub fn frame(&mut self) {
+        self.previous_frame.as_mut().unwrap().cleanup_finished();
+
+        let swapchain = self.swapchain_objects.lock();
+        let (image_index, acquire_future) = match swapchain.window_target.acquire_image() {
+            Some(v) => v,
+            None => return,
+        };
+
+        let target = self.render_targets[image_index].0.lock();
+
+        let future = self
+            .previous_frame
+            .take()
+            .unwrap()
+            .join(acquire_future)
+            .then_execute(
+                self.device.queues.graphics.clone(),
+                target.render_cb.clone(),
+            )
+            .unwrap()
+            .then_swapchain_present(
+                self.device.queues.present.clone(),
+                swapchain.window_target.swapchain.clone(),
+                image_index,
+            )
+            .then_signal_fence_and_flush();
+
+        self.previous_frame = match future {
+            Ok(future) => Some(future.boxed()),
+            Err(e) => {
+                log::error!("Frame error: {}", e);
+                Some(sync::now(self.device.logical().clone()).boxed())
+            }
+        }
+    }
+
+    /* pub fn frame<T>(&self, recorder: &T) -> FramePerfReport
     where
         T: RendererRecord,
     {
@@ -609,7 +605,7 @@ impl Renderer {
 
         self.swapchain_objects.lock().surface.re_create(surface);
         self.re_create_swapchain()
-    }
+    } */
 }
 
 impl RendererBuilder {
@@ -619,100 +615,88 @@ impl RendererBuilder {
         self
     }
 
-    /// Increasing frames in flight **MIGHT** decrease the cpu frametime if the scene is simple
-    ///
-    /// Slightly increases input delay
-    ///
-    /// Recommended values: 2 or 3
-    /// Default: 3
-    ///
-    /// 1 Never recommended and going above rarely improves anything
-    pub fn with_frames_in_flight(mut self, frames_in_flight: usize) -> Self {
-        self.frames_in_flight = frames_in_flight;
-        self
-    }
-
     pub fn build(self, context: Context) -> Result<Renderer, ContextError> {
         log::debug!("Renderer created");
 
+        let validation = context.validation;
+
         // device
-        let (r_context, surface_builder) = ReducedContext::new(context);
-        let device = RenderDevice::from_context(r_context, self.frames_in_flight)?;
+        let (r_context, target_builder) = ReducedContext::new(context);
+        let device = RenderDevice::from_context(r_context)?;
 
-        // surface
-        let mut surface = surface_builder.build(device.clone());
+        // surface + swapchain + images
+        let (target, color_images) = target_builder.build(&device, self.sync)?;
 
-        // swapchain
-        let (swapchain, format, extent) = surface.build_swapchain(self.sync)?;
-        let color_images = swapchain.images()?;
+        // swapchain image count
+        let image_count = color_images.len();
+        // swapchain image count - 1
+        // let frame_count = 1.max(image_count - 1);
+
+        assert!(image_count != 0);
+
+        // AttachmentDesc
 
         // main render pass
-        let render_pass = RenderPass::new(device.clone(), format, extent)?;
+        let render_pass = Arc::new(
+            single_pass_renderpass!(device.logical().clone(),
+                attachments: {
+                    c: {
+                        load: Clear,
+                        store: Store,
+                        format: target.format.0,
+                        samples: 1,
+                        initial_layout: ImageLayout::Undefined,
+                        final_layout: ImageLayout::PresentSrc,
+                    }/* ,
+                    d: {
+                        load: Clear,
+                        store: DontCare,
+                        format: Format::D24Unorm_S8Uint,
+                        samples: 1,
+                        initial_layout: ImageLayout::Undefined,
+                        final_layout: ImageLayout::DepthStencilAttachmentOptimal,
+                    } */
+                },
+                pass: {
+                    color: [ c ],
+                    depth_stencil: { /* d */ }
+                }
+            )
+            .unwrap(),
+        );
 
         let render_targets = color_images
             .iter()
             .map(|image| {
-                Ok(Mutex::new(RenderTarget::new(
-                    device.clone(),
-                    &render_pass,
-                    *image,
-                    format,
-                    extent,
-                )?))
+                (
+                    Mutex::new(RenderTarget::new(
+                        device.clone(),
+                        render_pass.clone(),
+                        image.clone(),
+                        validation,
+                    )),
+                    AtomicBool::new(true),
+                )
             })
-            .collect::<Result<_, _>>()?;
-        let rerecord_render_targets = color_images
-            .into_iter()
-            .map(|_| AtomicBool::new(true))
-            .collect();
-
-        let frame_syncs = (0..device.set_count)
-            .map(|_| Ok(Mutex::new(FrameSync::new(device.clone())?)))
-            .collect::<Result<_, _>>()?;
+            .collect::<Box<[(Mutex<RenderTarget>, AtomicBool)]>>();
 
         let swapchain_objects = Mutex::new(SwapchainObjects {
             render_pass,
-            swapchain: Some(swapchain),
-            surface,
+            window_target: target,
         });
 
-        let frame = AtomicUsize::new(0);
+        let previous_frame = Some(sync::now(device.logical().clone()).boxed());
 
         Ok(Renderer {
             swapchain_objects,
+
             render_targets,
-            rerecord_render_targets,
-            frame_syncs,
-            frame,
+
+            previous_frame,
+
+            validation,
+
             device,
         })
-    }
-}
-
-impl Drop for FrameSync {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.destroy_fence(self.frame_done_fence, None);
-            self.device.destroy_semaphore(self.image_semaphore, None);
-            self.device.destroy_semaphore(self.update_semaphore, None);
-            self.device.destroy_semaphore(self.render_semaphore, None);
-        }
-    }
-}
-
-impl Drop for RenderTarget {
-    fn drop(&mut self) {
-        unsafe {
-            let cbs = [self.render_cb, self.update_cb];
-            self.device.destroy_framebuffer(self.framebuffer, None);
-            self.device.free_command_buffers(self.command_pool, &cbs);
-            self.device.destroy_command_pool(self.command_pool, None);
-        }
-    }
-}
-
-impl Drop for Renderer {
-    fn drop(&mut self) {
-        log::debug!("Renderer dropped");
     }
 }

@@ -8,28 +8,7 @@ pub mod stage;
 pub mod uniform;
 pub mod vertex;
 
-#[cfg(feature = "short_namespaces")]
-pub use debug::*;
-#[cfg(feature = "short_namespaces")]
-pub use image::*;
-#[cfg(feature = "short_namespaces")]
-pub use index::*;
-#[cfg(feature = "short_namespaces")]
-pub use indirect::*;
-#[cfg(feature = "short_namespaces")]
-pub use re_alloc::*;
-#[cfg(feature = "short_namespaces")]
-pub use simple::*;
-#[cfg(feature = "short_namespaces")]
-pub use stage::*;
-#[cfg(feature = "short_namespaces")]
-pub use uniform::*;
-#[cfg(feature = "short_namespaces")]
-pub use vertex::*;
-
 use super::{device::Dev, UpdateRecordInfo};
-use crate::DerefDev;
-use ash::{version::DeviceV1_0, vk};
 use std::mem;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -45,7 +24,7 @@ pub enum BufferError {
     InvalidSize,
     TriedToOverflow,
     OutOfMemory,
-    NoMemoryType(vk::MemoryPropertyFlags),
+    // NoMemoryType(MemoryPropertyFlags),
 }
 
 // buffer traits
@@ -61,7 +40,7 @@ pub trait WriteBuffer<T>: Buffer<T> {
 pub trait Buffer<T> {
     unsafe fn update(&mut self, uri: &UpdateRecordInfo) -> bool;
 
-    fn buffer(&self) -> vk::Buffer;
+    fn buffer(&self) -> Buffer;
     fn elem_capacity(&self) -> usize;
     fn byte_capacity(&self) -> usize {
         self.elem_capacity() * mem::size_of::<T>()

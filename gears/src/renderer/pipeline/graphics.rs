@@ -11,9 +11,6 @@ use std::marker::PhantomData;
 
 pub mod draw;
 
-#[cfg(feature = "short_namespaces")]
-pub use draw::*;
-
 pub struct GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>
 where
     In: Input,

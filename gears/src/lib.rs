@@ -6,23 +6,6 @@ pub mod io;
 pub mod loops;
 pub mod renderer;
 
-#[cfg(feature = "short_namespaces")]
-pub use context::*;
-#[cfg(feature = "short_namespaces")]
-pub use format::*;
-#[cfg(feature = "short_namespaces")]
-pub use frame::*;
-#[cfg(feature = "short_namespaces")]
-pub use io::*;
-#[cfg(feature = "short_namespaces")]
-pub use loops::*;
-#[cfg(feature = "short_namespaces")]
-pub use renderer::*;
-
-#[cfg(feature = "runtime_shaders")]
-pub use gears_spirv;
-
-pub use ash::vk;
 pub use gears_pipeline::*;
 pub use glam;
 pub use static_assertions;
@@ -183,4 +166,30 @@ impl<T, Ea: fmt::Debug, Eb> MapErrorElseLogResult<T, Ea, Eb> for Result<T, Ea> {
             or(err)
         })
     }
+}
+
+// const CStr from: https://stackoverflow.com/a/63608103
+
+#[allow(unconditional_panic)]
+const fn illegal_null_in_string() {
+    [][0]
+}
+
+#[doc(hidden)]
+pub const fn validate_cstr_contents(bytes: &[u8]) {
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\0' {
+            illegal_null_in_string();
+        }
+        i += 1;
+    }
+}
+
+#[macro_export]
+macro_rules! cstr {
+    ( $s:literal ) => {{
+        $crate::validate_cstr_contents($s.as_bytes());
+        unsafe { std::mem::transmute::<_, &std::ffi::CStr>(concat!($s, "\0")) }
+    }};
 }

@@ -1,21 +1,20 @@
-use ash::{version::DeviceV1_0, vk};
-use log::debug;
+use super::device::Dev;
 use std::{
     ops::{Add, AddAssign},
     time::Duration,
 };
+use vulkano::{
+    query::{GetResultsError, QueryPool, QueryResultFlags, QueryType},
+    sync::PipelineStage,
+};
 
-use crate::renderer::RenderRecordInfo;
-
-use super::device::Dev;
-
-const TIMESTAMP_STAGES: [vk::PipelineStageFlags; 6] = [
-    vk::PipelineStageFlags::BOTTOM_OF_PIPE, // pipeline begin
-    vk::PipelineStageFlags::VERTEX_SHADER,  // vertex begin
-    vk::PipelineStageFlags::TESSELLATION_CONTROL_SHADER, // vertex end
-    vk::PipelineStageFlags::FRAGMENT_SHADER, // fragment begin
-    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT, // fragment end
-    vk::PipelineStageFlags::TOP_OF_PIPE,    // pipeline end
+const TIMESTAMP_STAGES: [PipelineStage; 6] = [
+    PipelineStage::BottomOfPipe,              // pipeline begin
+    PipelineStage::VertexShader,              // vertex begin
+    PipelineStage::TessellationControlShader, // vertex end
+    PipelineStage::FragmentShader,            // fragment begin
+    PipelineStage::ColorAttachmentOutput,     // fragment end
+    PipelineStage::TopOfPipe,                 // pipeline end
 ];
 const TIMESTAMP_COUNT: u32 = TIMESTAMP_STAGES.len() as u32;
 
@@ -28,13 +27,11 @@ pub struct PerfQueryResult {
 
 #[derive(Debug)]
 pub enum PerfQueryError {
-    NotDone,
-    WaitError,
+    GetResultsError(GetResultsError),
 }
 
 pub struct PerfQuery {
-    device: Dev,
-    query_pool: vk::QueryPool,
+    query_pool: QueryPool,
 }
 
 impl Default for PerfQueryResult {
@@ -65,19 +62,18 @@ impl Add for PerfQueryResult {
 }
 
 impl PerfQuery {
-    pub fn new_with_device(device: Dev) -> Self {
-        let query_pool_info = vk::QueryPoolCreateInfo::builder()
-            .query_type(vk::QueryType::TIMESTAMP)
-            .query_count(TIMESTAMP_COUNT);
+    pub fn new_with_device(device: &Dev) -> Self {
+        let query_pool = QueryPool::new(
+            device.logical().clone(),
+            QueryType::Timestamp,
+            TIMESTAMP_COUNT,
+        )
+        .expect("Could not create a query pool");
 
-        // Unsafe: device must be valid
-        let query_pool = unsafe { device.create_query_pool(&query_pool_info, None) }
-            .expect("Could not create a query pool");
-
-        Self { device, query_pool }
+        Self { query_pool }
     }
 
-    pub unsafe fn reset(&self, rri: &RenderRecordInfo) {
+    /* TODO: pub unsafe fn reset(&self, rri: &RenderRecordInfo) {
         if rri.debug_calls {
             debug!("cmd_reset_query_pool");
         }
@@ -103,24 +99,21 @@ impl PerfQuery {
         for i in 0..TIMESTAMP_COUNT {
             self.query(rri, i);
         }
-    }
+    } */
 
     pub fn get_with_flags(
         &self,
-        flags: vk::QueryResultFlags,
+        flags: QueryResultFlags,
     ) -> Result<PerfQueryResult, PerfQueryError> {
         let mut data = [0u64; TIMESTAMP_STAGES.len()];
 
-        unsafe {
-            self.device.get_query_pool_results(
-                self.query_pool,
-                0,
-                TIMESTAMP_COUNT,
-                &mut data,
-                flags,
-            )
-        }
-        .or(Err(PerfQueryError::WaitError))?;
+        let got_data = self
+            .query_pool
+            .queries_range(0..TIMESTAMP_COUNT)
+            .unwrap()
+            .get_results(&mut data, flags)
+            .map_err(|err| PerfQueryError::GetResultsError(err))?;
+        assert!(got_data);
 
         let pipeline_begin = data[0 as usize];
         let pipeline_end = data[5 as usize];
@@ -139,10 +132,18 @@ impl PerfQuery {
     }
 
     pub fn get(&mut self) -> Result<PerfQueryResult, PerfQueryError> {
-        self.get_with_flags(vk::QueryResultFlags::TYPE_64)
+        self.get_with_flags(QueryResultFlags {
+            partial: false,
+            wait: false,
+            with_availability: false,
+        })
     }
 
     /* pub fn get_wait(&mut self) -> Result<PerfQueryResult, PerfQueryError> {
-        self.get_with_flags(vk::QueryResultFlags::WAIT | vk::QueryResultFlags::TYPE_64)
+        self.get_with_flags(QueryResultFlags {
+            partial: false,
+            wait: true,
+            with_availability: false,
+        })
     } */
 }

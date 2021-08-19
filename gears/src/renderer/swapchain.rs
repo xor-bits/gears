@@ -1,5 +1,4 @@
-use crate::{ContextError, MapErrorLog, SyncMode};
-use ash::{extensions::khr, vk};
+use crate::{MapErrorLog, SyncMode};
 
 pub struct Swapchain {
     pub sync: SyncMode,

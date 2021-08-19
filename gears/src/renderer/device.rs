@@ -1,212 +1,110 @@
-use ash::{extensions::khr, version::InstanceV1_0, vk};
-use log::{debug, error};
-use std::{ffi::CStr, ops, os::raw::c_char, sync::Arc};
-
-use crate::{
-    context::{Context, ContextError},
-    debug::Debugger,
-    MapErrorLog, SurfaceBuilder,
+use super::{
+    queue::{QueueFamilies, Queues},
+    target::window::WindowTargetBuilder,
 };
-
-use super::queue::{QueueFamilies, Queues};
+use crate::context::{AnyPhysicalDevice, Context, ContextError, SuitablePhysicalDevice};
+use std::sync::Arc;
+use vulkano::{
+    device::{
+        physical::{MemoryType, PhysicalDevice},
+        Device, DeviceExtensions, Features,
+    },
+    instance::{debug::DebugCallback, Instance},
+    swapchain::Surface,
+};
+use winit::window::Window;
 
 pub struct ReducedContext {
-    pub debugger: Debugger,
-
-    pub pdevice: vk::PhysicalDevice,
-    pub queue_families: QueueFamilies,
-
-    pub instance: ash::Instance,
-    pub instance_layers: Vec<&'static CStr>,
-
-    pub entry: ash::Entry,
+    pub debugger: Option<DebugCallback>,
+    pub p_device: SuitablePhysicalDevice,
+    pub instance: Arc<Instance>,
+    surface: Arc<Surface<Arc<Window>>>,
 }
 
 impl ReducedContext {
-    pub fn new(context: Context) -> (ReducedContext, SurfaceBuilder) {
+    pub fn new(context: Context) -> (ReducedContext, WindowTargetBuilder) {
         (
             ReducedContext {
                 debugger: context.debugger,
-
-                pdevice: context.pdevice,
-                queue_families: context.queue_families,
-
+                p_device: context.p_device,
                 instance: context.instance,
-                instance_layers: context.instance_layers,
-
-                entry: context.entry,
+                surface: context.target.surface.clone(),
             },
-            SurfaceBuilder {
-                surface: context.surface,
-                loader: context.surface_loader,
-                extent: context.extent,
-            },
+            context.target,
         )
     }
 }
 
 pub struct RenderDevice {
-    _debugger: Debugger,
+    _debugger: Option<DebugCallback>,
+
+    device: Arc<Device>,
+    p_device: usize,
+
     pub queues: Queues,
-
-    pub memory_types: Vec<vk::MemoryType>,
-    pub pdevice: vk::PhysicalDevice,
-
-    device: ash::Device,
-    pub instance: ash::Instance,
-    pub entry: ash::Entry,
-
-    pub set_count: usize,
+    pub instance: Arc<Instance>,
 }
 
 pub type Dev = Arc<RenderDevice>;
 
-pub trait DerefDev {
-    fn deref_dev(&self) -> &Dev;
-}
-
-impl DerefDev for Dev {
-    fn deref_dev(&self) -> &Dev {
-        self
-    }
-}
-
 impl RenderDevice {
-    // safe if ptrs are not used after instance_layers is modified or dropped
-    unsafe fn device_layers(instance_layers: &Vec<&CStr>) -> Vec<*const c_char> {
-        instance_layers
-            .iter()
-            .map(|raw_name| raw_name.as_ptr())
-            .collect()
+    pub fn logical(&self) -> &'_ Arc<Device> {
+        &self.device
     }
 
-    // safe if instance and pdevice are valid
-    unsafe fn device_extensions(
-        instance: &ash::Instance,
-        pdevice: vk::PhysicalDevice,
-    ) -> Result<Vec<*const c_char>, ContextError> {
-        let available = instance
-            .enumerate_device_extension_properties(pdevice)
-            .map_err_log(
-                "Could not query instance extensions",
-                ContextError::OutOfMemory,
-            )?;
+    pub fn physical(&self) -> PhysicalDevice<'_> {
+        PhysicalDevice::from_index(&self.instance, self.p_device).unwrap()
+    }
 
-        let requested = vec![khr::Swapchain::name()];
-        let requested_raw: Vec<*const c_char> =
-            requested.iter().map(|raw_name| raw_name.as_ptr()).collect();
+    pub fn memory_types(&self) -> impl ExactSizeIterator<Item = MemoryType<'_>> {
+        self.physical().memory_types()
+    }
 
-        let missing: Vec<_> = requested
-            .iter()
-            .filter_map(|ext| {
-                if available
-                    .iter()
-                    .find(|aext| &CStr::from_ptr(aext.extension_name.as_ptr()) == ext)
-                    .is_none()
-                {
-                    Some(ext)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        debug!(
-            "Requested device extensions: {:?}\nAvailable device extensions: {:?}",
-            requested, available
-        );
-        if missing.len() > 0 {
-            error!("Missing device extensions: {:?}", missing);
-            return Err(ContextError::MissingDeviceExtensions);
+    fn device_extensions(p_device: PhysicalDevice) -> DeviceExtensions {
+        DeviceExtensions {
+            khr_swapchain: true,
+            ..p_device.required_extensions().clone()
         }
-
-        Ok(requested_raw)
     }
 
-    fn memory_properties(
-        instance: &ash::Instance,
-        pdevice: vk::PhysicalDevice,
-    ) -> vk::PhysicalDeviceMemoryProperties {
-        let memory_properties = unsafe { instance.get_physical_device_memory_properties(pdevice) };
-        debug!("Memory properties: {:?}", memory_properties);
-        memory_properties
-    }
-
-    pub fn from_context(
-        context: ReducedContext,
-        frames_in_flight: usize,
-    ) -> Result<Dev, ContextError> {
-        // legacy device layers
-        // unsafe: instance_layers is dropped in this function
-        let instance_layers = unsafe { Self::device_layers(&context.instance_layers) };
+    pub fn from_context(context: ReducedContext) -> Result<Dev, ContextError> {
+        let p_device = context.p_device.device();
 
         // device extensions
-        // unsafe: instance and pdevice are owned by this function
-        let device_extensions =
-            unsafe { Self::device_extensions(&context.instance, context.pdevice)? };
 
-        // memory
-        let memory_types = Self::memory_properties(&context.instance, context.pdevice)
-            .memory_types
-            .iter()
-            .cloned()
-            .collect();
+        let device_extensions = Self::device_extensions(p_device);
 
-        // queues
-        let queue_create_infos = context.queue_families.get_vec().unwrap();
+        // queue infos
+
+        let queue_families = QueueFamilies::new(&context.surface, p_device)?
+            .expect("Selected physical device was not suitable");
+        let queue_create_infos = queue_families.get();
 
         // features
-        let features = vk::PhysicalDeviceFeatures {
-            geometry_shader: vk::TRUE,
+
+        let features = Features {
+            geometry_shader: true,
             ..Default::default()
         };
 
         // device
-        let device_info = vk::DeviceCreateInfo::builder()
-            .queue_create_infos(&queue_create_infos)
-            .enabled_layer_names(&instance_layers[..])
-            .enabled_extension_names(&device_extensions[..])
-            .enabled_features(&features);
 
-        // unsafe: instance is again owned by this function and moving instance or entry will not invalidate device
-        let device = unsafe {
-            context
-                .instance
-                .create_device(context.pdevice, &device_info, None)
-        }
-        .map_err_log("Logical device creation failed", ContextError::OutOfMemory)?;
+        let (device, queues) =
+            Device::new(p_device, &features, &device_extensions, queue_create_infos)
+                .map_err(|err| ContextError::DeviceCreationError(err))?;
 
-        // unsafe: queues does not live beyond device, instance or entry. Moving is allowed but destruction is not.
-        let queues = unsafe { context.queue_families.get_queues(&device).unwrap() };
+        // queues
 
-        let rdevice = Arc::new(Self {
+        let queues = queue_families.get_queues(queues);
+
+        Ok(Arc::new(Self {
             _debugger: context.debugger,
-            queues,
-
-            memory_types,
-            pdevice: context.pdevice,
 
             device,
+            p_device: p_device.index(),
+
+            queues,
             instance: context.instance,
-            entry: context.entry,
-
-            set_count: frames_in_flight,
-        });
-
-        Ok(rdevice)
-    }
-}
-
-impl ops::Deref for RenderDevice {
-    type Target = ash::Device;
-
-    fn deref(&self) -> &Self::Target {
-        &self.device
-    }
-}
-
-impl ops::DerefMut for RenderDevice {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.device
+        }))
     }
 }

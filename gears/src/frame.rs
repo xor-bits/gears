@@ -1,3 +1,5 @@
+use std::{env, sync::Arc};
+
 use winit::{
     dpi::LogicalSize,
     event_loop::EventLoop,
@@ -10,7 +12,7 @@ use crate::{
 };
 
 pub struct Frame {
-    window: Window,
+    window: Arc<Window>,
 }
 
 pub struct FrameBuilder<'a> {
@@ -25,26 +27,58 @@ impl Frame {
         FrameBuilder::<'a> {
             title: "Gears",
             size: (600, 600),
-            min_size: (64, 16),
+            min_size: (32, 32),
             max_size: None,
         }
     }
 
     pub fn default_context(&self) -> Result<Context, ContextError> {
         Context::new(
-            &self.window,
-            self.size(),
+            self.window.clone(),
             ContextGPUPick::default(),
             ContextValidation::default(),
         )
     }
 
+    /// Environment value `GEARS_GPU_PICK` overrides the `pick` argument if present.
+    /// Possible values: `auto`, `pick`
+    ///
+    /// Environment value `GEARS_VALIDATION` overrides the `valid` argument if present.
+    /// Possible values: `none`, `full`
     pub fn context(
         &self,
         pick: ContextGPUPick,
         valid: ContextValidation,
     ) -> Result<Context, ContextError> {
-        Context::new(&self.window, self.size(), pick, valid)
+        let pick = env::var("GEARS_GPU_PICK").map_or(pick, |value| {
+            let valid = match value.to_lowercase().as_str() {
+                "auto" => ContextGPUPick::Automatic,
+                "pick" => ContextGPUPick::Manual,
+                other => {
+                    log::warn!("Ignored invalid value: {}", other);
+                    pick
+                }
+            };
+
+            log::info!("Using override ContextGPUPick: {:?}", valid);
+            valid
+        });
+
+        let valid = env::var("GEARS_VALIDATION").map_or(valid, |value| {
+            let valid = match value.to_lowercase().as_str() {
+                "full" => ContextValidation::WithValidation,
+                "none" => ContextValidation::NoValidation,
+                other => {
+                    log::warn!("Ignored invalid value: {}", other);
+                    return valid;
+                }
+            };
+
+            log::info!("Using override ContextValidation: {:?}", valid);
+            valid
+        });
+
+        Context::new(self.window.clone(), pick, valid)
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -69,12 +103,8 @@ impl Frame {
         self.window.scale_factor()
     }
 
-    pub fn window(&self) -> &Window {
+    pub fn window(&self) -> &Arc<Window> {
         &self.window
-    }
-
-    pub fn window_mut(&mut self) -> &mut Window {
-        &mut self.window
     }
 }
 
@@ -107,10 +137,12 @@ impl<'a> FrameBuilder<'a> {
         if let Some(max_size) = self.max_size {
             window_builder = window_builder.with_max_inner_size(tuple_to_lsize(max_size));
         }
-        let window = window_builder
-            .with_title(self.title)
-            .build(&event_loop)
-            .expect_log("Window creation failed");
+        let window = Arc::new(
+            window_builder
+                .with_title(self.title)
+                .build(&event_loop)
+                .expect_log("Window creation failed"),
+        );
 
         (Frame { window }, event_loop)
     }

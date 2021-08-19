@@ -1,42 +1,20 @@
-pub mod batch;
-pub mod buffer;
+// TODO: pub mod batch;
 pub mod device;
 pub mod object;
-pub mod pipeline;
 pub mod query;
 pub mod queue;
-pub mod render_pass;
 pub mod simple_renderer;
-pub mod surface;
-pub mod swapchain;
-
-#[cfg(feature = "short_namespaces")]
-pub use batch::*;
-#[cfg(feature = "short_namespaces")]
-pub use buffer::*;
-#[cfg(feature = "short_namespaces")]
-pub use device::*;
-#[cfg(feature = "short_namespaces")]
-pub use object::*;
-#[cfg(feature = "short_namespaces")]
-pub use pipeline::*;
-#[cfg(feature = "short_namespaces")]
-pub use query::*;
-#[cfg(feature = "short_namespaces")]
-pub use queue::*;
-#[cfg(feature = "short_namespaces")]
-pub use render_pass::*;
-#[cfg(feature = "short_namespaces")]
-pub use simple_renderer::*;
-#[cfg(feature = "short_namespaces")]
-pub use surface::*;
-#[cfg(feature = "short_namespaces")]
-pub use swapchain::*;
+pub mod target;
+/* pub mod buffer; */
+/* pub mod pipeline; */
+/* pub mod render_pass; */
+/* pub mod surface; */
+/* pub mod swapchain; */
 
 use self::query::PerfQueryResult;
-use ash::vk;
 use glam::Vec4;
 use std::{sync::atomic::AtomicUsize, time::Duration};
+use vulkano::command_buffer::PrimaryAutoCommandBuffer;
 
 pub struct FramePerfReport {
     pub cpu_frametime: Duration,
@@ -66,7 +44,7 @@ pub struct ImmediateFrameInfo {
 }
 
 pub struct RenderRecordInfo {
-    command_buffer: vk::CommandBuffer,
+    command_buffer: PrimaryAutoCommandBuffer,
     image_index: usize,
     triangles: AtomicUsize,
     debug_calls: bool,
@@ -79,7 +57,7 @@ pub struct RenderRecordBeginInfo {
 }
 
 pub struct UpdateRecordInfo {
-    command_buffer: vk::CommandBuffer,
+    command_buffer: PrimaryAutoCommandBuffer,
     image_index: usize,
 }
 

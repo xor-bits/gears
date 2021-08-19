@@ -1,18 +1,17 @@
 use std::fmt::Debug;
 
-use ash::{version::DeviceV1_0, vk};
-
-use crate::{
-    buffer::{BaseFormat, ImageFormat},
-    device::Dev,
-    ContextError, MapErrorLog,
+use vulkano::{
+    format::Format, pipeline::viewport::Viewport, render_pass::RenderPassDesc,
+    single_pass_renderpass,
 };
+
+use super::device::Dev;
 
 #[derive(Clone)]
 pub struct RenderPass {
-    pub viewport: vk::Viewport,
-    pub scissor: vk::Rect2D,
-    pub render_pass: vk::RenderPass,
+    pub viewport: Viewport,
+    pub scissor: Rect,
+    pub render_pass: vulkano::render_pass::RenderPass,
 
     device: Dev,
 }
@@ -115,6 +114,28 @@ impl RenderPass {
             .attachments(&attachments)
             .subpasses(&subpasses)
             .dependencies(&dependencies);
+
+        single_pass_renderpass!(device.clone(),
+        attachments: {
+            c: {
+                load: Clear,
+                store: Store,
+                format: Format::R8G8B8A8Unorm,
+                samples: 1,
+            },
+            d: {
+                load: Clear,
+                store: DontCare,
+                format: ImageFormat::<f32>::D.format(),
+                samples: 1,
+            }
+        },
+        pass: {
+            color: [c],
+            depth_stencil: d
+        });
+
+        vulkano::render_pass::RenderPass::new(device, description);
 
         let render_pass = unsafe { device.create_render_pass(&render_pass_info, None) }
             .map_err_log("Render pass creation failed", ContextError::OutOfMemory)?;

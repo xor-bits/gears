@@ -1,35 +1,38 @@
-use super::{debug::Debugger, renderer::queue::QueueFamilies, MapErrorLog};
-
-use ash::{
-    extensions::{ext, khr},
-    prelude::VkResult,
-    version::{EntryV1_0, InstanceV1_0},
-    vk, Entry,
+use crate::{
+    debug,
+    renderer::{queue::QueueFamilies, target::window::WindowTargetBuilder},
 };
+use bytesize::ByteSize;
 use colored::Colorize;
-use log::{debug, error, info, warn};
-use std::{
-    collections::HashSet,
-    env,
-    ffi::CStr,
-    io::{self, Write},
-    os::raw::c_char,
+use std::{cmp::Ordering, env, fmt::Write, sync::Arc};
+use vulkano::{
+    device::{
+        physical::{PhysicalDevice, PhysicalDeviceType},
+        DeviceCreationError,
+    },
+    instance::{
+        debug::{DebugCallback, DebugCallbackCreationError},
+        layers_list, ApplicationInfo, Instance, InstanceCreationError, InstanceExtensions,
+        LayerProperties, LayersListError,
+    },
+    swapchain::{CapabilitiesError, Surface, SurfaceCreationError, SwapchainCreationError},
+    Version,
 };
 use winit::window::Window;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum ContextGPUPick {
-    /// Automatically picks the GPU, or asks if environment value 'GEARS_GPU' is set to 'pick'
+    /// Automatically picks the GPU.
     Automatic,
 
-    /// Pick the GPU with the commandline
+    /// Pick the GPU with the commandline.
     Manual,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum ContextValidation {
-    /// No vulkan validation layers: greatly increased performance, but reduced debug output
-    /// Used when testing performance or when exporting release builds in production
+    /// No vulkan validation layers: greatly increased performance, but reduced debug output.
+    /// Used when testing performance or when exporting release builds in production.
     NoValidation,
 
     /// Vulkan validation: Sacrafice the performance for vulkan API usage validity.
@@ -37,12 +40,22 @@ pub enum ContextValidation {
     WithValidation,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+#[derive(Debug, Clone)]
 pub enum ContextError {
-    MissingVulkan,
     MissingInstanceExtensions,
     MissingDeviceExtensions,
     MissingSurfaceConfigs,
+
+    WindowAlreadyTaken,
+
+    InstanceCreationError(InstanceCreationError),
+    LayersListError(LayersListError),
+    DebugCallbackCreationError(DebugCallbackCreationError),
+    SurfaceCreationError(SurfaceCreationError),
+    CapabilitiesError(CapabilitiesError),
+    DeviceCreationError(DeviceCreationError),
+    SwapchainCreationError(SwapchainCreationError),
+
     OutOfMemory,
     UnsupportedPlatform,
     NoSuitableGPUs,
@@ -55,19 +68,11 @@ pub enum ContextError {
 }
 
 pub struct Context {
-    pub debugger: Debugger,
-
-    pub pdevice: vk::PhysicalDevice,
-    pub queue_families: QueueFamilies,
-
-    pub surface: vk::SurfaceKHR,
-    pub surface_loader: khr::Surface,
-    pub extent: vk::Extent2D,
-
-    pub instance: ash::Instance,
-    pub instance_layers: Vec<&'static CStr>,
-
-    pub entry: Entry,
+    pub validation: ContextValidation,
+    pub debugger: Option<DebugCallback>,
+    pub p_device: SuitablePhysicalDevice,
+    pub target: WindowTargetBuilder,
+    pub instance: Arc<Instance>,
 }
 
 impl Default for ContextGPUPick {
@@ -82,384 +87,461 @@ impl Default for ContextValidation {
     }
 }
 
-impl Context {
-    pub fn new(
-        window: &Window,
-        size: (u32, u32),
-        pick: ContextGPUPick,
-        valid: ContextValidation,
-    ) -> Result<Self, ContextError> {
-        let entry = unsafe { ash::Entry::new() }
-            .map_err_log("Ash entry creation failed", ContextError::MissingVulkan)?;
+#[derive(Debug, Clone, Copy, Eq)]
+pub struct PhysicalDeviceScore {
+    type_score: usize,
+    memory: u64,
+}
 
-        let api_version = match entry
-            .try_enumerate_instance_version()
-            .map_err_log("Instance version query failed", ContextError::OutOfMemory)?
-        {
-            Some(version) => version,
-            None => vk::make_version(1, 0, 0),
+impl PhysicalDeviceScore {
+    pub fn new(p_device: PhysicalDevice) -> Self {
+        // based on the device type
+        let type_score = match p_device.properties().device_type {
+            PhysicalDeviceType::DiscreteGpu => 5,
+            PhysicalDeviceType::IntegratedGpu => 4,
+            PhysicalDeviceType::VirtualGpu => 3,
+            PhysicalDeviceType::Cpu => 2,
+            PhysicalDeviceType::Other => 1,
         };
 
-        let engine_version = (
-            env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap(),
-            env!("CARGO_PKG_VERSION_MINOR").parse().unwrap(),
-            env!("CARGO_PKG_VERSION_PATCH").parse().unwrap(),
-        );
+        // based on the local device memory
+        let memory = p_device
+            .memory_heaps()
+            .filter_map(|heap| heap.is_device_local().then(|| heap))
+            .map(|heap| heap.size())
+            .fold(0, |acc, memory| acc + memory);
 
-        let application_info = vk::ApplicationInfo::builder()
-            .api_version(api_version.min(vk::HEADER_VERSION_COMPLETE))
-            .engine_name(CStr::from_bytes_with_nul(b"gears\0").unwrap())
-            .engine_version(vk::make_version(
-                engine_version.0,
-                engine_version.1,
-                engine_version.2,
-            ));
+        Self { type_score, memory }
+    }
 
-        debug!(
-            "Vulkan API version requested: {}.{}.{}",
-            vk::version_major(application_info.api_version),
-            vk::version_minor(application_info.api_version),
-            vk::version_patch(application_info.api_version)
-        );
+    pub fn score(&self) -> u128 {
+        self.type_score as u128 * self.memory as u128
+    }
+}
 
-        // layers
+impl Ord for PhysicalDeviceScore {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.score().cmp(&other.score())
+    }
+}
 
-        // query available layers from instance
-        let available_layers = entry
-            .enumerate_instance_layer_properties()
-            .map_err_log("Could not query instance layers", ContextError::OutOfMemory)?;
+impl PartialOrd for PhysicalDeviceScore {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for PhysicalDeviceScore {
+    fn eq(&self, other: &Self) -> bool {
+        self.score() == other.score()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SuitablePhysicalDevice {
+    pub p_device: usize,
+    pub instance: Arc<Instance>,
+    pub score: PhysicalDeviceScore,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnsuitablePhysicalDevice {
+    pub p_device: usize,
+    pub instance: Arc<Instance>,
+    pub score: PhysicalDeviceScore,
+}
+
+#[derive(Debug, Clone)]
+pub enum PhysicalDevicePicker {
+    Suitable(SuitablePhysicalDevice),
+    Unsuitable(UnsuitablePhysicalDevice),
+}
+
+pub trait AnyPhysicalDevice {
+    fn score(&self) -> &'_ PhysicalDeviceScore;
+    fn device(&self) -> PhysicalDevice<'_>;
+    fn suitable(&self) -> bool;
+    fn name(&self) -> &'_ String;
+}
+
+impl AnyPhysicalDevice for SuitablePhysicalDevice {
+    fn score(&self) -> &'_ PhysicalDeviceScore {
+        &self.score
+    }
+
+    fn device(&self) -> PhysicalDevice<'_> {
+        PhysicalDevice::from_index(&self.instance, self.p_device).unwrap()
+    }
+
+    fn suitable(&self) -> bool {
+        true
+    }
+
+    fn name(&self) -> &'_ String {
+        &self.device().properties().device_name
+    }
+}
+
+impl AnyPhysicalDevice for UnsuitablePhysicalDevice {
+    fn score(&self) -> &'_ PhysicalDeviceScore {
+        &self.score
+    }
+
+    fn device(&self) -> PhysicalDevice<'_> {
+        PhysicalDevice::from_index(&self.instance, self.p_device).unwrap()
+    }
+
+    fn suitable(&self) -> bool {
+        false
+    }
+
+    fn name(&self) -> &'_ String {
+        &self.device().properties().device_name
+    }
+}
+
+impl PhysicalDevicePicker {
+    fn get_internal(&self) -> &dyn AnyPhysicalDevice {
+        match self {
+            PhysicalDevicePicker::Suitable(d) => d,
+            PhysicalDevicePicker::Unsuitable(d) => d,
+        }
+    }
+}
+
+impl AnyPhysicalDevice for PhysicalDevicePicker {
+    fn score(&self) -> &'_ PhysicalDeviceScore {
+        self.get_internal().score()
+    }
+
+    fn device(&self) -> PhysicalDevice<'_> {
+        self.get_internal().device()
+    }
+
+    fn suitable(&self) -> bool {
+        self.get_internal().suitable()
+    }
+
+    fn name(&self) -> &'_ String {
+        self.get_internal().name()
+    }
+}
+
+impl Context {
+    fn get_layers(valid: ContextValidation) -> Vec<&'static str> {
+        /* // query available layers from instance
+        let available_layers = layers_list()
+            .map_err(|err| ContextError::LayersListError(err))?
+            .map(|l| l.name().to_string())
+            .collect::<Vec<_>>();
 
         // requested layers
-        let khronos_validation_layer =
-            CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0").unwrap();
-        let lunarg_monitor_layer = CStr::from_bytes_with_nul(b"VK_LAYER_LUNARG_monitor\0").unwrap();
-        let mut requested_layers: Vec<&CStr> = if valid == ContextValidation::WithValidation {
+
+        const khronos_validation_layer: &str = "VK_LAYER_KHRONOS_validation";
+        const lunarg_monitor_layer: &str = "VK_LAYER_LUNARG_monitor";
+        let mut requested_layers: Vec<&str> = if valid == ContextValidation::WithValidation {
             vec![khronos_validation_layer, lunarg_monitor_layer]
         } else {
             vec![]
         };
-        let mut requested_layers_raw: Vec<*const c_char> = requested_layers
-            .iter()
-            .map(|layer| layer.as_ptr())
-            .collect();
 
         // check for missing layers
-        let missing_layers: Vec<_> = requested_layers
+        let missing_layers = requested_layers
             .iter()
+            .cloned()
             .filter_map(|layer| {
-                if available_layers
-                    .iter()
-                    .find(|alayer| unsafe { CStr::from_ptr(alayer.layer_name.as_ptr()) } == *layer)
-                    .is_none()
-                {
+                if available_layers.contains(layer) {
                     Some(layer)
                 } else {
                     None
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
 
-        debug!(
-            "Requested layers: {:?}\nAvailable layers: {:?}",
-            requested_layers, available_layers
+        log::debug!(
+            "Requested layers: {:?}\nAvailable layers: {:?}\nMissing layers: {:?}",
+            requested_layers,
+            available_layers,
+            missing_layers
         );
         if missing_layers.len() > 0 {
-            warn!(
+            log::warn!(
                 "Missing layers: {:?}, continuing without these validation layers",
                 missing_layers
             );
-            requested_layers.clear();
-            requested_layers_raw.clear();
+
+            requested_layers = requested_layers
+                .iter()
+                .cloned()
+                .filter_map(|layer| {
+                    if missing_layers.contains(layer) {
+                        None
+                    } else {
+                        Some(layer)
+                    }
+                })
+                .collect();
+        } else {
+            log::debug!("No missing layers");
         }
-        debug!("No missing layers");
+
+        Ok(requested_layers) */
+
+        // query available layers from instance
+
+        let available_layers = layers_list().unwrap().collect::<Vec<LayerProperties>>();
+
+        // requested layers
+
+        const VALIDATE: [&str; 2] = ["VK_LAYER_KHRONOS_validation", "VK_LAYER_LUNARG_monitor"];
+        const NO_VALIDATE: [&str; 0] = [];
+
+        let requested_layers = if valid == ContextValidation::WithValidation {
+            &VALIDATE[..]
+        } else {
+            &NO_VALIDATE[..]
+        };
+
+        // remove missing layers
+
+        requested_layers
+            .into_iter()
+            .cloned()
+            .filter(|requested| {
+                let found = available_layers
+                    .iter()
+                    .find(|available| available.name() == *requested)
+                    .is_some();
+
+                if !found {
+                    log::warn!("Missing layer: {:?}, continuing without it", requested);
+                }
+
+                found
+            })
+            .collect()
+    }
+
+    fn get_extensions(valid: ContextValidation) -> InstanceExtensions {
+        InstanceExtensions {
+            ext_debug_utils: valid == ContextValidation::WithValidation,
+            ..vulkano_win::required_extensions()
+        }
+    }
+
+    fn pick_gpu(
+        instance: &Arc<Instance>,
+        surface: &Arc<Surface<Arc<Window>>>,
+        pick: ContextGPUPick,
+    ) -> Result<SuitablePhysicalDevice, ContextError> {
+        let p_devices = PhysicalDevice::enumerate(instance)
+            .map(|p_device| {
+                let queue_families = QueueFamilies::new(surface, p_device)?;
+                let score = PhysicalDeviceScore::new(p_device);
+
+                if queue_families.is_some() {
+                    Ok(PhysicalDevicePicker::Suitable(SuitablePhysicalDevice {
+                        instance: instance.clone(),
+                        p_device: p_device.index(),
+                        score,
+                    }))
+                } else {
+                    Ok(PhysicalDevicePicker::Unsuitable(UnsuitablePhysicalDevice {
+                        instance: instance.clone(),
+                        p_device: p_device.index(),
+                        score,
+                    }))
+                }
+            })
+            .collect::<Result<Vec<PhysicalDevicePicker>, ContextError>>()?;
+
+        Self::gpu_picker(&p_devices, pick)
+    }
+
+    fn gpu_list<'a>(
+        p_devices: impl Iterator<Item = &'a dyn AnyPhysicalDevice>,
+        ignore_invalid: bool,
+    ) -> String {
+        let mut buf = String::new();
+        for (i, p_device) in p_devices
+            .filter(|p_device| {
+                if !ignore_invalid {
+                    true
+                } else {
+                    p_device.suitable()
+                }
+            })
+            .enumerate()
+        {
+            let suitable = if p_device.suitable() {
+                "[\u{221a}]".green()
+            } else {
+                "[X]".red()
+            };
+            let device = p_device.device().properties();
+            let name = device.device_name.blue();
+            let ty = format!("{:?}", device.device_type).blue();
+            let mem = ByteSize::b(p_device.score().memory).to_string().blue();
+            let score = p_device.score().score().to_string().yellow();
+
+            writeln!(buf, "- GPU index: {}", i).unwrap();
+            writeln!(buf, "  - suitable: {}", suitable).unwrap();
+            writeln!(buf, "  - name: {}", name).unwrap();
+            writeln!(buf, "  - type: {}", ty).unwrap();
+            writeln!(buf, "  - memory: {}", mem).unwrap();
+            writeln!(buf, "  - automatic score: {}", score).unwrap();
+        }
+        buf
+    }
+
+    fn gpu_picker(
+        p_devices: &Vec<PhysicalDevicePicker>,
+        pick: ContextGPUPick,
+    ) -> Result<SuitablePhysicalDevice, ContextError> {
+        let mut suitable = p_devices
+            .iter()
+            .filter_map(|p_device| match p_device {
+                PhysicalDevicePicker::Suitable(d) => Some(d.clone()),
+                PhysicalDevicePicker::Unsuitable(_) => None,
+            })
+            .collect::<Vec<SuitablePhysicalDevice>>();
+        let all_iter = p_devices.iter().map(|d| d as &dyn AnyPhysicalDevice);
+        let suitable_iter = suitable.iter().map(|d| d as &dyn AnyPhysicalDevice);
+
+        let p_device = if suitable.len() == 0 {
+            None
+        } else if suitable.len() == 1 {
+            if pick == ContextGPUPick::Manual {
+                log::warn!(
+                    "ContextGPUPick was set to Manual but only one suitable GPU was available"
+                )
+            }
+
+            Some(suitable.remove(0))
+        } else if pick == ContextGPUPick::Manual {
+            println!("Pick a GPU:\n{}", Self::gpu_list(suitable_iter, true,));
+
+            let stdin = std::io::stdin();
+            let mut stdout = std::io::stdout();
+            let i = loop {
+                print!("Number: ");
+                std::io::Write::flush(&mut stdout).unwrap();
+                let mut buf = String::new();
+                stdin.read_line(&mut buf).unwrap();
+
+                match buf.trim_end().parse::<usize>() {
+                    Ok(i) => {
+                        if i >= suitable.len() {
+                            println!(
+                                "{} is not a valid GPU index between 0 and {}",
+                                i,
+                                suitable.len() + 1
+                            );
+                        } else {
+                            break i;
+                        }
+                    }
+                    Err(_) => {
+                        println!("'{}' is not a valid GPU index", buf);
+                    }
+                }
+            };
+
+            // optionally save the manual pick
+            // p_device.properties().device_uuid;
+
+            Some(suitable.remove(i))
+        } else {
+            suitable.sort_by_key(|d| d.score().clone());
+            Some(suitable.remove(0))
+        };
+
+        match p_device {
+            Some(p_device) => {
+                log::info!(
+                    "Picked: GPU index: {} ({}) from:\n{}",
+                    p_device.device().index(),
+                    p_device.device().properties().device_name.blue(),
+                    Self::gpu_list(all_iter, false)
+                );
+                Ok(p_device)
+            }
+            None => {
+                log::error!(
+                    "None of the GPUs (bellow) are suitable:\n{}",
+                    Self::gpu_list(all_iter, false)
+                );
+                Err(ContextError::NoSuitableGPUs)
+            }
+        }
+    }
+
+    pub fn new(
+        window: Arc<Window>,
+        pick: ContextGPUPick,
+        valid: ContextValidation,
+    ) -> Result<Self, ContextError> {
+        // versions
+
+        let api_version = Version::V1_2;
+
+        let engine_version = (
+            env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap(),
+            env!("CARGO_PKG_VERSION_MINOR").parse().unwrap(),
+        );
+
+        let application_info = ApplicationInfo {
+            application_name: None,
+            application_version: None,
+            engine_name: Some("gears".into()),
+            engine_version: Some(Version::major_minor(engine_version.0, engine_version.1)),
+        };
+
+        // layers
+
+        let layers = Self::get_layers(valid);
 
         // extensions
 
-        // query available extensions from instance and layers
-        const INSTANCE_QUERY_ERROR_MSG: &str = "Could not query instance extensions";
-        const INSTANCE_QUERY_ERROR: ContextError = ContextError::OutOfMemory;
-        let mut available_extensions_unique = HashSet::new();
-        let available_extensions = requested_layers
-            .iter()
-            .map(|layer| {
-                enumerate_instance_extension_properties_with_layer(&entry, layer)
-                    .map_err_log(INSTANCE_QUERY_ERROR_MSG, INSTANCE_QUERY_ERROR)
-            })
-            .collect::<Result<Vec<_>, ContextError>>()?
-            .into_iter()
-            .flatten()
-            .chain(
-                entry
-                    .enumerate_instance_extension_properties()
-                    .map_err_log(INSTANCE_QUERY_ERROR_MSG, INSTANCE_QUERY_ERROR)?,
-            )
-            .filter_map(|properties| {
-                if available_extensions_unique.contains(&properties.extension_name) {
-                    None
-                } else {
-                    available_extensions_unique.insert(properties.extension_name);
-                    Some(properties)
-                }
-            })
-            .collect::<Vec<_>>();
-
-        // requested extensions
-        let mut requested_extensions = if valid == ContextValidation::WithValidation {
-            vec![ext::DebugUtils::name()]
-        } else {
-            vec![]
-        };
-        requested_extensions.append(
-            &mut ash_window::enumerate_required_extensions(window).map_err_log(
-                "Could not query window extensions",
-                ContextError::UnsupportedPlatform,
-            )?,
-        );
-        let requested_extensions_raw: Vec<*const c_char> = requested_extensions
-            .iter()
-            .map(|raw_name| raw_name.as_ptr())
-            .collect();
-
-        // check for missing extensions
-        let missing_extensions: Vec<_> = requested_extensions
-            .iter()
-            .filter_map(|ext| {
-                if available_extensions
-                    .iter()
-                    .find(|aext| unsafe { CStr::from_ptr(aext.extension_name.as_ptr()) } == *ext)
-                    .is_none()
-                {
-                    Some(ext)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        debug!(
-            "Requested extensions: {:?}\nAvailable extensions: {:?}",
-            requested_extensions, available_extensions
-        );
-        if missing_extensions.len() > 0 {
-            error!("Missing extensions: {:?}", missing_extensions);
-            return Err(ContextError::MissingInstanceExtensions);
-        }
-        debug!("No missing extensions");
+        let extensions = Self::get_extensions(valid);
 
         // instance
 
-        let instance_info = vk::InstanceCreateInfo::builder()
-            .application_info(&application_info)
-            .enabled_layer_names(&requested_layers_raw[..])
-            .enabled_extension_names(&requested_extensions_raw[..]);
-
-        let instance = unsafe { entry.create_instance(&instance_info, None) }
-            .map_err_log("Instance creation failed", ContextError::OutOfMemory)?;
-        debug!("Vulkan instance created");
-
-        // surface
-
-        let surface = unsafe { ash_window::create_surface(&entry, &instance, window, None) }
-            .map_err_log(
-                "Surface creation failed",
-                ContextError::MissingInstanceExtensions,
-            )?;
-        debug!("Surface created");
+        let instance = Instance::new(
+            Some(&application_info),
+            api_version,
+            &extensions,
+            layers.iter().cloned(),
+        )
+        .map_err(|err| ContextError::InstanceCreationError(err))?;
 
         // debugger
 
-        let debugger = Debugger::new(&entry, &instance)
-            .map_err_log("Debugger creation failed", ContextError::OutOfMemory)?;
-        debug!("Debugger created");
+        let debugger = if valid == ContextValidation::WithValidation {
+            let debugger =
+                DebugCallback::new(&instance, debug::SEVERITY, debug::TY, debug::callback)
+                    .map_err(|err| ContextError::DebugCallbackCreationError(err))?;
+
+            log::warn!("Debugger enabled");
+            Some(debugger)
+        } else {
+            None
+        };
+
+        // target
+
+        let target = WindowTargetBuilder::new(window, instance.clone())?;
 
         // physical device
 
-        let surface_loader = khr::Surface::new(&entry, &instance);
-        let mut pdevice_names = Vec::new();
-        let pdevice = {
-            let mut suitable_pdevices = unsafe { instance.enumerate_physical_devices() }
-                .map_err_log("Physical device query failed", ContextError::OutOfMemory)?
-                .into_iter()
-                .filter_map(|pdevice| {
-                    let queue_families = unsafe {
-                        QueueFamilies::new(&instance, &surface_loader, surface, pdevice).ok()?
-                    };
-
-                    let (pdevice_name, pdevice_type) = pdevice_name_and_type(&instance, pdevice);
-                    let finished = queue_families.finished();
-
-                    pdevice_names.push((pdevice_name, pdevice_type, finished));
-
-                    if !finished {
-                        None
-                    } else {
-                        Some((
-                            pdevice,
-                            queue_families,
-                            match pdevice_type {
-                                vk::PhysicalDeviceType::DISCRETE_GPU => 4,
-                                vk::PhysicalDeviceType::INTEGRATED_GPU => 3,
-                                vk::PhysicalDeviceType::VIRTUAL_GPU => 2,
-                                vk::PhysicalDeviceType::CPU => 1,
-                                _ /* vk::PhysicalDeviceType::OTHER */ => 0,
-                            },
-                        ))
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            if suitable_pdevices.len() == 0 {
-                None
-            } else if pick == ContextGPUPick::Manual
-                || env::var("GEARS_GPU").map_or(false, |value| value.to_lowercase() == "pick")
-            {
-                println!(
-                    "Pick a GPU: {}",
-                    all_pdevices_to_string(&pdevice_names, true)
-                );
-
-                let stdin = io::stdin();
-                let mut stdout = io::stdout();
-                let i = loop {
-                    print!("Number: ");
-                    stdout.flush().unwrap();
-                    let mut buf = String::new();
-                    stdin.read_line(&mut buf).unwrap();
-
-                    match buf.trim_end().parse::<usize>() {
-                        Ok(i) => {
-                            if i >= suitable_pdevices.len() {
-                                println!(
-                                    "{} is not a valid GPU index between 0 and {}",
-                                    i,
-                                    suitable_pdevices.len() + 1
-                                );
-                            } else {
-                                break i;
-                            }
-                        }
-                        Err(_) => {
-                            println!("'{}' is not a valid GPU index", buf);
-                        }
-                    }
-                };
-
-                Some(suitable_pdevices.remove(i))
-            } else {
-                suitable_pdevices.sort_by(|lhs, rhs| rhs.2.cmp(&lhs.2));
-                Some(suitable_pdevices.remove(0))
-            }
-        };
-
-        let (pdevice, queue_families, _) = pdevice.ok_or_else(|| {
-            error!(
-                "None of the GPUs (bellow) are suitable: {}",
-                all_pdevices_to_string(&pdevice_names, false)
-            );
-            ContextError::NoSuitableGPUs
-        })?;
-        info!(
-            "GPU chosen: {} from: {}",
-            pdevice_to_string(&instance, pdevice),
-            all_pdevices_to_string(&pdevice_names, false)
-        );
+        let p_device = Self::pick_gpu(&instance, &target.surface, pick)?;
 
         Ok(Self {
-            entry,
-
+            validation: valid,
             instance,
-            instance_layers: requested_layers,
-
-            surface,
-            surface_loader,
-            extent: vk::Extent2D {
-                width: size.0,
-                height: size.1,
-            },
-
-            pdevice,
-            queue_families,
-
+            target,
+            p_device,
             debugger,
         })
     }
-}
-
-fn enumerate_instance_extension_properties_with_layer(
-    entry: &Entry,
-    p_layer_name: &CStr,
-) -> VkResult<Vec<vk::ExtensionProperties>> {
-    unsafe {
-        let mut num = 0;
-        entry
-            .fp_v1_0()
-            .enumerate_instance_extension_properties(
-                p_layer_name.as_ptr(),
-                &mut num,
-                std::ptr::null_mut(),
-            )
-            .result()?;
-        let mut data = Vec::with_capacity(num as usize);
-        let err_code = entry.fp_v1_0().enumerate_instance_extension_properties(
-            p_layer_name.as_ptr(),
-            &mut num,
-            data.as_mut_ptr(),
-        );
-        data.set_len(num as usize);
-        err_code.result_with_success(data)
-    }
-}
-
-fn pdevice_name_and_type(
-    instance: &ash::Instance,
-    pdevice: vk::PhysicalDevice,
-) -> (String, vk::PhysicalDeviceType) {
-    let pdevice_properties = unsafe { instance.get_physical_device_properties(pdevice) };
-    let pdevice_name = unsafe { CStr::from_ptr(pdevice_properties.device_name.as_ptr()) };
-    let pdevice_type = pdevice_properties.device_type;
-
-    (pdevice_name.to_str().unwrap().into(), pdevice_type)
-}
-
-fn pdevice_to_string(instance: &ash::Instance, pdevice: vk::PhysicalDevice) -> String {
-    let (pdevice_name, pdevice_type) = pdevice_name_and_type(instance, pdevice);
-
-    format!(
-        "{} (type:{})",
-        pdevice_name.cyan(),
-        format!("{:?}", pdevice_type).green(),
-    )
-}
-
-fn all_pdevices_to_string(
-    pdevice_names: &Vec<(String, vk::PhysicalDeviceType, bool)>,
-    ignore_invalid: bool,
-) -> String {
-    let mut len = 0;
-    for (name, _, _) in pdevice_names.iter() {
-        len += name.len();
-    }
-
-    let mut buf = String::with_capacity(len);
-    for (i, (name, pdevice_type, suitable)) in pdevice_names
-        .iter()
-        .filter(|(_, _, s)| if ignore_invalid { *s } else { true })
-        .enumerate()
-    {
-        buf.push_str(
-            format!(
-                "\n - {}: [{}] {} (type:{})",
-                i,
-                if *suitable {
-                    "\u{221a}".green()
-                } else {
-                    " ".white()
-                },
-                name.cyan(),
-                format!("{:?}", pdevice_type).green()
-            )
-            .as_str(),
-        );
-    }
-    buf
 }

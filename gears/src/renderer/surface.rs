@@ -1,28 +1,28 @@
-use ash::{extensions::khr, vk};
-
-use crate::{device::Dev, ContextError, MapErrorElseLogResult, MapErrorLog, Swapchain, SyncMode};
+use super::device::Dev;
+use crate::{MapErrorElseLogResult, MapErrorLog, SyncMode};
+use vulkano::{
+    format::Format,
+    image::Extent,
+    swapchain::{ColorSpace, PresentMode},
+};
 
 #[must_use]
 pub struct SurfaceBuilder {
-    pub extent: vk::Extent2D,
-    pub loader: khr::Surface,
-    pub surface: vk::SurfaceKHR,
+    pub extent: Extent,
+    pub surface: vulkano::swapchain::Surface<Window>,
 }
 
 pub struct Surface {
-    extent: vk::Extent2D,
-
+    extent: Extent,
     device: Dev,
-    swapchain_loader: khr::Swapchain,
-    surface_loader: khr::Surface,
-    surface: vk::SurfaceKHR,
+    surface: vulkano::swapchain::Surface<Window>,
 }
 
 pub struct SwapchainInfo {
-    format: vk::SurfaceFormatKHR,
-    present: vk::PresentModeKHR,
+    format: (Format, ColorSpace),
+    present: PresentMode,
     len: u32,
-    extent: vk::Extent2D,
+    extent: Extent,
     transform: vk::SurfaceTransformFlagsKHR,
     composite_alpha: vk::CompositeAlphaFlagsKHR,
 }
@@ -69,6 +69,8 @@ impl Surface {
             .present_mode(info.present)
             .clipped(true)
             .image_array_layers(1);
+
+        swapchain::Swapchain::new();
 
         let swapchain = unsafe {
             self.swapchain_loader

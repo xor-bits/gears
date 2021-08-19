@@ -1,127 +1,94 @@
-use ash::{
-    extensions::khr::Surface,
-    version::{DeviceV1_0, InstanceV1_0},
-    vk,
+use crate::context::ContextError;
+use colored::Colorize;
+use std::sync::Arc;
+use vulkano::{
+    device::{
+        physical::{PhysicalDevice, QueueFamily},
+        Queue, QueuesIter,
+    },
+    swapchain::Surface,
 };
+use winit::window::Window;
 
-use crate::{context::ContextError, MapErrorLog};
-
-const PRIORITY: [f32; 1] = [1.0];
-pub struct QueueFamilies {
-    pub present: Option<usize>,
-    pub graphics: Option<usize>,
-    pub transfer: Option<usize>,
+pub struct QueueFamilies<'a> {
+    pub present: QueueFamily<'a>,
+    pub graphics: QueueFamily<'a>,
+    /* pub transfer: QueueFamily<'a>, */
 }
 
 pub struct Queues {
-    pub present: vk::Queue,
-    pub present_family: usize,
-    pub graphics: vk::Queue,
-    pub graphics_family: usize,
-    pub transfer: vk::Queue,
-    pub transfer_family: usize,
+    pub present: Arc<Queue>,
+    pub graphics: Arc<Queue>,
+    /* pub transfer: Arc<Queue>, */
 }
 
-impl QueueFamilies {
-    pub unsafe fn new(
-        instance: &ash::Instance,
-        surface_loader: &Surface,
-        surface: vk::SurfaceKHR,
-        pdevice: vk::PhysicalDevice,
-    ) -> Result<Self, ContextError> {
-        let mut queue_families = Self {
-            present: None,
-            graphics: None,
-            transfer: None,
-        };
+impl<'a> QueueFamilies<'a> {
+    pub fn new(
+        surface: &Arc<Surface<Arc<Window>>>,
+        p_device: PhysicalDevice<'a>,
+    ) -> Result<Option<Self>, ContextError> {
+        let mut present = None;
+        let mut graphics = None;
+        /* let mut transfer = None; */
 
-        let queue_family_properties = instance.get_physical_device_queue_family_properties(pdevice);
+        let queue_family_properties = p_device.queue_families();
 
-        for (index, queue_family_property) in queue_family_properties.into_iter().enumerate() {
-            let present_support = surface_loader
-                .get_physical_device_surface_support(pdevice, index as u32, surface)
-                .map_err_log(
-                    "Physical device surface support query failed",
-                    ContextError::OutOfMemory,
-                )?;
+        for queue_family_property in queue_family_properties.into_iter() {
+            let present_support = surface
+                .is_supported(queue_family_property)
+                .map_err(|err| ContextError::CapabilitiesError(err))?;
 
-            let graphics_support = queue_family_property
-                .queue_flags
-                .contains(vk::QueueFlags::GRAPHICS);
+            let graphics_support = queue_family_property.supports_graphics();
+            /* let transfer_support = queue_family_property.explicitly_supports_transfers(); */
 
-            /* let transfer_support = queue_family_property
-            .queue_flags
-            .contains(vk::QueueFlags::TRANSFER); */
-
-            if present_support && queue_families.present.is_none() {
-                queue_families.present = Some(index);
+            if present_support && present.is_none() {
+                present = Some(queue_family_property);
             }
-            if graphics_support && queue_families.graphics.is_none() {
-                queue_families.graphics = Some(index);
+            if graphics_support && graphics.is_none() {
+                graphics = Some(queue_family_property);
             }
-            /* if transfer_support && queue_families.transfer.is_none() {
-                queue_families.transfer = Some(index);
+            /* if transfer_support && transfer.is_none() {
+                transfer = Some(queue_family_property);
             } */
 
-            if queue_families.finished() {
-                break;
+            if let (Some(present), Some(graphics) /* , Some(transfer) */) =
+                (present, graphics /* , transfer */)
+            {
+                return Ok(Some(Self {
+                    present,
+                    graphics,
+                    /* transfer, */
+                }));
             }
         }
 
-        Ok(queue_families)
+        log::debug!(
+            "{} is not suitable: (present, graphics) = {:?}",
+            p_device.properties().device_name.blue(),
+            (present.map(|v| v.id()), graphics.map(|v| v.id()))
+        );
+
+        Ok(None)
     }
 
-    pub fn finished(&self) -> bool {
-        self.present.is_some() && self.graphics.is_some() /* && self.transfer.is_some() */
-    }
-
-    pub fn same(&self) -> Option<bool> {
-        Some(
-            self.present? == self.graphics?, /* && self.graphics? == self.transfer? */
-        )
-    }
-
-    pub fn get_vec(&self) -> Option<Vec<vk::DeviceQueueCreateInfo>> {
-        if self.same()? {
-            Some(vec![vk::DeviceQueueCreateInfo::builder()
-                .queue_family_index(self.present.unwrap() as u32)
-                .queue_priorities(&PRIORITY)
-                .build()])
+    pub fn get(&self) -> Vec<(QueueFamily<'_>, f32)> {
+        if self.present == self.graphics {
+            vec![(self.present, 1.0)]
         } else {
-            Some(vec![
-                vk::DeviceQueueCreateInfo::builder()
-                    .queue_family_index(self.present.unwrap() as u32)
-                    .queue_priorities(&PRIORITY)
-                    .build(),
-                vk::DeviceQueueCreateInfo::builder()
-                    .queue_family_index(self.graphics.unwrap() as u32)
-                    .queue_priorities(&PRIORITY)
-                    .build(),
-            ])
+            vec![(self.present, 1.0), (self.graphics, 1.0)]
         }
     }
 
-    pub unsafe fn get_queues(&self, device: &ash::Device) -> Option<Queues> {
-        if !self.finished() {
-            None
+    pub fn get_queues(&self, mut queue_iter: QueuesIter) -> Queues {
+        let present = queue_iter.next().expect("Missing queue");
+        if self.present == self.graphics {
+            Queues {
+                present: present.clone(),
+                graphics: present,
+            }
         } else {
-            let present_family = self.present.unwrap();
-            let present = device.get_device_queue(present_family as u32, 0);
-
-            let graphics_family = self.graphics.unwrap();
-            let graphics = device.get_device_queue(graphics_family as u32, 0);
-
-            let transfer_family = graphics_family; //
-            let transfer = device.get_device_queue(transfer_family as u32, 0);
-
-            Some(Queues {
-                present_family,
-                present,
-                graphics_family,
-                graphics,
-                transfer_family,
-                transfer,
-            })
+            let graphics = queue_iter.next().expect("Missing queue");
+            Queues { present, graphics }
         }
     }
 }
