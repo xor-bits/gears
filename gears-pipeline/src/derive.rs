@@ -1,8 +1,8 @@
-use proc_macro2::{Delimiter, Group, Ident, Punct, Spacing, TokenStream};
-use quote::{quote, ToTokens, TokenStreamExt};
+use proc_macro2::{Ident, TokenStream};
+use quote::quote;
 use syn::{Data, DeriveInput, Fields};
 
-fn parse_ast(ast: DeriveInput) -> (Ident, Group, Vec<TokenStream>) {
+fn parse_ast(ast: DeriveInput) -> (Ident, Vec<Ident>) {
     let name = ast.ident;
     let data = match ast.data {
         Data::Struct(s) => s,
@@ -14,66 +14,18 @@ fn parse_ast(ast: DeriveInput) -> (Ident, Group, Vec<TokenStream>) {
     };
 
     let mut token_fields = Vec::new();
-    let mut tuple = TokenStream::new();
-    for field in fields.named.iter() {
-        field.ty.to_tokens(&mut tuple);
-        tuple.append(Punct::new(',', Spacing::Alone));
-
-        let mut token_field = TokenStream::new();
-        field.ty.to_tokens(&mut token_field);
-        token_fields.push(token_field);
+    for field in fields.named.into_iter() {
+        token_fields.push(field.ident.expect("Unnamed fields are not allowed"))
     }
-    let tuple = Group::new(Delimiter::Parenthesis, tuple);
 
-    (name, tuple, token_fields)
+    (name, token_fields)
 }
 
 pub fn impl_trait_input(ast: DeriveInput) -> TokenStream {
-    let (name, tuple, token_fields) = parse_ast(ast);
-
-    let mut attributes = TokenStream::new();
-    let mut last_field = quote! { (0) };
-    for (i, field) in token_fields.into_iter().enumerate() {
-        let i = i as u32;
-        attributes.extend(quote! {
-            gears::vk::VertexInputAttributeDescription {
-                binding: 0,
-                location: #i,
-                offset: #last_field,
-                format: <#field as FormatOf>::FORMAT_OF,
-            },
-        });
-        last_field = quote! {
-            (#last_field + <#field as FormatOf>::OFFSET_OF)
-        };
-    }
+    let (name, token_fields) = parse_ast(ast);
 
     (quote! {
-        impl Input for #name {
-            type Fields = #tuple;
-            const BINDING_DESCRIPTION: &'static [gears::vk::VertexInputBindingDescription] = &[
-                gears::vk::VertexInputBindingDescription {
-                    binding: 0,
-                    stride: std::mem::size_of::<#name>() as u32,
-                    input_rate: gears::vk::VertexInputRate::VERTEX,
-                }
-            ];
-            const ATTRIBUTE_DESCRIPTION: &'static [gears::vk::VertexInputAttributeDescription] = &[
-                #attributes
-            ];
-        }
-    })
-    .into()
-}
-
-pub fn impl_trait_uniform(ast: DeriveInput) -> TokenStream {
-    let (name, tuple, _) = parse_ast(ast);
-
-    (quote! {
-        impl Uniform for #name {
-            type Fields = #tuple;
-            type HasFields = gears::renderer::pipeline::Yes;
-        }
+        gears::vulkano::impl_vertex! { #name, #( #token_fields ),*  }
     })
     .into()
 }

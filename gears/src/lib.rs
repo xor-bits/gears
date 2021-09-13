@@ -1,5 +1,5 @@
 pub mod context;
-mod debug;
+pub mod debug;
 pub mod format;
 pub mod frame;
 pub mod io;
@@ -9,6 +9,9 @@ pub mod renderer;
 pub use gears_pipeline::*;
 pub use glam;
 pub use static_assertions;
+
+pub extern crate vulkano;
+pub extern crate vulkano_shaders;
 
 use log::error;
 use std::{fmt, time};

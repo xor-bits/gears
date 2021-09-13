@@ -1,27 +1,43 @@
 use gears::{
+    frame::Frame,
     glam::{Mat4, Vec3},
-    load_obj, Buffer, ContextGPUPick, ContextValidation, EventLoopTarget, Frame, FrameLoop,
-    FrameLoopTarget, FramePerfReport, ImmediateFrameInfo, InputState, KeyboardInput,
-    MultiWriteBuffer, RenderRecordInfo, Renderer, RendererRecord, SyncMode, UpdateRecordInfo,
-    VertexBuffer, VirtualKeyCode, WindowEvent,
+    io::input_state::InputState,
+    loops::frame::{FrameLoop, FrameLoopTarget},
+    renderer::{
+        buffer::StagedBuffer, object::load_obj, simple_renderer::Renderer, FramePerfReport,
+    },
+    vulkano::{buffer::BufferUsage, sync::GpuFuture},
+    SyncMode,
 };
 use parking_lot::RwLock;
-use std::{sync::Arc, time::Instant};
+use std::time::Instant;
+use winit::event::{KeyboardInput, VirtualKeyCode, WindowEvent};
 
 mod shader {
     use gears::{
         glam::{Mat4, Vec3},
-        module, pipeline, FormatOf, Input, RGBAOutput, Uniform,
+        renderer::simple_renderer::Renderer,
+        vulkano::{
+            buffer::{BufferUsage, CpuAccessibleBuffer},
+            descriptor_set::{
+                fixed_size_pool::FixedSizeDescriptorSet, persistent::PersistentDescriptorSetBuf,
+                FixedSizeDescriptorSetsPool,
+            },
+            pipeline::{vertex::BuffersDefinition, GraphicsPipeline, GraphicsPipelineAbstract},
+            render_pass::Subpass,
+        },
+        Input,
     };
+    use std::sync::Arc;
 
-    #[derive(Input, PartialEq, Default)]
+    #[derive(Input, Debug, PartialEq, Copy, Clone, Default)]
     #[repr(C)]
     pub struct VertexData {
-        pub pos: Vec3,
-        pub norm: Vec3,
+        pub pos: [f32; 3],
+        pub norm: [f32; 3],
     }
 
-    #[derive(Uniform, PartialEq, Default)]
+    #[derive(Debug, PartialEq, Copy, Clone, Default)]
     #[repr(C)]
     pub struct UniformData {
         pub model_matrix: Mat4,
@@ -30,27 +46,86 @@ mod shader {
         pub light_dir: Vec3,
     }
 
-    module! {
-        kind = "vert",
-        path = "examples/gear/res/default.vert.glsl",
-        name = "VERT"
+    gears::modules! {
+        vert: {
+            ty: "vertex",
+            path: "gear/res/default.vert.glsl"
+        }
+        frag: {
+            ty: "fragment",
+            path: "gear/res/default.frag.glsl"
+        }
     }
 
-    module! {
-        kind = "frag",
-        path = "examples/gear/res/default.frag.glsl",
-        name = "FRAG"
+    pub struct DefaultPipeline {
+        pub pipeline: Arc<GraphicsPipeline<BuffersDefinition>>,
+        pub sets: Box<
+            [(
+                Arc<
+                    FixedSizeDescriptorSet<(
+                        (),
+                        PersistentDescriptorSetBuf<Arc<CpuAccessibleBuffer<UniformData>>>,
+                    )>,
+                >,
+                Arc<CpuAccessibleBuffer<UniformData>>,
+            )],
+        >,
     }
 
-    pipeline! {
+    impl DefaultPipeline {
+        pub fn build(renderer: &Renderer) -> Self {
+            let vert = vert::Shader::load(renderer.device.logical().clone()).unwrap();
+
+            let frag = frag::Shader::load(renderer.device.logical().clone()).unwrap();
+
+            let pipeline = Arc::new(
+                GraphicsPipeline::start()
+                    .vertex_input_single_buffer::<VertexData>()
+                    .vertex_shader(vert.main_entry_point(), ())
+                    .fragment_shader(frag.main_entry_point(), ())
+                    .depth_stencil_simple_depth()
+                    .render_pass(Subpass::from(renderer.render_pass().clone(), 0).unwrap())
+                    .viewports_dynamic_scissors_irrelevant(1)
+                    .build(renderer.device.logical().clone())
+                    .unwrap(),
+            );
+
+            let layout = pipeline.layout().descriptor_set_layouts()[0].clone();
+            let mut desc_set_pool = FixedSizeDescriptorSetsPool::new(layout);
+
+            let sets = (0..renderer.image_count())
+                .map(|_| {
+                    let uniform_buffer = CpuAccessibleBuffer::from_data(
+                        renderer.device.logical().clone(),
+                        BufferUsage::uniform_buffer(),
+                        false,
+                        UniformData::default(),
+                    )
+                    .unwrap();
+                    let set = Arc::new(
+                        desc_set_pool
+                            .next()
+                            .add_buffer(uniform_buffer.clone())
+                            .unwrap()
+                            .build()
+                            .unwrap(),
+                    );
+
+                    (set, uniform_buffer)
+                })
+                .collect::<Box<_>>();
+
+            Self { pipeline, sets }
+        }
+    }
+
+    /* pipeline! {
         "DefaultPipeline"
         VertexData -> RGBAOutput
         mod "VERT" as "vert" where { in UniformData as 0 }
         mod "FRAG" as "frag"
-    }
+    } */
 }
-
-const MAX_VBO_LEN: usize = 50_000;
 
 struct App {
     frame: Frame,
@@ -58,7 +133,7 @@ struct App {
     input: RwLock<InputState>,
 
     shader: shader::DefaultPipeline,
-    vb: RwLock<VertexBuffer<shader::VertexData>>,
+    vb: StagedBuffer<[shader::VertexData]>,
 
     delta_time: RwLock<Instant>,
     distance: RwLock<f32>,
@@ -66,16 +141,19 @@ struct App {
 }
 
 impl App {
-    fn init(frame: Frame, renderer: Renderer) -> Arc<RwLock<Self>> {
+    fn init(frame: Frame, renderer: Renderer) -> Self {
         let input = InputState::new();
-        let shader = shader::DefaultPipeline::build(&renderer).unwrap();
-        let vb = RwLock::new(
-            shader
-                .create_vbo_with(Self::vertex_data().as_slice())
-                .unwrap(),
-        );
+        let shader = shader::DefaultPipeline::build(&renderer);
 
-        Arc::new(RwLock::new(Self {
+        let vertices = Self::vertex_data();
+        let vb = StagedBuffer::from_iter(
+            &renderer.device,
+            BufferUsage::vertex_buffer(),
+            vertices.into_iter(),
+        )
+        .unwrap();
+
+        Self {
             frame,
             renderer,
             input,
@@ -86,29 +164,41 @@ impl App {
             delta_time: RwLock::new(Instant::now()),
             distance: RwLock::new(2.5),
             position: RwLock::new(Vec3::new(0.0, 0.0, 0.0)),
-        }))
+        }
     }
 
     fn vertex_data() -> Vec<shader::VertexData> {
         load_obj(include_str!("../res/gear.obj"), None, |position, normal| {
             shader::VertexData {
-                pos: position,
-                norm: normal,
+                pos: position.to_array(),
+                norm: normal.to_array(),
             }
         })
     }
 
     fn reload_mesh(&self) {
-        let vertices = Self::vertex_data();
-        self.vb
-            .write()
-            .write(0, &vertices[..vertices.len().min(MAX_VBO_LEN)])
+        /* let vertices = Self::vertex_data();
+        if vertices.len() as u64 > self.vb.len() {
+            self.vb = StagedBuffer::from_iter(
+                &self.renderer.device,
+                BufferUsage::vertex_buffer(),
+                vertices.into_iter(),
+            )
             .unwrap();
-    }
-}
+        } else {
+            self.vb.write(recorder)
+        }
 
-impl RendererRecord for App {
-    fn immediate(&self, imfi: &ImmediateFrameInfo) {
+        self.vb
+            .self
+            .vb
+            .write()
+            .unwrap()
+            .copy_from_slice(&vertices[..vertices.len().min(MAX_VBO_LEN)])
+            .unwrap(); */
+    }
+
+    fn update_uniform_buffer(&self, image_index: usize, future: &mut dyn GpuFuture) {
         let aspect = self.frame.aspect();
         let dt_s = {
             let mut delta_time = self.delta_time.write();
@@ -175,26 +265,55 @@ impl RendererRecord for App {
             light_dir: Vec3::new(0.2, 2.0, 0.5).normalize(),
         };
 
-        self.shader.write_vertex_uniform(imfi, &ubo).unwrap();
-    }
+        // non spin lock
+        // let mut lock = self.shader.sets[image_index].1.write().unwrap();
 
-    unsafe fn update(&self, uri: &UpdateRecordInfo) -> bool {
-        [self.shader.update(uri), self.vb.write().update(uri)]
-            .iter()
-            .any(|b| *b)
-    }
+        // spin lock
+        // spinlocking seems to be faster than waiting for future
+        let mut lock = loop {
+            // hopefully just a temporary™ spinlock
+            match self.shader.sets[image_index].1.write() {
+                Ok(lock) => break lock,
+                Err(_) => {}
+            }
 
-    unsafe fn record(&self, rri: &RenderRecordInfo) {
-        self.shader
-            .draw(rri)
-            .vertex(&self.vb.read())
-            .direct(self.vb.read().elem_capacity() as u32, 0)
-            .execute();
+            future.cleanup_finished();
+        };
+
+        *lock = ubo;
     }
 }
 
-impl EventLoopTarget for App {
-    fn event(&self, event: &WindowEvent) {
+impl FrameLoopTarget for App {
+    fn frame(&mut self) -> Option<FramePerfReport> {
+        let mut frame = self.renderer.begin_frame()?;
+
+        // outside of render pass
+        let mut recorder = frame.recorder;
+        self.vb.update(&mut recorder).unwrap();
+        self.update_uniform_buffer(frame.image_index, &mut frame.future);
+
+        // inside of render pass
+        let mut recorder = recorder.begin_render_pass();
+        recorder
+            .record()
+            .draw(
+                self.shader.pipeline.clone(),
+                &frame.dynamic,
+                self.vb.local.clone(),
+                self.shader.sets[frame.image_index].0.clone(),
+                (),
+            )
+            .unwrap();
+
+        // outside of render pass again
+        let recorder = recorder.end_render_pass();
+        frame.recorder = recorder;
+
+        self.renderer.end_frame(frame)
+    }
+
+    fn event(&mut self, event: &WindowEvent) {
         self.input.write().update(event);
         match event {
             WindowEvent::KeyboardInput {
@@ -212,12 +331,6 @@ impl EventLoopTarget for App {
     }
 }
 
-impl FrameLoopTarget for App {
-    fn frame(&self) -> FramePerfReport {
-        self.renderer.frame(self)
-    }
-}
-
 fn main() {
     env_logger::init();
 
@@ -226,9 +339,7 @@ fn main() {
         .with_size(600, 600)
         .build();
 
-    let context = frame
-        .context(ContextGPUPick::Automatic, ContextValidation::WithValidation)
-        .unwrap();
+    let context = frame.default_context().unwrap();
 
     let renderer = Renderer::new()
         .with_sync(SyncMode::Immediate)
@@ -237,10 +348,5 @@ fn main() {
 
     let app = App::init(frame, renderer);
 
-    FrameLoop::new()
-        .with_event_loop(event_loop)
-        .with_event_target(app.clone())
-        .with_frame_target(app)
-        .build()
-        .run();
+    FrameLoop::new(event_loop, Box::new(app)).run();
 }

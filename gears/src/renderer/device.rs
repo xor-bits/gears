@@ -2,7 +2,10 @@ use super::{
     queue::{QueueFamilies, Queues},
     target::window::WindowTargetBuilder,
 };
-use crate::context::{AnyPhysicalDevice, Context, ContextError, SuitablePhysicalDevice};
+use crate::context::{
+    gpu::{any::AnyGPU, suitable::SuitableGPU},
+    Context, ContextError,
+};
 use std::sync::Arc;
 use vulkano::{
     device::{
@@ -16,7 +19,7 @@ use winit::window::Window;
 
 pub struct ReducedContext {
     pub debugger: Option<DebugCallback>,
-    pub p_device: SuitablePhysicalDevice,
+    pub p_device: SuitableGPU,
     pub instance: Arc<Instance>,
     surface: Arc<Surface<Arc<Window>>>,
 }

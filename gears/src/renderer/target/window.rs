@@ -206,22 +206,19 @@ impl WindowTarget {
         }
     }
 
-    /* pub fn present(&self, queue: &Queue, wait: &[Semaphore], index: usize) -> bool {
-        let swapchains = [self.swapchain];
-        let index = index as u32;
-        let indices = [index];
-        let submit = vk::PresentInfoKHR::builder()
-            .wait_semaphores(wait)
-            .swapchains(&swapchains)
-            .image_indices(&indices);
+    pub fn extent(&mut self, device: &Dev) -> Result<[u32; 2], ContextError> {
+        let surface_caps = self.base.capabilities(device)?;
+        Ok(self.base.swapchain_extent(&surface_caps))
+    }
 
-        match unsafe {
-            // present
-            self.loader.queue_present(queue, &submit)
-        } {
-            Ok(o) => o,
-            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => true,
-            Err(e) => panic!("Present queue submit failed: {:?}", e),
-        }
-    } */
+    pub fn recreate(&mut self) -> Result<Vec<Arc<SwapchainImage<Arc<Window>>>>, ContextError> {
+        let (swapchain, images) = self
+            .swapchain
+            .recreate()
+            .build()
+            .map_err(|err| ContextError::SwapchainCreationError(err))?;
+
+        self.swapchain = swapchain;
+        Ok(images)
+    }
 }

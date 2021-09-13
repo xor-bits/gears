@@ -4,21 +4,21 @@ version = "0.1.0"
 authors = ["Overpeek <overpeek.fin@gmail.com>"]
 edition = "2018"
 
-# [[bin]]
-# name = "ecs"
-# path = "ecs/src/main.rs"
+#[[bin]]
+#name = "ecs"
+#path = "ecs/src/main.rs"
 
 [[bin]]
 name = "experimental"
 path = "experimental/src/main.rs"
 
-# [[bin]]
-# name = "gear"
-# path = "gear/src/main.rs"
+[[bin]]
+name = "gear"
+path = "gear/src/main.rs"
 
-# [[bin]]
-# name = "voxel"
-# path = "voxel/src/main.rs"
+#[[bin]]
+#name = "voxel"
+#path = "voxel/src/main.rs"
 
 [dependencies]
 # noise = "0.7.0"

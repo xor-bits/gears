@@ -1,21 +1,36 @@
-use super::{device::Dev, query::PerfQuery, target::window::WindowTarget};
+use super::{
+    device::Dev, query::PerfQuery, target::window::WindowTarget, BeginInfoRecorder,
+    FramePerfReport, Recorder,
+};
 use crate::{
-    context::{Context, ContextError, ContextValidation},
-    cstr,
-    renderer::device::{ReducedContext, RenderDevice},
+    context::{Context, ContextError},
+    renderer::{
+        device::{ReducedContext, RenderDevice},
+        query::PerfQueryResult,
+    },
     SyncMode,
 };
-use parking_lot::Mutex;
-use std::sync::{atomic::AtomicBool, Arc};
+use parking_lot::{Mutex, MutexGuard};
+use std::{
+    ops::{Deref, DerefMut},
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 use vulkano::{
     command_buffer::{
-        AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, SubpassContents,
+        AutoCommandBufferBuilder, CommandBufferUsage, DynamicState, PrimaryAutoCommandBuffer,
+        SubpassContents,
     },
-    format::ClearValue,
-    image::{view::ImageView, SwapchainImage},
+    format::{ClearValue, Format},
+    image::{view::ImageView, AttachmentImage, SwapchainImage},
+    pipeline::viewport::Viewport,
     render_pass::{Framebuffer, FramebufferAbstract, RenderPass},
     single_pass_renderpass,
-    sync::{self, GpuFuture},
+    swapchain::SwapchainAcquireFuture,
+    sync::{self, FenceSignalFuture, FlushError, GpuFuture, JoinFuture},
 };
 use winit::window::Window;
 
@@ -24,15 +39,10 @@ struct SwapchainObjects {
     window_target: WindowTarget,
 }
 
+#[allow(unused)]
 struct RenderTarget {
     // the actual render target
-    framebuffer: Arc<dyn FramebufferAbstract>,
-
-    // gpu commands
-    render_cb: Arc<PrimaryAutoCommandBuffer>,
-    update_cb: Arc<PrimaryAutoCommandBuffer>,
-    update_cb_recording: bool,
-    update_cb_pending: bool,
+    framebuffer: Arc<dyn FramebufferAbstract + Send + Sync>,
 
     // performance debugging
     perf: PerfQuery,
@@ -44,84 +54,33 @@ impl RenderTarget {
         device: Dev,
         render_pass: Arc<RenderPass>,
         color_image: Arc<SwapchainImage<Arc<Window>>>,
-        validation: ContextValidation,
     ) -> Self {
         // images
         let color_image = color_image;
-        /* let depth_image = AttachmentImage::new(
+        let depth_image = AttachmentImage::new(
             device.logical().clone(),
             color_image.dimensions(),
             Format::D24Unorm_S8Uint,
         )
-        .unwrap(); */
+        .unwrap();
 
         // image views
-        let color_image = ImageView::new(color_image).unwrap();
-        /* let depth_image = ImageView::new(depth_image).unwrap(); */
+        let color_image_view = ImageView::new(color_image.clone()).unwrap();
+        let depth_image_view = ImageView::new(depth_image).unwrap();
 
         // framebuffer
         let framebuffer = Arc::new(
             Framebuffer::start(render_pass)
-                .add(color_image)
+                .add(color_image_view)
                 .unwrap()
-                /* .add(depth_image)
-                .unwrap() */
+                .add(depth_image_view)
+                .unwrap()
                 .build()
                 .unwrap(),
         );
 
-        // command buffer for copying, etc.
-        let update_cb = Arc::new(
-            AutoCommandBufferBuilder::primary(
-                device.logical().clone(),
-                device.queues.graphics.family(),
-                CommandBufferUsage::SimultaneousUse, /* MultipleSubmit */
-            )
-            .unwrap()
-            .build()
-            .unwrap(),
-        );
-
-        // command buffer for drawing
-        let mut render_cb = AutoCommandBufferBuilder::primary(
-            device.logical().clone(),
-            device.queues.graphics.family(),
-            CommandBufferUsage::SimultaneousUse, /* MultipleSubmit */
-        )
-        .unwrap();
-
-        // record some initial commands
-        render_cb
-            .begin_render_pass(
-                framebuffer.clone(),
-                SubpassContents::Inline,
-                [
-                    ClearValue::Float([0.0, 0.0, 0.0, 0.0]),
-                    /* ClearValue::DepthStencil((1.0, 0)), */
-                ]
-                .iter()
-                .cloned(),
-            )
-            .unwrap();
-        if validation == ContextValidation::WithValidation {
-            render_cb
-                .debug_marker_insert(
-                    cstr!("Empty render command buffer wasn't meant to be used"),
-                    [1.0, 0.7, 0.0, 1.0],
-                )
-                .unwrap();
-        }
-        render_cb.end_render_pass().unwrap();
-
-        let render_cb = Arc::new(render_cb.build().unwrap());
-
         Self {
             framebuffer,
-
-            render_cb,
-            update_cb,
-            update_cb_recording: false,
-            update_cb_pending: false,
 
             perf: PerfQuery::new_with_device(&device),
             triangles: 0,
@@ -129,23 +88,65 @@ impl RenderTarget {
     }
 }
 
+enum OptionalFenceFuture {
+    FenceSignalFuture(FenceSignalFuture<Box<dyn GpuFuture>>),
+    GenericFuture(Box<dyn GpuFuture>),
+}
+
+impl Deref for OptionalFenceFuture {
+    type Target = dyn GpuFuture;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::FenceSignalFuture(f) => f,
+            Self::GenericFuture(f) => f,
+        }
+    }
+}
+
+impl DerefMut for OptionalFenceFuture {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::FenceSignalFuture(f) => f,
+            Self::GenericFuture(f) => f,
+        }
+    }
+}
+
 pub struct Renderer {
-    swapchain_objects: Mutex<SwapchainObjects>,
+    swapchain_objects: SwapchainObjects,
 
     // one render target per swapchain image
-    // and a bool to tell to rerecord the render command buffers
-    render_targets: Box<[(Mutex<RenderTarget>, AtomicBool)]>,
+    render_targets: Box<[Arc<Mutex<RenderTarget>>]>,
 
     // future for the previous frame
     previous_frame: Option<Box<dyn GpuFuture>>,
 
-    validation: ContextValidation,
+    frame_in_flight: AtomicU8,
 
     pub device: Dev,
 }
 
 pub struct RendererBuilder {
     sync: SyncMode,
+}
+
+#[must_use]
+pub struct FrameData {
+    pub recorder: Recorder<false>,
+    pub dynamic: DynamicState,
+
+    pub image_index: usize,
+    pub frame_in_flight: usize,
+    pub future: JoinFuture<Box<dyn GpuFuture>, SwapchainAcquireFuture<Arc<Window>>>,
+
+    beginning: Instant,
+}
+
+impl FrameData {
+    pub fn cleanup_finished(&mut self) {
+        self.future.cleanup_finished()
+    }
 }
 
 impl Renderer {
@@ -156,7 +157,7 @@ impl Renderer {
     }
 
     pub fn render_pass(&self) -> Arc<RenderPass> {
-        self.swapchain_objects.lock().render_pass.clone()
+        self.swapchain_objects.render_pass.clone()
     }
 
     /// swapchain images
@@ -164,448 +165,164 @@ impl Renderer {
         self.render_targets.len()
     }
 
-    pub fn frame(&mut self) {
+    pub fn begin_frame(&mut self) -> Option<FrameData> {
+        let beginning = Instant::now();
+
+        // frame in flight can be 0 or 1
+        // xor:ing with 1 swaps it between these two
+        //   xor 0,0 = 0
+        //   xor 1,0 = 1
+        //   xor 0,1 = 1
+        //   xor 1,1 = 0
+        // so with fetch_xor 1 we can cycle the frame in flight
+        // and get the index for this frame
+        // *my longest and the most in detail comment so far*
+        let frame_in_flight = self.frame_in_flight.fetch_xor(1, Ordering::SeqCst) as usize;
+        assert!((0..=1).contains(&frame_in_flight));
+
         self.previous_frame.as_mut().unwrap().cleanup_finished();
 
-        let swapchain = self.swapchain_objects.lock();
-        let (image_index, acquire_future) = match swapchain.window_target.acquire_image() {
-            Some(v) => v,
-            None => return,
+        // acquire the target image (future) and its index
+        let (image_index, acquire_future) =
+            match self.swapchain_objects.window_target.acquire_image() {
+                Some(v) => v,
+                None => {
+                    self.recreate_swapchain().unwrap();
+                    return None;
+                }
+            };
+
+        // join the last frame and this frame
+        let future = self.previous_frame.take().unwrap().join(acquire_future);
+
+        // objects to render to
+        let target = &self.render_targets[image_index];
+
+        // begin recording a render command buffer
+        let recorder = Self::begin_record(
+            &self.device,
+            &mut target.lock(),
+            image_index,
+            /* frame_in_flight, */
+        );
+
+        // setup default dynamic state
+        let extent = self.swapchain_objects.window_target.base.extent;
+        let dynamic = DynamicState {
+            viewports: Some(vec![Viewport {
+                origin: [0.0, 0.0],
+                dimensions: [extent[0] as f32, extent[1] as f32],
+                depth_range: 0.0..1.0,
+            }]),
+            ..DynamicState::none()
         };
 
-        let target = self.render_targets[image_index].0.lock();
+        Some(FrameData {
+            recorder,
+            dynamic,
 
-        let future = self
-            .previous_frame
-            .take()
-            .unwrap()
-            .join(acquire_future)
-            .then_execute(
-                self.device.queues.graphics.clone(),
-                target.render_cb.clone(),
-            )
-            .unwrap()
-            .then_swapchain_present(
-                self.device.queues.present.clone(),
-                swapchain.window_target.swapchain.clone(),
-                image_index,
-            )
-            .then_signal_fence_and_flush();
+            image_index,
+            frame_in_flight,
+            future,
 
-        self.previous_frame = match future {
-            Ok(future) => Some(future.boxed()),
-            Err(e) => {
-                log::error!("Frame error: {}", e);
-                Some(sync::now(self.device.logical().clone()).boxed())
-            }
-        }
-    }
-
-    /* pub fn frame<T>(&self, recorder: &T) -> FramePerfReport
-    where
-        T: RendererRecord,
-    {
-        let cpu_frametime = Instant::now();
-
-        // acquire one free frame sync object
-        let frame = self.acquire_frame_sync();
-
-        // wait for gpu to be done with it
-        self.wait_for_fence(frame.frame_done_fence);
-
-        // acquire the next image
-        let target = self.acquire_frame_image(&frame);
-
-        // wait for the gpu to be done with this target image
-        let mut render_target = self.render_targets[target].lock();
-        self.wait_for_fence(render_target.frame_done_fence);
-
-        // and set the new render target fence to be the one that this frame sync object is controlling
-        render_target.frame_done_fence = frame.frame_done_fence;
-        self.reset_fence(render_target.frame_done_fence);
-
-        // update buffers
-        self.update(recorder, &mut render_target, target);
-        self.immediate(recorder, target);
-        let rerecord = self.maybe_record(recorder, &mut render_target, target);
-
-        // fetch the last frame gpu time(s)
-        let gpu_frametime = render_target
-            .perf
-            .get()
-            .unwrap_or(PerfQueryResult::default());
-
-        // submit
-
-        let render_cb = [render_target.render_cb];
-        let update_cb = [render_target.update_cb];
-        let image_wait = [frame.image_semaphore];
-        let update_wait = [frame.update_semaphore];
-        let render_wait = [frame.render_semaphore];
-        let update_stage = [vk::PipelineStageFlags::ALL_COMMANDS];
-        let render_stage = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-        let frame_fence = frame.frame_done_fence;
-
-        if render_target.update_cb_pending {
-            self.submit_update(
-                &render_cb,
-                &update_cb,
-                &image_wait,
-                &render_wait,
-                &update_wait,
-                &update_stage,
-                &render_stage,
-                frame_fence,
-            )
-        } else {
-            self.submit_render(
-                &render_cb,
-                &update_cb,
-                &image_wait,
-                &render_wait,
-                &update_wait,
-                &update_stage,
-                &render_stage,
-                frame_fence,
-            )
-        };
-
-        let updates = render_target.update_cb_pending;
-        let triangles = render_target.triangles;
-
-        // submit present
-
-        if self
-            .swapchain_objects
-            .lock()
-            .swapchain
-            .as_ref()
-            .unwrap()
-            .present(self.device.queues.present, &render_wait, target)
-        {
-            self.wait_for_fence(frame.frame_done_fence);
-            self.wait_for_fence(render_target.frame_done_fence);
-            drop(render_target);
-            self.re_create_swapchain().unwrap();
-        }
-
-        FramePerfReport {
-            cpu_frametime: cpu_frametime.elapsed(),
-            gpu_frametime: gpu_frametime,
-
-            rerecord,
-            updates,
-            triangles,
-        }
-    }
-
-    pub fn request_rerecord(&self) {
-        for target in self.rerecord_render_targets.iter() {
-            target.store(true, Ordering::SeqCst);
-        }
-    }
-
-    fn update<T>(&self, recorder: &T, render_target: &mut MutexGuard<RenderTarget>, target: usize)
-    where
-        T: RendererRecord,
-    {
-        if render_target.update_cb_recording == false {
-            unsafe {
-                self.device.reset_command_buffer(
-                    render_target.update_cb,
-                    vk::CommandBufferResetFlags::empty(),
-                )
-            }
-            .expect("Command buffer reset failed");
-            unsafe {
-                self.device.begin_command_buffer(
-                    render_target.update_cb,
-                    &vk::CommandBufferBeginInfo::builder(),
-                )
-            }
-            .expect("Command buffer begin failed");
-
-            render_target.update_cb_recording = true;
-        }
-
-        render_target.update_cb_pending = unsafe {
-            recorder.update(&UpdateRecordInfo {
-                command_buffer: render_target.update_cb,
-                image_index: target,
-            })
-        };
-
-        if render_target.update_cb_pending {
-            render_target.update_cb_recording = false;
-            unsafe { self.device.end_command_buffer(render_target.update_cb) }
-                .expect("Command buffer end failed");
-        }
-    }
-
-    fn immediate<T>(&self, recorder: &T, target: usize)
-    where
-        T: RendererRecord,
-    {
-        recorder.immediate(&ImmediateFrameInfo {
-            image_index: target,
+            beginning,
         })
     }
 
-    fn maybe_record<T>(
-        &self,
-        recorder: &T,
-        render_target: &mut MutexGuard<RenderTarget>,
-        target: usize,
-    ) -> bool
-    where
-        T: RendererRecord,
-    {
-        let rerecord = self.rerecord_render_targets[target].swap(false, Ordering::SeqCst);
-        if rerecord {
-            self.record(recorder, render_target, target)
+    pub fn end_frame(&mut self, frame_data: FrameData) -> Option<FramePerfReport> {
+        // end recording
+        let cb = Self::end_record(frame_data.recorder);
+
+        // rendering
+        let future = frame_data
+            .future
+            .then_execute(self.device.queues.graphics.clone(), cb)
+            .unwrap();
+
+        // presenting
+        let future = future
+            .then_swapchain_present(
+                self.device.queues.present.clone(),
+                self.swapchain_objects.window_target.swapchain.clone(),
+                frame_data.image_index,
+            )
+            .boxed()
+            .then_signal_fence_and_flush();
+
+        // handle window resize and print any other error
+        match future {
+            Ok(future) => {
+                /* future.wait(None).unwrap(); */
+                self.previous_frame = Some(future.boxed())
+            }
+            Err(FlushError::OutOfDate) => (),
+            Err(err) => log::error!("Frame error: {}", err),
         }
-        rerecord
+
+        if self.previous_frame.is_none() {
+            self.previous_frame = Some(sync::now(self.device.logical().clone()).boxed())
+        }
+
+        Some(FramePerfReport {
+            cpu_frame_time: frame_data.beginning.elapsed(),
+            gpu_frame_time: /* TODO */ PerfQueryResult::default(),
+        })
     }
 
-    fn record<T>(&self, recorder: &T, render_target: &mut MutexGuard<RenderTarget>, target: usize)
-    where
-        T: RendererRecord,
-    {
-        let begin_info = recorder.begin_info();
+    fn begin_record(
+        device: &Dev,
+        render_target: &mut MutexGuard<RenderTarget>,
+        image_index: usize,
+        /* frame_in_flight: usize, */
+    ) -> Recorder<false> {
+        // allocate a new command buffer for render calls
+        let render_cb = AutoCommandBufferBuilder::primary(
+            device.logical().clone(),
+            device.queues.graphics.family(),
+            CommandBufferUsage::SimultaneousUse,
+        )
+        .unwrap();
 
-        let swapchain_objects = self.swapchain_objects.lock();
-        let rri = RenderRecordInfo {
-            command_buffer: render_target.render_cb,
-            image_index: target,
-            triangles: AtomicUsize::new(0),
-            debug_calls: begin_info.debug_calls,
+        let fb = render_target.framebuffer.clone();
+        let begin_render_pass_lambda = move |(cb, cc): BeginInfoRecorder| {
+            cb.begin_render_pass(
+                fb.clone(),
+                SubpassContents::Inline,
+                [
+                    ClearValue::Float(cc.c()), // cc.c is clear color get color, clearly
+                    ClearValue::DepthStencil((1.0, 0)),
+                ]
+                .iter()
+                .cloned(),
+            )
+            .unwrap();
         };
 
-        let viewport = [swapchain_objects.render_pass.viewport];
-        let scissor = [swapchain_objects.render_pass.scissor];
-        let clear_values = [
-            vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: [
-                        begin_info.clear_color.x,
-                        begin_info.clear_color.y,
-                        begin_info.clear_color.z,
-                        begin_info.clear_color.w,
-                    ],
-                },
-            },
-            vk::ClearValue {
-                depth_stencil: vk::ClearDepthStencilValue {
-                    depth: 1.0,
-                    stencil: 0,
-                },
-            },
-        ];
-        let render_pass_begin_info = vk::RenderPassBeginInfo::builder()
-            .clear_values(&clear_values)
-            .framebuffer(render_target.framebuffer)
-            .render_pass(swapchain_objects.render_pass.render_pass)
-            .render_area(swapchain_objects.render_pass.scissor);
-
-        if begin_info.debug_calls {
-            log::debug!("begin_command_buffer with: {:?}", begin_info);
-        }
-
-        unsafe {
-            self.device.reset_command_buffer(
-                render_target.render_cb,
-                vk::CommandBufferResetFlags::empty(),
-            )
-        }
-        .expect("Command buffer reset failed");
-
-        unsafe {
-            self.device.begin_command_buffer(
-                render_target.render_cb,
-                &vk::CommandBufferBeginInfo::builder(),
-            )
-        }
-        .expect("Command buffer begin failed");
-
-        unsafe {
-            self.device
-                .cmd_set_viewport(render_target.render_cb, 0, &viewport);
-        }
-
-        unsafe {
-            self.device
-                .cmd_set_scissor(render_target.render_cb, 0, &scissor);
-        }
-
-        drop(swapchain_objects);
-
-        unsafe {
-            render_target.perf.reset(&rri);
-        }
-
-        unsafe {
-            self.device.cmd_begin_render_pass(
-                render_target.render_cb,
-                &render_pass_begin_info,
-                vk::SubpassContents::INLINE,
-            );
-        }
-
-        unsafe {
-            recorder.record(&rri);
-            render_target.perf.bind(&rri);
-        }
-        render_target.triangles = rri.triangles.load(Ordering::SeqCst);
-
-        unsafe {
-            self.device.cmd_end_render_pass(render_target.render_cb);
-        }
-
-        unsafe { self.device.end_command_buffer(render_target.render_cb) }
-            .expect("Command buffer end failed");
+        // let the user record whatever
+        Recorder::new(
+            render_cb,
+            begin_render_pass_lambda,
+            image_index,
+            /* frame_in_flight, */
+        )
     }
 
-    fn submit_update<'a>(
-        &self,
-        render_cb: &'a [vk::CommandBuffer],
-        update_cb: &'a [vk::CommandBuffer],
-        image_wait: &'a [vk::Semaphore],
-        render_wait: &'a [vk::Semaphore],
-        update_wait: &'a [vk::Semaphore],
-        update_stage: &'a [vk::PipelineStageFlags],
-        render_stage: &'a [vk::PipelineStageFlags],
-        frame_fence: vk::Fence,
-    ) {
-        let submits = [
-            vk::SubmitInfo::builder()
-                .command_buffers(&update_cb)
-                .wait_semaphores(&image_wait)
-                .signal_semaphores(&update_wait)
-                .wait_dst_stage_mask(&update_stage)
-                .build(),
-            vk::SubmitInfo::builder()
-                .command_buffers(render_cb)
-                .wait_semaphores(update_wait)
-                .signal_semaphores(render_wait)
-                .wait_dst_stage_mask(render_stage)
-                .build(),
-        ];
-
-        unsafe {
-            self.device
-                .queue_submit(self.device.queues.graphics, &submits, frame_fence)
-        }
-        .expect("Graphics queue submit failed");
+    fn end_record(recorder: Recorder<false>) -> PrimaryAutoCommandBuffer {
+        // end, build and return the command buffer
+        recorder.inner.command_buffer.build().unwrap()
     }
 
-    fn submit_render<'a>(
-        &self,
-        render_cb: &'a [vk::CommandBuffer],
-        _update_cb: &'a [vk::CommandBuffer],
-        image_wait: &'a [vk::Semaphore],
-        render_wait: &'a [vk::Semaphore],
-        _update_wait: &'a [vk::Semaphore],
-        _update_stage: &'a [vk::PipelineStageFlags],
-        render_stage: &'a [vk::PipelineStageFlags],
-        frame_fence: vk::Fence,
-    ) {
-        let submits = [vk::SubmitInfo::builder()
-            .command_buffers(&render_cb)
-            .wait_semaphores(&image_wait)
-            .signal_semaphores(&render_wait)
-            .wait_dst_stage_mask(&render_stage)
-            .build()];
+    fn recreate_swapchain(&mut self) -> Result<(), ContextError> {
+        let color_images = self.swapchain_objects.window_target.recreate()?;
 
-        unsafe {
-            self.device
-                .queue_submit(self.device.queues.graphics, &submits, frame_fence)
-        }
-        .expect("Graphics queue submit failed");
-    }
-
-    fn acquire_frame_sync(&self) -> MutexGuard<FrameSync> {
-        let frame = self.frame.fetch_add(1, Ordering::SeqCst) % self.frame_syncs.len();
-
-        /* for i in 0..FRAMES_IN_FLIGHT {
-            if let Some(lock) = self.frame_syncs[(frame + i) % FRAMES_IN_FLIGHT].try_lock() {
-                return lock;
-            }
-        } */
-
-        self.frame_syncs[frame].lock()
-    }
-
-    fn acquire_frame_image(&self, frame_sync: &MutexGuard<FrameSync>) -> usize {
-        self.swapchain_objects
-            .lock()
-            .swapchain
-            .as_ref()
-            .unwrap()
-            .acquire_image(frame_sync.image_semaphore, vk::Fence::null())
-    }
-
-    fn wait_for_fence(&self, fence: vk::Fence) {
-        if fence == vk::Fence::null() {
-            return;
-        }
-
-        let fence = [fence];
-        unsafe { self.device.wait_for_fences(&fence, true, !0) }.expect("Failed to wait for fence");
-    }
-
-    fn reset_fence(&self, fence: vk::Fence) {
-        assert!(fence != vk::Fence::null(), "Cannot reset a null fence");
-
-        let fence = [fence];
-        unsafe { self.device.reset_fences(&fence) }.expect("Failed to reset fence");
-    }
-
-    fn re_create_swapchain_silent(&self) -> Result<(), ContextError> {
-        // lock render targets
-        let render_targets = self
-            .render_targets
-            .iter()
-            .map(|render_object| render_object.lock())
-            .collect::<Vec<_>>();
-
-        // lok swapchain
-        let mut swapchain_objects = self.swapchain_objects.lock();
-
-        let sync = swapchain_objects.swapchain.take().unwrap().sync; // take sync and drop swapchain
-        let (swapchain, format, extent) = swapchain_objects.surface.build_swapchain(sync)?;
-
-        swapchain_objects.render_pass.reset_area(extent);
-
-        for (image, mut render_target) in swapchain.images()?.into_iter().zip(render_targets) {
-            *render_target = RenderTarget::new(
-                self.device.clone(),
-                &swapchain_objects.render_pass,
-                image,
-                format,
-                extent,
-            )?;
-        }
-
-        swapchain_objects.swapchain = Some(swapchain);
+        self.render_targets = RendererBuilder::create_render_targets(
+            color_images,
+            &self.device,
+            &self.swapchain_objects.render_pass,
+        );
 
         Ok(())
     }
-
-    pub fn re_create_swapchain(&self) -> Result<(), ContextError> {
-        self.re_create_swapchain_silent()?;
-        self.request_rerecord();
-        Ok(())
-    }
-
-    pub fn recreate_surface(&self, window: &Window) -> Result<(), ContextError> {
-        let surface = unsafe {
-            ash_window::create_surface(&self.device.entry, &self.device.instance, window, None)
-        }
-        .expect("Surface creation failed");
-
-        self.swapchain_objects.lock().surface.re_create(surface);
-        self.re_create_swapchain()
-    } */
 }
 
 impl RendererBuilder {
@@ -618,8 +335,6 @@ impl RendererBuilder {
     pub fn build(self, context: Context) -> Result<Renderer, ContextError> {
         log::debug!("Renderer created");
 
-        let validation = context.validation;
-
         // device
         let (r_context, target_builder) = ReducedContext::new(context);
         let device = RenderDevice::from_context(r_context)?;
@@ -627,17 +342,37 @@ impl RendererBuilder {
         // surface + swapchain + images
         let (target, color_images) = target_builder.build(&device, self.sync)?;
 
-        // swapchain image count
-        let image_count = color_images.len();
-        // swapchain image count - 1
-        // let frame_count = 1.max(image_count - 1);
+        // main render pass
+        let render_pass = Self::create_render_pass(&device, &target);
 
-        assert!(image_count != 0);
+        // render targets (framebuffers, command buffers, ...)
+        let render_targets = Self::create_render_targets(color_images, &device, &render_pass);
 
+        // swapchain + renderpass
+        let swapchain_objects = SwapchainObjects {
+            render_pass,
+            window_target: target,
+        };
+
+        let previous_frame = Some(sync::now(device.logical().clone()).boxed());
+        let frame_in_flight = AtomicU8::new(0);
+
+        Ok(Renderer {
+            swapchain_objects,
+
+            render_targets,
+
+            previous_frame,
+            frame_in_flight,
+
+            device,
+        })
+    }
+
+    fn create_render_pass(device: &Dev, target: &WindowTarget) -> Arc<RenderPass> {
         // AttachmentDesc
 
-        // main render pass
-        let render_pass = Arc::new(
+        Arc::new(
             single_pass_renderpass!(device.logical().clone(),
                 attachments: {
                     c: {
@@ -647,7 +382,7 @@ impl RendererBuilder {
                         samples: 1,
                         initial_layout: ImageLayout::Undefined,
                         final_layout: ImageLayout::PresentSrc,
-                    }/* ,
+                    },
                     d: {
                         load: Clear,
                         store: DontCare,
@@ -655,48 +390,31 @@ impl RendererBuilder {
                         samples: 1,
                         initial_layout: ImageLayout::Undefined,
                         final_layout: ImageLayout::DepthStencilAttachmentOptimal,
-                    } */
+                    }
                 },
                 pass: {
                     color: [ c ],
-                    depth_stencil: { /* d */ }
+                    depth_stencil: { d }
                 }
             )
             .unwrap(),
-        );
+        )
+    }
 
-        let render_targets = color_images
+    fn create_render_targets(
+        color_images: Vec<Arc<SwapchainImage<Arc<Window>>>>,
+        device: &Dev,
+        render_pass: &Arc<RenderPass>,
+    ) -> Box<[Arc<Mutex<RenderTarget>>]> {
+        color_images
             .iter()
             .map(|image| {
-                (
-                    Mutex::new(RenderTarget::new(
-                        device.clone(),
-                        render_pass.clone(),
-                        image.clone(),
-                        validation,
-                    )),
-                    AtomicBool::new(true),
-                )
+                Arc::new(Mutex::new(RenderTarget::new(
+                    device.clone(),
+                    render_pass.clone(),
+                    image.clone(),
+                )))
             })
-            .collect::<Box<[(Mutex<RenderTarget>, AtomicBool)]>>();
-
-        let swapchain_objects = Mutex::new(SwapchainObjects {
-            render_pass,
-            window_target: target,
-        });
-
-        let previous_frame = Some(sync::now(device.logical().clone()).boxed());
-
-        Ok(Renderer {
-            swapchain_objects,
-
-            render_targets,
-
-            previous_frame,
-
-            validation,
-
-            device,
-        })
+            .collect()
     }
 }

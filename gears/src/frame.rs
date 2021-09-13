@@ -32,6 +32,7 @@ impl Frame {
         }
     }
 
+	/// 
     pub fn default_context(&self) -> Result<Context, ContextError> {
         Context::new(
             self.window.clone(),

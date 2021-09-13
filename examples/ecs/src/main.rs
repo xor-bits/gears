@@ -335,7 +335,7 @@ impl RendererRecord for App {
         dispatcher_tx.send(DispatcherWork::Confirm).unwrap();
     }
 
-    unsafe fn update(&self, uri: &UpdateRecordInfo) -> bool {
+    fn update(&self, uri: &UpdateRecordInfo) -> bool {
         [
             self.shader.update(uri),
             self.vertex_batch.write().update(uri),
@@ -346,7 +346,7 @@ impl RendererRecord for App {
         .any(|b| *b)
     }
 
-    unsafe fn record(&self, rri: &RenderRecordInfo) {
+    fn record(&self, rri: &RenderRecordInfo) {
         self.shader
             .draw(rri)
             .vertex(self.vertex_batch.read().buffer())

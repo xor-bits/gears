@@ -1,49 +1,31 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
-
-use log::debug;
-use parking_lot::RwLock;
-pub use winit::event::*;
+use crate::renderer::FramePerfReport;
+use std::time::{Duration, Instant};
 use winit::event_loop::EventLoop;
 
-use crate::renderer::FramePerfReport;
+pub use winit::event::*;
 
 const PERF_LOG_INTERVAL: usize = 5;
 
 pub trait FrameLoopTarget {
-    fn frame(&self) -> FramePerfReport;
-}
+    fn frame(&mut self) -> Option<FramePerfReport>;
 
-pub trait EventLoopTarget {
     #[allow(unused_variables)]
-    fn event(&self, event: &WindowEvent);
+    fn event(&mut self, event: &WindowEvent) {}
 }
 
 pub struct FrameLoop {
-    base: FrameLoopBuilder,
-}
-
-pub struct FrameLoopBuilder {
     event_loop: EventLoop<()>,
-    frame_targets: Vec<Arc<RwLock<dyn FrameLoopTarget + Send + Sync>>>,
-    event_targets: Vec<Arc<RwLock<dyn EventLoopTarget + Send + Sync>>>,
+    target: Box<dyn FrameLoopTarget>,
 }
 
 impl FrameLoop {
-    pub fn new() -> FrameLoopBuilder {
-        FrameLoopBuilder {
-            event_loop: EventLoop::new(),
-            frame_targets: Vec::new(),
-            event_targets: Vec::new(),
-        }
+    pub fn new(event_loop: EventLoop<()>, target: Box<dyn FrameLoopTarget>) -> FrameLoop {
+        FrameLoop { event_loop, target }
     }
 
     pub fn run(self) -> ! {
-        let event_loop = self.base.event_loop;
-        let frame_targets = self.base.frame_targets.clone();
-        let event_targets = self.base.event_targets;
+        let event_loop = self.event_loop;
+        let mut target = self.target;
 
         let mut frame_count_check_tp = Instant::now();
         let mut frames: usize = 0;
@@ -55,9 +37,7 @@ impl FrameLoop {
 
             match event {
                 Event::WindowEvent { event, .. } => {
-                    for target in event_targets.iter() {
-                        target.read().event(&event);
-                    }
+                    target.event(&event);
 
                     match event {
                         WindowEvent::CloseRequested => {
@@ -67,14 +47,13 @@ impl FrameLoop {
                     }
                 }
                 Event::RedrawEventsCleared => {
-                    for target in frame_targets.iter() {
-                        let ft = target.read().frame();
-                        avg_perf.cpu_frametime += ft.cpu_frametime;
-                        avg_perf.gpu_frametime += ft.gpu_frametime;
-                        avg_perf.rerecord = avg_perf.rerecord || ft.rerecord;
-                        avg_perf.updates = avg_perf.updates || ft.updates;
-                        avg_perf.triangles = ft.triangles;
-                    }
+                    let ft = match target.frame() {
+                        Some(ft) => ft,
+                        None => return,
+                    };
+
+                    avg_perf.cpu_frame_time += ft.cpu_frame_time;
+                    avg_perf.gpu_frame_time += ft.gpu_frame_time;
                     frames += 1;
 
                     if frame_count_check_tp.elapsed()
@@ -83,25 +62,22 @@ impl FrameLoop {
                         frame_count_check_tp = Instant::now();
 
                         let cpu_ms =
-                            print_nanos(avg_perf.cpu_frametime.as_nanos() / frames as u128);
+                            print_nanos(avg_perf.cpu_frame_time.as_nanos() / frames as u128);
                         let gpu_whole_ms = print_nanos(
-                            avg_perf.gpu_frametime.whole_pipeline.as_nanos() / frames as u128,
+                            avg_perf.gpu_frame_time.whole_pipeline.as_nanos() / frames as u128,
                         );
                         let gpu_vert_ms =
-                            print_nanos(avg_perf.gpu_frametime.vertex.as_nanos() / frames as u128);
+                            print_nanos(avg_perf.gpu_frame_time.vertex.as_nanos() / frames as u128);
                         let gpu_frag_ms = print_nanos(
-                            avg_perf.gpu_frametime.fragment.as_nanos() / frames as u128,
+                            avg_perf.gpu_frame_time.fragment.as_nanos() / frames as u128,
                         );
 
-                        debug!("Performance report (last {} seconds):", PERF_LOG_INTERVAL);
-                        debug!(" - real FPS: {}", frames / PERF_LOG_INTERVAL);
-                        debug!(" - latest triangles: {}", avg_perf.triangles);
-                        debug!(" - any updates: {}", avg_perf.updates);
-                        debug!(" - any rerecords: {}", avg_perf.rerecord);
-                        debug!(" - average CPU frametime: {}", cpu_ms);
-                        debug!(" - average GPU frametime: {}", gpu_whole_ms);
-                        debug!("   - vertex: {}", gpu_vert_ms);
-                        debug!("   - fragment: {}", gpu_frag_ms);
+                        log::debug!("Performance report (last {} seconds):", PERF_LOG_INTERVAL);
+                        log::debug!(" - real FPS: {}", frames / PERF_LOG_INTERVAL);
+                        log::debug!(" - average CPU frametime: {}", cpu_ms);
+                        log::debug!(" - average GPU frametime: {}", gpu_whole_ms);
+                        log::debug!("   - vertex: {}", gpu_vert_ms);
+                        log::debug!("   - fragment: {}", gpu_frag_ms);
 
                         frames = 0;
                         avg_perf = FramePerfReport::default();
@@ -110,33 +86,6 @@ impl FrameLoop {
                 _ => (),
             }
         })
-    }
-}
-
-impl FrameLoopBuilder {
-    pub fn with_frame_target(
-        mut self,
-        target: Arc<RwLock<dyn FrameLoopTarget + Send + Sync>>,
-    ) -> Self {
-        self.frame_targets.push(target);
-        self
-    }
-
-    pub fn with_event_target(
-        mut self,
-        target: Arc<RwLock<dyn EventLoopTarget + Send + Sync>>,
-    ) -> Self {
-        self.event_targets.push(target);
-        self
-    }
-
-    pub fn with_event_loop(mut self, event_loop: EventLoop<()>) -> Self {
-        self.event_loop = event_loop;
-        self
-    }
-
-    pub fn build(self) -> FrameLoop {
-        FrameLoop { base: self }
     }
 }
 

@@ -22,10 +22,11 @@ bitflags = "~1.3"
 memoffset = "~0.6"
 bytesize = "~1.1"
 winit = { version = "~0.25", features = ["web-sys"] }
-vulkano = "~0.25"
-vulkano-shaders = "~0.25"
-vulkano-win = "~0.25"
+vulkano = { git = "https://github.com/Overpeek/vulkano" }
+vulkano-shaders = { git = "https://github.com/Overpeek/vulkano" }
+vulkano-win = { git = "https://github.com/Overpeek/vulkano" }
 static_assertions = "~1.1"
+anyhow = "~1.0"
 gears-pipeline = { path = "../gears-pipeline" }
 
 [dependencies.gears-spirv]

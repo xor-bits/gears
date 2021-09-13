@@ -35,7 +35,7 @@ mod marching_cubes;
 mod shader {
     use gears::{
         glam::{Mat4, Vec3},
-        module, pipeline, FormatOf, Input, RGBAOutput, Uniform,
+        module, pipeline, Input, Uniform,
     };
 
     #[derive(Input, PartialEq, Default)]
@@ -254,7 +254,7 @@ impl RendererRecord for App {
         self.shaders.1.write_vertex_uniform(imfi, &ubo).unwrap();
     }
 
-    unsafe fn update(&self, uri: &UpdateRecordInfo) -> bool {
+    fn update(&self, uri: &UpdateRecordInfo) -> bool {
         [
             self.shaders.0.update(uri),
             self.shaders.1.update(uri),
@@ -272,7 +272,7 @@ impl RendererRecord for App {
         }
     }
 
-    unsafe fn record(&self, rri: &RenderRecordInfo) {
+    fn record(&self, rri: &RenderRecordInfo) {
         if self.debug.load(Ordering::SeqCst) {
             self.shaders.0.draw(rri)
         } else {

@@ -73,34 +73,6 @@ impl PerfQuery {
         Self { query_pool }
     }
 
-    /* TODO: pub unsafe fn reset(&self, rri: &RenderRecordInfo) {
-        if rri.debug_calls {
-            debug!("cmd_reset_query_pool");
-        }
-
-        self.device
-            .cmd_reset_query_pool(rri.command_buffer, self.query_pool, 0, TIMESTAMP_COUNT);
-    }
-
-    unsafe fn query(&self, rri: &RenderRecordInfo, id: u32) {
-        if rri.debug_calls {
-            debug!("cmd_write_timestamp");
-        }
-
-        self.device.cmd_write_timestamp(
-            rri.command_buffer,
-            TIMESTAMP_STAGES[id as usize],
-            self.query_pool,
-            id,
-        );
-    }
-
-    pub unsafe fn bind(&self, rri: &RenderRecordInfo) {
-        for i in 0..TIMESTAMP_COUNT {
-            self.query(rri, i);
-        }
-    } */
-
     pub fn get_with_flags(
         &self,
         flags: QueryResultFlags,
