@@ -4,3 +4,6 @@
 Cargo.lock
 expand.rs
 callgrind.out.*
+perf.data*
+stacks.folded
+flamegraph.svg
