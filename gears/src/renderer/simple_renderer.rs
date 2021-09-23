@@ -12,7 +12,6 @@ use crate::{
 };
 use parking_lot::{Mutex, MutexGuard};
 use std::{
-    ops::{Deref, DerefMut},
     sync::{
         atomic::{AtomicU8, Ordering},
         Arc,
@@ -88,31 +87,6 @@ impl RenderTarget {
     }
 }
 
-enum OptionalFenceFuture {
-    FenceSignalFuture(FenceSignalFuture<Box<dyn GpuFuture>>),
-    GenericFuture(Box<dyn GpuFuture>),
-}
-
-impl Deref for OptionalFenceFuture {
-    type Target = dyn GpuFuture;
-
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::FenceSignalFuture(f) => f,
-            Self::GenericFuture(f) => f,
-        }
-    }
-}
-
-impl DerefMut for OptionalFenceFuture {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        match self {
-            Self::FenceSignalFuture(f) => f,
-            Self::GenericFuture(f) => f,
-        }
-    }
-}
-
 pub struct Renderer {
     swapchain_objects: SwapchainObjects,
 
@@ -123,6 +97,7 @@ pub struct Renderer {
     previous_frame: Option<Box<dyn GpuFuture>>,
 
     frame_in_flight: AtomicU8,
+    frame_fences: [Option<Arc<FenceSignalFuture<Box<dyn GpuFuture>>>>; Renderer::frame_count()],
 
     pub device: Dev,
 }
@@ -160,9 +135,16 @@ impl Renderer {
         self.swapchain_objects.render_pass.clone()
     }
 
-    /// swapchain images
+    /// Swapchain images.
     pub fn image_count(&self) -> usize {
         self.render_targets.len()
+    }
+
+    /// Frames in flight.
+    /// Any changing buffers should have this many duplicates.
+    /// This count is always two.
+    pub const fn frame_count() -> usize {
+        2
     }
 
     pub fn begin_frame(&mut self) -> Option<FrameData> {
@@ -217,6 +199,12 @@ impl Renderer {
             ..DynamicState::none()
         };
 
+        // wait for the fence set up in the last same frame_in_flight
+        // waiting is necessary to unlock any resources it uses
+        if let Some(fence) = self.frame_fences[frame_in_flight].as_ref() {
+            fence.wait(None).unwrap();
+        }
+
         Some(FrameData {
             recorder,
             dynamic,
@@ -234,10 +222,18 @@ impl Renderer {
         let cb = Self::end_record(frame_data.recorder);
 
         // rendering
-        let future = frame_data
-            .future
-            .then_execute(self.device.queues.graphics.clone(), cb)
-            .unwrap();
+        // signal fence to wait for unlocking resources
+        // wrap to Arc so that it can be cloned
+        let future = Arc::new(
+            frame_data
+                .future
+                .then_execute(self.device.queues.graphics.clone(), cb)
+                .unwrap()
+                .boxed()
+                .then_signal_fence(),
+        );
+        // store the fence and wait for it the next time this same frame_in_flight is used
+        self.frame_fences[frame_data.frame_in_flight] = Some(future.clone());
 
         // presenting
         let future = future
@@ -246,15 +242,11 @@ impl Renderer {
                 self.swapchain_objects.window_target.swapchain.clone(),
                 frame_data.image_index,
             )
-            .boxed()
             .then_signal_fence_and_flush();
 
         // handle window resize and print any other error
         match future {
-            Ok(future) => {
-                /* future.wait(None).unwrap(); */
-                self.previous_frame = Some(future.boxed())
-            }
+            Ok(future) => self.previous_frame = Some(future.boxed()),
             Err(FlushError::OutOfDate) => (),
             Err(err) => log::error!("Frame error: {}", err),
         }
@@ -279,7 +271,7 @@ impl Renderer {
         let render_cb = AutoCommandBufferBuilder::primary(
             device.logical().clone(),
             device.queues.graphics.family(),
-            CommandBufferUsage::SimultaneousUse,
+            CommandBufferUsage::OneTimeSubmit,
         )
         .unwrap();
 
@@ -289,7 +281,7 @@ impl Renderer {
                 fb.clone(),
                 SubpassContents::Inline,
                 [
-                    ClearValue::Float(cc.c()), // cc.c is clear color get color, clearly
+                    ClearValue::Float(cc.c()), // cc.c is `clear color get color`, clearly
                     ClearValue::DepthStencil((1.0, 0)),
                 ]
                 .iter()
@@ -333,8 +325,6 @@ impl RendererBuilder {
     }
 
     pub fn build(self, context: Context) -> Result<Renderer, ContextError> {
-        log::debug!("Renderer created");
-
         // device
         let (r_context, target_builder) = ReducedContext::new(context);
         let device = RenderDevice::from_context(r_context)?;
@@ -356,6 +346,9 @@ impl RendererBuilder {
 
         let previous_frame = Some(sync::now(device.logical().clone()).boxed());
         let frame_in_flight = AtomicU8::new(0);
+        let frame_fences = [None, None];
+
+        log::debug!("Renderer created");
 
         Ok(Renderer {
             swapchain_objects,
@@ -363,7 +356,9 @@ impl RendererBuilder {
             render_targets,
 
             previous_frame,
+
             frame_in_flight,
+            frame_fences,
 
             device,
         })

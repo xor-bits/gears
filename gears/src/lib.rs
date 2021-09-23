@@ -6,12 +6,14 @@ pub mod io;
 pub mod loops;
 pub mod renderer;
 
-pub use gears_pipeline::*;
-pub use glam;
-pub use static_assertions;
-
+pub extern crate async_trait;
+pub extern crate gears_pipeline;
+pub extern crate glam;
+pub extern crate static_assertions;
+pub extern crate tokio;
 pub extern crate vulkano;
 pub extern crate vulkano_shaders;
+pub use gears_pipeline::*;
 
 use log::error;
 use std::{fmt, time};

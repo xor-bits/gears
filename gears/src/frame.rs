@@ -1,7 +1,8 @@
 use std::{env, sync::Arc};
 
 use winit::{
-    dpi::LogicalSize,
+    dpi::{LogicalSize, PhysicalSize},
+    event::WindowEvent,
     event_loop::EventLoop,
     window::{Window, WindowBuilder},
 };
@@ -13,6 +14,8 @@ use crate::{
 
 pub struct Frame {
     window: Arc<Window>,
+    size: (u32, u32),
+    aspect: f32,
 }
 
 pub struct FrameBuilder<'a> {
@@ -23,8 +26,8 @@ pub struct FrameBuilder<'a> {
 }
 
 impl Frame {
-    pub fn new<'a>() -> FrameBuilder<'a> {
-        FrameBuilder::<'a> {
+    pub const fn new() -> FrameBuilder<'static> {
+        FrameBuilder {
             title: "Gears",
             size: (600, 600),
             min_size: (32, 32),
@@ -32,7 +35,7 @@ impl Frame {
         }
     }
 
-	/// 
+    ///
     pub fn default_context(&self) -> Result<Context, ContextError> {
         Context::new(
             self.window.clone(),
@@ -82,30 +85,41 @@ impl Frame {
         Context::new(self.window.clone(), pick, valid)
     }
 
-    pub fn size(&self) -> (u32, u32) {
-        lsize_to_tuple(
-            self.window
-                .inner_size()
-                .to_logical(self.window.scale_factor()),
-        )
+    pub const fn size(&self) -> (u32, u32) {
+        self.size
     }
 
-    pub fn aspect(&self) -> f32 {
-        let size = self.window.inner_size();
-
-        if size.height == 0 {
-            1.0
-        } else {
-            (size.width as f32) / (size.height as f32)
-        }
+    pub const fn aspect(&self) -> f32 {
+        self.aspect
     }
 
     pub fn scale(&self) -> f64 {
         self.window.scale_factor()
     }
 
-    pub fn window(&self) -> &Arc<Window> {
+    pub const fn window(&self) -> &Arc<Window> {
         &self.window
+    }
+
+    pub fn event(&mut self, event: &WindowEvent) {
+        match event {
+            WindowEvent::Resized(size) => {
+                let (size, aspect) =
+                    Self::calc_size_and_aspect(size.clone(), self.window.scale_factor());
+
+                self.size = size;
+                self.aspect = aspect;
+            }
+            _ => {}
+        }
+    }
+
+    fn calc_size_and_aspect(size: PhysicalSize<u32>, scale: f64) -> ((u32, u32), f32) {
+        let size = lsize_to_tuple(size.to_logical(scale));
+        let mut aspect = (size.0 as f32) / (size.1 as f32);
+        aspect = if !aspect.is_finite() { 1.0 } else { aspect };
+
+        (size, aspect)
     }
 }
 
@@ -115,29 +129,34 @@ impl<'a> FrameBuilder<'a> {
         self
     }
 
-    pub fn with_size(mut self, width: u32, height: u32) -> Self {
+    pub const fn with_size(mut self, width: u32, height: u32) -> Self {
         self.size = (width, height);
         self
     }
 
-    pub fn with_min_size(mut self, width: u32, height: u32) -> Self {
+    pub const fn with_min_size(mut self, width: u32, height: u32) -> Self {
         self.min_size = (width, height);
         self
     }
 
-    pub fn with_max_size(mut self, width: u32, height: u32) -> Self {
+    pub const fn with_max_size(mut self, width: u32, height: u32) -> Self {
         self.max_size = Some((width, height));
         self
     }
 
     pub fn build(self) -> (Frame, EventLoop<()>) {
+        // events loop
         let event_loop = EventLoop::new();
+
+        // window info
         let mut window_builder = WindowBuilder::new()
             .with_min_inner_size(tuple_to_lsize(self.min_size))
             .with_inner_size(tuple_to_lsize(self.size));
         if let Some(max_size) = self.max_size {
             window_builder = window_builder.with_max_inner_size(tuple_to_lsize(max_size));
         }
+
+        // window itself
         let window = Arc::new(
             window_builder
                 .with_title(self.title)
@@ -145,17 +164,27 @@ impl<'a> FrameBuilder<'a> {
                 .expect_log("Window creation failed"),
         );
 
-        (Frame { window }, event_loop)
+        let (size, aspect) =
+            Frame::calc_size_and_aspect(window.inner_size(), window.scale_factor());
+
+        (
+            Frame {
+                window,
+                size,
+                aspect,
+            },
+            event_loop,
+        )
     }
 }
 
-fn tuple_to_lsize(size: (u32, u32)) -> LogicalSize<u32> {
+const fn tuple_to_lsize(size: (u32, u32)) -> LogicalSize<u32> {
     LogicalSize {
         width: size.0,
         height: size.1,
     }
 }
 
-fn lsize_to_tuple(size: LogicalSize<u32>) -> (u32, u32) {
+const fn lsize_to_tuple(size: LogicalSize<u32>) -> (u32, u32) {
     (size.width, size.height)
 }
