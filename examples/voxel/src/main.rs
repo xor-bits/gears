@@ -9,7 +9,7 @@
 
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     time::{Duration, Instant},
@@ -125,6 +125,7 @@ struct App {
     shaders: (shader::DefaultPipeline, shader::DebugPipeline),
     vb: RwLock<VertexBuffer<shader::VertexData>>,
     ib: RwLock<IndexBuffer<u32>>,
+    c: AtomicUsize,
 
     cursor_controller: RwLock<CursorController>,
     input: RwLock<InputState>,
@@ -196,6 +197,7 @@ impl App {
 
             vb,
             ib,
+            c: AtomicUsize::new(indices.len()),
             shaders: (fill_shader, line_shader),
 
             cursor_controller,
@@ -222,6 +224,7 @@ impl App {
 
         self.vb.write().write(0, &vertices[..]).unwrap();
         self.ib.write().write(0, &indices[..]).unwrap();
+        self.c.store(indices.len(), Ordering::SeqCst);
         self.renderer.request_rerecord();
     }
 }
@@ -267,7 +270,7 @@ impl RendererRecord for App {
 
     fn begin_info(&self) -> RenderRecordBeginInfo {
         RenderRecordBeginInfo {
-            clear_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            clear_color: Vec4::new(0.2, 0.2, 0.2, 1.0),
             debug_calls: true,
         }
     }
@@ -280,7 +283,7 @@ impl RendererRecord for App {
         }
         .vertex(&self.vb.read())
         .index(&self.ib.read())
-        .direct(self.ib.read().elem_capacity() as u32, 0)
+        .direct(self.c.load(Ordering::SeqCst) as u32, 0)
         .execute();
     }
 }
