@@ -113,7 +113,7 @@ fn shader_module(
     spirv: &[u8],
     stage: vk::ShaderStageFlags,
 ) -> (vk::ShaderModule, vk::PipelineShaderStageCreateInfo) {
-    let spirv = read_spv(&mut Cursor::new(&spirv[..])).expect("SPIR-V read failed");
+    let spirv = read_spv(&mut Cursor::new(spirv)).expect("SPIR-V read failed");
 
     let module_info = vk::ShaderModuleCreateInfo::builder().code(&spirv[..]);
 

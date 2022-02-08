@@ -45,6 +45,7 @@ impl Swapchain {
 
 impl Drop for Swapchain {
     fn drop(&mut self) {
+        log::debug!("Dropping Swapchain");
         unsafe { self.loader.destroy_swapchain(self.swapchain, None) }
     }
 }

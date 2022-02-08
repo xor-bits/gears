@@ -29,6 +29,7 @@ impl<T> SimpleBuffer<T> {
 
 impl<T> Drop for SimpleBuffer<T> {
     fn drop(&mut self) {
+        log::debug!("Dropping SimpleBuffer {:?}", self.memory);
         unsafe {
             self.device.free_memory(self.memory, None);
             self.device.destroy_buffer(self.buffer, None)

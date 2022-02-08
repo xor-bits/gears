@@ -106,8 +106,9 @@ where
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
-        let buffer =
-            ReAllocatableBuffer::new(SimpleBuffer::new(device.clone(), buffer, memory, size));
+        let buffer = SimpleBuffer::new(device.clone(), buffer, memory, size);
+        log::debug!("Creating ReAllocatableBuffer : {:?}", buffer.memory);
+        let buffer = ReAllocatableBuffer::new(buffer);
 
         let stage = StageBuffer::new_with_device(device, size)?;
 
@@ -253,14 +254,15 @@ where
     T: PartialEq,
 {
     fn drop(&mut self) {
-        unsafe {
+        log::debug!("Dropping GenericStagedBuffer");
+        /* unsafe {
             self.current()
                 .device
                 .free_memory(self.current().memory, None);
             self.current()
                 .device
                 .destroy_buffer(self.current().buffer, None);
-        }
+        } */
     }
 }
 
@@ -280,7 +282,7 @@ where
     pub fn new_with_device(device: Dev, count: usize) -> Result<Self, BufferError> {
         Ok(Self {
             stage: StageBuffer::new_with_usage(
-                device.clone(),
+                device,
                 vk::BufferUsageFlags::from_raw(USAGE),
                 count,
             )?,

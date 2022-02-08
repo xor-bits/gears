@@ -7,11 +7,11 @@ layout(location = 0) out vec4 out_col;
 
 
 void main() {
-	vec3 c = 
+    vec3 c = 
 #if defined(DEBUGGING)
-		vec3(in_exposure, in_exposure * 0.5, 0.0);
+        vec3(in_exposure, in_exposure * 0.5, 0.0);
 #else
-		vec3(in_exposure);
+        vec3(in_exposure);
 #endif
-	out_col = vec4(c, 1.0);
+    out_col = vec4(c, 1.0);
 }

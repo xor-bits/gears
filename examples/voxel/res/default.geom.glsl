@@ -10,8 +10,8 @@ layout(location = 0) out float out_exposure;
 
 void vertex(int i)
 {
-	gl_Position = gl_in[i].gl_Position;
-	out_exposure = in_exposure[i];
+    gl_Position = gl_in[i].gl_Position;
+    out_exposure = in_exposure[i];
     EmitVertex();
 }
 

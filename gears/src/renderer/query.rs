@@ -146,3 +146,12 @@ impl PerfQuery {
         self.get_with_flags(vk::QueryResultFlags::WAIT | vk::QueryResultFlags::TYPE_64)
     } */
 }
+
+impl Drop for PerfQuery {
+    fn drop(&mut self) {
+        log::debug!("Dropping PerfQuery");
+        unsafe {
+            self.device.destroy_query_pool(self.query_pool, None);
+        }
+    }
+}

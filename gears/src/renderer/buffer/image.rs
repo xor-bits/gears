@@ -58,12 +58,12 @@ pub struct Image {
     owns_image: bool,
 }
 
-impl<T> Into<vk::Format> for ImageFormat<T>
+impl<T> From<ImageFormat<T>> for vk::Format
 where
     ImageFormat<T>: BaseFormat,
 {
-    fn into(self) -> vk::Format {
-        self.format()
+    fn from(val: ImageFormat<T>) -> Self {
+        val.format()
     }
 }
 
@@ -183,15 +183,15 @@ impl ImageBuilder {
         image_usage: ImageUsage,
         image_format: vk::Format,
     ) -> (vk::ImageAspectFlags, vk::ImageUsageFlags) {
-        let depth = match image_format {
+        let depth = matches!(
+            image_format,
             vk::Format::D16_UNORM
-            | vk::Format::D16_UNORM_S8_UINT
-            | vk::Format::D24_UNORM_S8_UINT
-            | vk::Format::D32_SFLOAT
-            | vk::Format::D32_SFLOAT_S8_UINT
-            | vk::Format::X8_D24_UNORM_PACK32 => true,
-            _ => false,
-        };
+                | vk::Format::D16_UNORM_S8_UINT
+                | vk::Format::D24_UNORM_S8_UINT
+                | vk::Format::D32_SFLOAT
+                | vk::Format::D32_SFLOAT_S8_UINT
+                | vk::Format::X8_D24_UNORM_PACK32
+        );
         let mut usage = vk::ImageUsageFlags::empty();
         if image_usage.contains(ImageUsage::READ) {
             usage |= vk::ImageUsageFlags::SAMPLED;
@@ -359,9 +359,9 @@ impl Image {
             .array_layers(1)
             .build();
 
-        let image = unsafe { device.create_image(&image_info, None) }.or_else(|err| {
+        let image = unsafe { device.create_image(&image_info, None) }.map_err(|err| {
             log::error!("Image ({:?}) creation failed: {:?}", image_info, err);
-            Err(BufferError::OutOfMemory)
+            BufferError::OutOfMemory
         })?;
 
         Self::new_with_image(device, image, format, aspects, image_type, true)
@@ -449,10 +449,12 @@ impl Image {
 
 impl Drop for Image {
     fn drop(&mut self) {
+        log::debug!("Dropping Image");
         unsafe {
             self.device.destroy_image_view(self.image_view, None);
-            self.memory
-                .map(|memory| self.device.free_memory(memory, None));
+            if let Some(memory) = self.memory {
+                self.device.free_memory(memory, None)
+            }
 
             if self.owns_image {
                 self.device.destroy_image(self.image, None);

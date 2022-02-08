@@ -133,7 +133,7 @@ impl Surface {
         }
         .map_err_log("Surface format query failed", ContextError::OutOfMemory)?;
 
-        if available.len() == 0 {
+        if available.is_empty() {
             log::error!("No surface formats available");
             return Err(ContextError::MissingSurfaceConfigs);
         }
@@ -145,7 +145,7 @@ impl Surface {
                     && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
             })
             .unwrap_or(&available[0]);
-        let format = format.clone();
+        let format = *format;
 
         log::debug!("Surface format chosen: {:?} from {:?}", format, available);
 
@@ -162,23 +162,21 @@ impl Surface {
             ContextError::OutOfMemory,
         )?;
 
-        if available.len() == 0 {
+        if available.is_empty() {
             log::error!("No surface present modes available");
             return Err(ContextError::MissingSurfaceConfigs);
         }
 
         let mode = match sync {
             SyncMode::Fifo => vk::PresentModeKHR::FIFO,
-            SyncMode::Immediate => available
+            SyncMode::Immediate => *available
                 .iter()
                 .find(|&&present| present == vk::PresentModeKHR::IMMEDIATE)
-                .unwrap_or(&vk::PresentModeKHR::FIFO)
-                .clone(),
-            SyncMode::Mailbox => available
+                .unwrap_or(&vk::PresentModeKHR::FIFO),
+            SyncMode::Mailbox => *available
                 .iter()
                 .find(|&&present| present == vk::PresentModeKHR::MAILBOX)
-                .unwrap_or(&vk::PresentModeKHR::FIFO)
-                .clone(),
+                .unwrap_or(&vk::PresentModeKHR::FIFO),
         };
 
         log::debug!(
@@ -218,7 +216,7 @@ impl Surface {
             }
         };
 
-        self.extent.clone()
+        self.extent
     }
 
     fn swapchain_transform(
@@ -244,6 +242,16 @@ impl Surface {
             PREFERRED
         } else {
             vk::CompositeAlphaFlagsKHR::INHERIT
+        }
+    }
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        log::debug!("Dropping Surface");
+
+        unsafe {
+            self.surface_loader.destroy_surface(self.surface, None);
         }
     }
 }

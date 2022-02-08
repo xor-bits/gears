@@ -26,3 +26,17 @@ impl<T> ReAllocatableBuffer<T> {
         self.re_allocates[self.re_alloc_i] = Some((true, buffer));
     }
 }
+
+impl<T> Drop for ReAllocatableBuffer<T> {
+    fn drop(&mut self) {
+        log::debug!(
+            "Dropping ReAllocatableBuffer: {:?} {:?}",
+            self.buffer.memory,
+            self.re_allocates
+                .iter()
+                .filter_map(|b| b.as_ref())
+                .map(|(_, b)| b.memory)
+                .collect::<Vec<_>>()
+        );
+    }
+}

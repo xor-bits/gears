@@ -74,9 +74,10 @@ where
 
         let device = self.current().device.clone();
 
-        Ok(self
-            .buffer
-            .re_alloc(SimpleBuffer::new(device, buffer, memory, new_size)))
+        self
+        .buffer
+        .re_alloc(SimpleBuffer::new(device, buffer, memory, new_size));
+        Ok(())
     }
 
     pub unsafe fn map_buffer(

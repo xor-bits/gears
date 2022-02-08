@@ -196,18 +196,16 @@ impl RendererRecord for App {
 impl EventLoopTarget for App {
     fn event(&self, event: &WindowEvent) {
         self.input.write().update(event);
-        match event {
-            WindowEvent::KeyboardInput {
-                input:
-                    KeyboardInput {
-                        virtual_keycode: Some(VirtualKeyCode::R),
-                        ..
-                    },
-                ..
-            } => {
-                self.reload_mesh();
-            }
-            _ => {}
+        if let WindowEvent::KeyboardInput {
+            input:
+                KeyboardInput {
+                    virtual_keycode: Some(VirtualKeyCode::R),
+                    ..
+                },
+            ..
+        } = event
+        {
+            self.reload_mesh();
         }
     }
 }
@@ -242,5 +240,5 @@ fn main() {
         .with_event_target(app.clone())
         .with_frame_target(app)
         .build()
-        .run();
+        .run(|| {});
 }

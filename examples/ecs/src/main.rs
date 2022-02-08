@@ -244,16 +244,7 @@ impl App {
     fn init(_frame: Frame, renderer: Renderer) -> Arc<RwLock<Self>> {
         let input = InputState::new();
         let indices = (0..MAX_COUNT as u16)
-            .map(|i| {
-                [
-                    i * 4 + 0,
-                    i * 4 + 1,
-                    i * 4 + 2,
-                    i * 4 + 0,
-                    i * 4 + 2,
-                    i * 4 + 3,
-                ]
-            })
+            .map(|i| [i * 4, i * 4 + 1, i * 4 + 2, i * 4, i * 4 + 2, i * 4 + 3])
             .flatten()
             .collect::<Vec<u16>>();
 
@@ -437,16 +428,16 @@ fn main() {
             .unwrap(),
     );
 
-    let _ = UpdateLoop::new()
+    let stopper = UpdateLoop::new()
         .with_rate(UPDATE_RATE)
         .with_target(app.clone())
         .build()
         .run();
 
-    let _ = FrameLoop::new()
+    FrameLoop::new()
         .with_event_loop(event_loop)
         .with_event_target(app.clone())
         .with_frame_target(app)
         .build()
-        .run();
+        .run(|| stopper.stop());
 }

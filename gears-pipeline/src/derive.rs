@@ -48,7 +48,7 @@ pub fn impl_trait_input(ast: DeriveInput) -> TokenStream {
         };
     }
 
-    (quote! {
+    quote! {
         impl Input for #name {
             type Fields = #tuple;
             const BINDING_DESCRIPTION: &'static [gears::vk::VertexInputBindingDescription] = &[
@@ -62,18 +62,16 @@ pub fn impl_trait_input(ast: DeriveInput) -> TokenStream {
                 #attributes
             ];
         }
-    })
-    .into()
+    }
 }
 
 pub fn impl_trait_uniform(ast: DeriveInput) -> TokenStream {
     let (name, tuple, _) = parse_ast(ast);
 
-    (quote! {
+    quote! {
         impl Uniform for #name {
             type Fields = #tuple;
             type HasFields = gears::renderer::pipeline::Yes;
         }
-    })
-    .into()
+    }
 }

@@ -76,6 +76,7 @@ impl Debugger {
 
 impl Drop for Debugger {
     fn drop(&mut self) {
+        log::debug!("Dropping Debugger");
         unsafe {
             self.debug_utils
                 .destroy_debug_utils_messenger(self.debug_messenger, None)

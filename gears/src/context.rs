@@ -146,16 +146,10 @@ impl Context {
         // check for missing layers
         let missing_layers: Vec<_> = requested_layers
             .iter()
-            .filter_map(|layer| {
-                if available_layers
+            .filter(|layer| {
+                !available_layers
                     .iter()
-                    .find(|alayer| unsafe { CStr::from_ptr(alayer.layer_name.as_ptr()) } == *layer)
-                    .is_none()
-                {
-                    Some(layer)
-                } else {
-                    None
-                }
+                    .any(|alayer| unsafe { CStr::from_ptr(alayer.layer_name.as_ptr()) } == **layer)
             })
             .collect();
 
@@ -163,7 +157,7 @@ impl Context {
             "Requested layers: {:?}\nAvailable layers: {:?}",
             requested_layers, available_layers
         );
-        if missing_layers.len() > 0 {
+        if !missing_layers.is_empty() {
             warn!(
                 "Missing layers: {:?}, continuing without these validation layers",
                 missing_layers
@@ -193,12 +187,12 @@ impl Context {
                     .enumerate_instance_extension_properties()
                     .map_err_log(INSTANCE_QUERY_ERROR_MSG, INSTANCE_QUERY_ERROR)?,
             )
-            .filter_map(|properties| {
-                if available_extensions_unique.contains(&properties.extension_name) {
-                    None
-                } else {
+            .filter(|properties| {
+                if !available_extensions_unique.contains(&properties.extension_name) {
                     available_extensions_unique.insert(properties.extension_name);
-                    Some(properties)
+                    true
+                } else {
+                    false
                 }
             })
             .collect::<Vec<_>>();
@@ -223,16 +217,10 @@ impl Context {
         // check for missing extensions
         let missing_extensions: Vec<_> = requested_extensions
             .iter()
-            .filter_map(|ext| {
-                if available_extensions
+            .filter(|ext| {
+                !available_extensions
                     .iter()
-                    .find(|aext| unsafe { CStr::from_ptr(aext.extension_name.as_ptr()) } == *ext)
-                    .is_none()
-                {
-                    Some(ext)
-                } else {
-                    None
-                }
+                    .any(|aext| unsafe { CStr::from_ptr(aext.extension_name.as_ptr()) } == **ext)
             })
             .collect();
 
@@ -240,7 +228,7 @@ impl Context {
             "Requested extensions: {:?}\nAvailable extensions: {:?}",
             requested_extensions, available_extensions
         );
-        if missing_extensions.len() > 0 {
+        if !missing_extensions.is_empty() {
             error!("Missing extensions: {:?}", missing_extensions);
             return Err(ContextError::MissingInstanceExtensions);
         }
@@ -308,7 +296,7 @@ impl Context {
                 })
                 .collect::<Vec<_>>();
 
-            if suitable_pdevices.len() == 0 {
+            if suitable_pdevices.is_empty() {
                 None
             } else if pick == ContextGPUPick::Manual
                 || env::var("GEARS_GPU").map_or(false, |value| value.to_lowercase() == "pick")
@@ -432,7 +420,7 @@ fn pdevice_to_string(instance: &ash::Instance, pdevice: vk::PhysicalDevice) -> S
 }
 
 fn all_pdevices_to_string(
-    pdevice_names: &Vec<(String, vk::PhysicalDeviceType, bool)>,
+    pdevice_names: &[(String, vk::PhysicalDeviceType, bool)],
     ignore_invalid: bool,
 ) -> String {
     let mut len = 0;

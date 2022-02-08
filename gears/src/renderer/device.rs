@@ -1,4 +1,8 @@
-use ash::{extensions::khr, version::InstanceV1_0, vk};
+use ash::{
+    extensions::khr,
+    version::{DeviceV1_0, InstanceV1_0},
+    vk,
+};
 use log::{debug, error};
 use std::{ffi::CStr, ops, os::raw::c_char, sync::Arc};
 
@@ -46,7 +50,7 @@ impl ReducedContext {
 }
 
 pub struct RenderDevice {
-    _debugger: Debugger,
+    _debugger: Option<Debugger>,
     pub queues: Queues,
 
     pub memory_types: Vec<vk::MemoryType>,
@@ -73,7 +77,7 @@ impl DerefDev for Dev {
 
 impl RenderDevice {
     // safe if ptrs are not used after instance_layers is modified or dropped
-    unsafe fn device_layers(instance_layers: &Vec<&CStr>) -> Vec<*const c_char> {
+    unsafe fn device_layers(instance_layers: &[&CStr]) -> Vec<*const c_char> {
         instance_layers
             .iter()
             .map(|raw_name| raw_name.as_ptr())
@@ -98,16 +102,10 @@ impl RenderDevice {
 
         let missing: Vec<_> = requested
             .iter()
-            .filter_map(|ext| {
-                if available
+            .filter(|ext| {
+                !available
                     .iter()
-                    .find(|aext| &CStr::from_ptr(aext.extension_name.as_ptr()) == ext)
-                    .is_none()
-                {
-                    Some(ext)
-                } else {
-                    None
-                }
+                    .any(|aext| CStr::from_ptr(aext.extension_name.as_ptr()) == **ext)
             })
             .collect();
 
@@ -115,7 +113,7 @@ impl RenderDevice {
             "Requested device extensions: {:?}\nAvailable device extensions: {:?}",
             requested, available
         );
-        if missing.len() > 0 {
+        if !missing.is_empty() {
             error!("Missing device extensions: {:?}", missing);
             return Err(ContextError::MissingDeviceExtensions);
         }
@@ -148,9 +146,7 @@ impl RenderDevice {
         // memory
         let memory_types = Self::memory_properties(&context.instance, context.pdevice)
             .memory_types
-            .iter()
-            .cloned()
-            .collect();
+            .to_vec();
 
         // queues
         let queue_create_infos = context.queue_families.get_vec().unwrap();
@@ -180,7 +176,7 @@ impl RenderDevice {
         let queues = unsafe { context.queue_families.get_queues(&device).unwrap() };
 
         let rdevice = Arc::new(Self {
-            _debugger: context.debugger,
+            _debugger: Some(context.debugger),
             queues,
 
             memory_types,
@@ -208,5 +204,16 @@ impl ops::Deref for RenderDevice {
 impl ops::DerefMut for RenderDevice {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.device
+    }
+}
+
+impl Drop for RenderDevice {
+    fn drop(&mut self) {
+        log::debug!("Dropping RenderDevice");
+        unsafe {
+            drop(self._debugger.take());
+            self.device.destroy_device(None);
+            self.instance.destroy_instance(None);
+        }
     }
 }

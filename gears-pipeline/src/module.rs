@@ -46,7 +46,7 @@ pub fn module(input: TokenStream) -> TokenStream {
             .path
             .segments
             .iter()
-            .map(|seg| format!("::{}", seg.ident.to_string()))
+            .map(|seg| format!("::{}", seg.ident))
             .collect::<String>();
 
         let value_span = name_value.lit.span();
@@ -178,7 +178,7 @@ fn make_module(
     path: &Path,
     load_spirv: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
-    let (inputs, outputs, uniforms) = layout_to_ident(&layout);
+    let (inputs, outputs, uniforms) = layout_to_ident(layout);
     let name = Ident::new(mod_name, Span::call_site());
     let path = path.to_str().unwrap();
 
@@ -231,7 +231,7 @@ fn pre_compile_module(
         mod_name.as_str(),
         "main",
         Some(path.clone()),
-        &shader_defines,
+        shader_defines,
     ) {
         Err(err) => {
             return Error::new(Span::call_site(), err)
@@ -256,7 +256,7 @@ fn pre_compile_module(
         mod_name.as_str(),
         "main",
         Some(path.clone()),
-        &shader_defines,
+        shader_defines,
     );
 
     // tokens

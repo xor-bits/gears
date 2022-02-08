@@ -6,19 +6,19 @@ use std::{
 use crate::{
     buffer::Image,
     device::{Dev, ReducedContext, RenderDevice},
-    query::{PerfQuery, PerfQueryResult},
+    query::PerfQuery,
     Context, ContextError, DerefDev, FramePerfReport, ImageBuilder, ImageFormat, ImageUsage,
     ImmediateFrameInfo, MapErrorLog, RenderPass, RenderRecordInfo, RendererRecord, Surface,
     Swapchain, SyncMode, UpdateRecordInfo,
 };
 use ash::{version::DeviceV1_0, vk};
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use winit::window::Window;
 
 struct SwapchainObjects {
     render_pass: RenderPass,
-    surface: Surface,
     swapchain: Option<Swapchain>,
+    surface: Surface,
 }
 
 struct RenderTarget {
@@ -196,8 +196,10 @@ impl Renderer {
         }
     }
 
-    pub fn render_pass(&self) -> RenderPass {
-        self.swapchain_objects.lock().render_pass.clone()
+    pub fn render_pass(&self) -> MappedMutexGuard<'_, RenderPass> {
+        MutexGuard::map(self.swapchain_objects.lock(), |swapchain_objects| {
+            &mut swapchain_objects.render_pass
+        })
     }
 
     pub fn parallel_object_count(&self) -> usize {
@@ -234,10 +236,7 @@ impl Renderer {
         let rerecord = self.maybe_record(recorder, &mut render_target, target);
 
         // fetch the last frame gpu time(s)
-        let gpu_frametime = render_target
-            .perf
-            .get()
-            .unwrap_or(PerfQueryResult::default());
+        let gpu_frametime = render_target.perf.get().unwrap_or_default();
 
         // submit
 
@@ -295,7 +294,7 @@ impl Renderer {
 
         FramePerfReport {
             cpu_frametime: cpu_frametime.elapsed(),
-            gpu_frametime: gpu_frametime,
+            gpu_frametime,
 
             rerecord,
             updates,
@@ -313,7 +312,7 @@ impl Renderer {
     where
         T: RendererRecord,
     {
-        if render_target.update_cb_recording == false {
+        if !render_target.update_cb_recording {
             unsafe {
                 self.device.reset_command_buffer(
                     render_target.update_cb,
@@ -482,10 +481,10 @@ impl Renderer {
     ) {
         let submits = [
             vk::SubmitInfo::builder()
-                .command_buffers(&update_cb)
-                .wait_semaphores(&image_wait)
-                .signal_semaphores(&update_wait)
-                .wait_dst_stage_mask(&update_stage)
+                .command_buffers(update_cb)
+                .wait_semaphores(image_wait)
+                .signal_semaphores(update_wait)
+                .wait_dst_stage_mask(update_stage)
                 .build(),
             vk::SubmitInfo::builder()
                 .command_buffers(render_cb)
@@ -514,10 +513,10 @@ impl Renderer {
         frame_fence: vk::Fence,
     ) {
         let submits = [vk::SubmitInfo::builder()
-            .command_buffers(&render_cb)
-            .wait_semaphores(&image_wait)
-            .signal_semaphores(&render_wait)
-            .wait_dst_stage_mask(&render_stage)
+            .command_buffers(render_cb)
+            .wait_semaphores(image_wait)
+            .signal_semaphores(render_wait)
+            .wait_dst_stage_mask(render_stage)
             .build()];
 
         unsafe {
@@ -691,6 +690,7 @@ impl RendererBuilder {
 
 impl Drop for FrameSync {
     fn drop(&mut self) {
+        log::debug!("Dropping FrameSync");
         unsafe {
             self.device.destroy_fence(self.frame_done_fence, None);
             self.device.destroy_semaphore(self.image_semaphore, None);
@@ -702,6 +702,7 @@ impl Drop for FrameSync {
 
 impl Drop for RenderTarget {
     fn drop(&mut self) {
+        log::debug!("Dropping RenderTarget");
         unsafe {
             let cbs = [self.render_cb, self.update_cb];
             self.device.destroy_framebuffer(self.framebuffer, None);
@@ -714,5 +715,8 @@ impl Drop for RenderTarget {
 impl Drop for Renderer {
     fn drop(&mut self) {
         log::debug!("Renderer dropped");
+        unsafe {
+            self.device.device_wait_idle().unwrap();
+        }
     }
 }

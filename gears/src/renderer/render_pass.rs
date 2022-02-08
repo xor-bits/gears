@@ -8,7 +8,6 @@ use crate::{
     ContextError, MapErrorLog,
 };
 
-#[derive(Clone)]
 pub struct RenderPass {
     pub viewport: vk::Viewport,
     pub scissor: vk::Rect2D,
@@ -46,7 +45,7 @@ impl RenderPass {
             },
             vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
-                extent: extent,
+                extent,
             },
         )
     }
@@ -119,6 +118,8 @@ impl RenderPass {
         let render_pass = unsafe { device.create_render_pass(&render_pass_info, None) }
             .map_err_log("Render pass creation failed", ContextError::OutOfMemory)?;
 
+        log::debug!("C RenderPass: {:?}", render_pass);
+
         let (viewport, scissor) = Self::viewport_and_scissor(extent);
 
         Ok(Self {
@@ -128,5 +129,14 @@ impl RenderPass {
 
             device,
         })
+    }
+}
+
+impl Drop for RenderPass {
+    fn drop(&mut self) {
+        log::debug!("Dropping RenderPass: {:?}", self.render_pass);
+        unsafe {
+            self.device.destroy_render_pass(self.render_pass, None);
+        }
     }
 }

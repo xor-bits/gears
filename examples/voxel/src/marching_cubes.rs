@@ -13,14 +13,7 @@ fn triangle(
     let ac = p_c - p_a;
     let normal = ac.cross(ab).normalize();
 
-    let exposure = Vec3::new(
-        0.24140227479263378942,
-        0.96560909917053515768,
-        0.09656090991705351577,
-    )
-    .dot(normal)
-        * 0.375
-        + 0.625;
+    let exposure = Vec3::new(0.241_402_27, 0.965_609_1, 0.096_560_91).dot(normal) * 0.375 + 0.625;
 
     let i = vertices.len();
     vertices.push(shader::VertexData {
@@ -35,7 +28,7 @@ fn triangle(
         position: p_c,
         exposure,
     });
-    indices.push((i + 0) as u32);
+    indices.push(i as u32);
     indices.push((i + 1) as u32);
     indices.push((i + 2) as u32);
 }
@@ -106,7 +99,7 @@ macro_rules! hex {
 }
 
 pub fn generate_marching_cubes(
-    voxels: &Vec<f32>,
+    voxels: &[f32],
     smooth: bool,
 ) -> (Vec<shader::VertexData>, Vec<u32>) {
     let mut vertices = Vec::new();

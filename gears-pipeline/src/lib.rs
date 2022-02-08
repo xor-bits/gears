@@ -17,18 +17,18 @@ pub fn shader(_input: TokenStream) -> TokenStream {
 /// ```no_run
 /// pub struct Pipeline(pub gears::renderer::pipeline::GraphicsPipeline<(), (), i32, (), ()>);
 /// impl Pipeline {
-/// 	pub fn build(renderer: &gears::renderer::Renderer) -> Result<Self, gears::renderer::pipeline::PipelineError> {
-///			// validations filled in
-///			// like: gears::static_assertions::assert_type_eq_all!()
-///			Ok(Self {
-///				0: gears::renderer::pipeline::factory::Pipeline::builder()
-///					.vertex_uniform(VERT::load_spirv().map_err(|err| gears::renderer::pipeline::PipelineError::CompileError(err))?, 32)
-///					.fragment(FRAG::load_spirv().map_err(|err| gears::renderer::pipeline::PipelineError::CompileError(err))?)
-///					.input::<()>()
-///					.output::<()>()
-///					.build(renderer).map_err(|err| gears::renderer::pipeline::PipelineError::BufferError(err))?
-///			})
-/// 	}
+///     pub fn build(renderer: &gears::renderer::Renderer) -> Result<Self, gears::renderer::pipeline::PipelineError> {
+///            // validations filled in
+///            // like: gears::static_assertions::assert_type_eq_all!()
+///            Ok(Self {
+///                0: gears::renderer::pipeline::factory::Pipeline::builder()
+///                    .vertex_uniform(VERT::load_spirv().map_err(|err| gears::renderer::pipeline::PipelineError::CompileError(err))?, 32)
+///                    .fragment(FRAG::load_spirv().map_err(|err| gears::renderer::pipeline::PipelineError::CompileError(err))?)
+///                    .input::<()>()
+///                    .output::<()>()
+///                    .build(renderer).map_err(|err| gears::renderer::pipeline::PipelineError::BufferError(err))?
+///            })
+///     }
 /// }
 /// // other impls like Deref
 /// ```
@@ -42,12 +42,12 @@ pub fn shader(_input: TokenStream) -> TokenStream {
 /// # module! { kind = "vert", path = "../gears-pipeline/res/_test.glsl", name = "VERT", define = "ENABLE" }
 /// # module! { kind = "frag", path = "../gears-pipeline/res/_include_test.glsl", name = "FRAG" }
 /// pipeline! {
-///		// Pipeline name:
+///        // Pipeline name:
 ///     "Pipeline"
-///		// Pipeline input and output:
+///        // Pipeline input and output:
 ///     VertexData -> RGBAOutput
 ///
-///		// Pipeline modules:
+///        // Pipeline modules:
 ///     mod "VERT" as "vert" where { in UniformData }
 ///     mod "FRAG" as "frag"
 /// }
@@ -106,14 +106,14 @@ pub fn pipeline(input: TokenStream) -> TokenStream {
 /// ```
 /// # use gears::{module};
 /// module! {
-///		// Module kind:
-/// 	kind = "vert",
-///		// Module source path:
-///		path = "../gears-pipeline/res/_test.glsl",
-///		// Module (pub mod) name:
-///		name = "VERTEX_MODULE",
-///		// Module compile definitions:
-///		define = "ENABLE"
+///        // Module kind:
+///     kind = "vert",
+///        // Module source path:
+///        path = "../gears-pipeline/res/_test.glsl",
+///        // Module (pub mod) name:
+///        name = "VERTEX_MODULE",
+///        // Module compile definitions:
+///        define = "ENABLE"
 /// }
 /// ```
 /// ## Usage
@@ -129,7 +129,7 @@ pub fn pipeline(input: TokenStream) -> TokenStream {
 ///  - `geom` or `geometry` for geometry shader modules
 ///
 /// ### `path`
-///	tells the file path containing the source code and
+///    tells the file path containing the source code and
 /// where to include other files from
 ///
 /// ### `name`
@@ -175,7 +175,7 @@ pub fn module(input: TokenStream) -> TokenStream {
 /// # use gears::{glam::Vec3, Input, FormatOf, static_assertions::assert_type_eq_all};
 /// #[derive(Input)]
 /// pub struct VertexData {
-///		value: Vec3,
+///        value: Vec3,
 /// }
 ///
 /// assert_type_eq_all!(<VertexData as Input>::Fields, (Vec3,));
@@ -226,7 +226,7 @@ pub fn derive_output(_input: TokenStream) -> TokenStream {
 /// # use gears::{glam::Vec3, Uniform, FormatOf, static_assertions::assert_type_eq_all};
 /// #[derive(Uniform)]
 /// pub struct UniformData {
-///		value: Vec3,
+///        value: Vec3,
 /// }
 ///
 /// assert_type_eq_all!(<UniformData as Uniform>::Fields, (Vec3,));

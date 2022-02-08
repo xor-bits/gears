@@ -97,10 +97,11 @@ where
 
     pub fn write(&mut self, mut mod_map: ModMap<Buf, T, ELEMENTS>) -> Result<(), BufferError> {
         // TODO: map and unmap
-        Ok(for (_, modulation) in mod_map.modified.drain() {
+        for (_, modulation) in mod_map.modified.drain() {
             self.buf
                 .write(modulation.offset * ELEMENTS, &modulation.data)?;
-        })
+        };
+        Ok(())
     }
 
     pub unsafe fn update(&mut self, uri: &UpdateRecordInfo) -> bool {

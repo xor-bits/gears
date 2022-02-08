@@ -40,14 +40,16 @@ impl FrameLoop {
         }
     }
 
-    pub fn run(self) -> ! {
+    pub fn run<F: FnOnce() + 'static>(self, on_stop: F) -> ! {
         let event_loop = self.base.event_loop;
-        let frame_targets = self.base.frame_targets.clone();
-        let event_targets = self.base.event_targets;
+        let mut frame_targets = self.base.frame_targets;
+        let mut event_targets = self.base.event_targets;
 
         let mut frame_count_check_tp = Instant::now();
         let mut frames: usize = 0;
         let mut avg_perf = FramePerfReport::default();
+
+        let mut on_stop = Some(on_stop);
 
         event_loop.run(move |event, _, control_flow| {
             *control_flow = winit::event_loop::ControlFlow::Poll;
@@ -59,11 +61,12 @@ impl FrameLoop {
                         target.read().event(&event);
                     }
 
-                    match event {
-                        WindowEvent::CloseRequested => {
-                            *control_flow = winit::event_loop::ControlFlow::Exit;
-                        }
-                        _ => (),
+                    if event == WindowEvent::CloseRequested {
+                        *control_flow = winit::event_loop::ControlFlow::Exit;
+                        log::debug!("Stopping");
+                        frame_targets.clear();
+                        event_targets.clear();
+                        on_stop.take().unwrap()();
                     }
                 }
                 Event::RedrawEventsCleared => {

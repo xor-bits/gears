@@ -52,9 +52,8 @@ impl UpdateLoop {
             let mut lag = time_zero;
 
             loop {
-                match rx.try_recv() {
-                    Ok(_) => break,
-                    Err(_) => (),
+                if rx.try_recv().is_ok() {
+                    break;
                 }
 
                 let begin = time::Instant::now();
@@ -121,9 +120,7 @@ impl UpdateLoopBuilder {
 
 impl UpdateLoopStopper {
     pub fn stop(self) {
-        self.tx
-            .send(())
-            .unwrap_or_else(|_| /* already stopped */ ());
+        self.tx.send(()).unwrap_or(());
         self.join_handle
             .join()
             .expect_log("UpdateLoop thread join failed");

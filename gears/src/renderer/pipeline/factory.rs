@@ -92,7 +92,7 @@ where
     ) -> Result<GraphicsPipeline<In, Out, UfVert, UfGeom, UfFrag>, BufferError> {
         GraphicsPipeline::new(
             renderer.device.clone(),
-            renderer.render_pass(),
+            &renderer.render_pass(),
             renderer.parallel_object_count(),
             self.vert,
             self.geom,
@@ -208,19 +208,19 @@ where
 }
 
 impl PipelineBuilder {
-    pub fn vertex<'a>(
+    pub fn vertex(
         self,
-        spirv: Cow<'a, [u8]>,
-    ) -> GPipelineBuilder<'a, (), (), (), (), (), true, false, false> {
+        spirv: Cow<[u8]>,
+    ) -> GPipelineBuilder<'_, (), (), (), (), (), true, false, false> {
         self.graphics_builder().vertex(spirv)
     }
 
-    pub fn vertex_uniform<'a, UfVert>(
+    pub fn vertex_uniform<UfVert>(
         self,
-        spirv: Cow<'a, [u8]>,
+        spirv: Cow<[u8]>,
         initial_uniform_data: UfVert,
         binding: u32,
-    ) -> GPipelineBuilder<'a, (), (), UfVert, (), (), true, false, false>
+    ) -> GPipelineBuilder<'_, (), (), UfVert, (), (), true, false, false>
     where
         UfVert: Uniform,
     {
@@ -279,19 +279,19 @@ where
 }
 
 impl PipelineBuilder {
-    pub fn fragment<'a>(
+    pub fn fragment(
         self,
-        spirv: Cow<'a, [u8]>,
-    ) -> GPipelineBuilder<'a, (), (), (), (), (), false, false, true> {
+        spirv: Cow<[u8]>,
+    ) -> GPipelineBuilder<'_, (), (), (), (), (), false, false, true> {
         self.graphics_builder().fragment(spirv)
     }
 
-    pub fn fragment_uniform<'a, UfFrag>(
+    pub fn fragment_uniform<UfFrag>(
         self,
-        spirv: Cow<'a, [u8]>,
+        spirv: Cow<[u8]>,
         initial_uniform_data: UfFrag,
         binding: u32,
-    ) -> GPipelineBuilder<'a, (), (), (), (), UfFrag, false, false, true>
+    ) -> GPipelineBuilder<'_, (), (), (), (), UfFrag, false, false, true>
     where
         UfFrag: Uniform,
     {
@@ -350,19 +350,19 @@ where
 }
 
 impl PipelineBuilder {
-    pub fn geometry<'a>(
+    pub fn geometry(
         self,
-        spirv: Cow<'a, [u8]>,
-    ) -> GPipelineBuilder<'a, (), (), (), (), (), false, true, false> {
+        spirv: Cow<[u8]>,
+    ) -> GPipelineBuilder<'_, (), (), (), (), (), false, true, false> {
         self.graphics_builder().geometry(spirv)
     }
 
-    pub fn geometry_uniform<'a, UfGeom>(
+    pub fn geometry_uniform<UfGeom>(
         self,
-        spirv: Cow<'a, [u8]>,
+        spirv: Cow<[u8]>,
         initial_uniform_data: UfGeom,
         binding: u32,
-    ) -> GPipelineBuilder<'a, (), (), (), UfGeom, (), false, true, false>
+    ) -> GPipelineBuilder<'_, (), (), (), UfGeom, (), false, true, false>
     where
         UfGeom: Uniform,
     {

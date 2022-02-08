@@ -106,7 +106,7 @@ fn cube(
     }
 }
 
-pub fn generate_cubes(voxels: &Vec<f32>) -> (Vec<shader::VertexData>, Vec<u32>) {
+pub fn generate_cubes(voxels: &[f32]) -> (Vec<shader::VertexData>, Vec<u32>) {
     const VERT_PER_QUAD: usize = 4;
     const INDX_PER_QUAD: usize = 6;
 

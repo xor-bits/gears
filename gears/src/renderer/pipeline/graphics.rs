@@ -89,7 +89,7 @@ where
 {
     pub fn new(
         device: Dev,
-        render_pass: RenderPass,
+        render_pass: &RenderPass,
         set_count: usize,
         vert: Module<UfVert>,
         geom: Option<Module<UfGeom>>,
@@ -438,20 +438,18 @@ where
             ));
             target.count += 1;
         }
-        match geom {
-            Some(Module {
-                uniform: Some((_, binding)),
-                ..
-            }) => {
-                target.geom.0 = Some((
-                    (0..set_count)
-                        .map(|_| Ok(RwLock::new(UniformBuffer::new_single(device)?)))
-                        .collect::<Result<_, _>>()?,
-                    *binding,
-                ));
-                target.count += 1;
-            }
-            _ => {}
+        if let Some(Module {
+            uniform: Some((_, binding)),
+            ..
+        }) = geom
+        {
+            target.geom.0 = Some((
+                (0..set_count)
+                    .map(|_| Ok(RwLock::new(UniformBuffer::new_single(device)?)))
+                    .collect::<Result<_, _>>()?,
+                *binding,
+            ));
+            target.count += 1;
         }
         if let Some((_, binding)) = frag.uniform {
             target.frag.0 = Some((
@@ -520,7 +518,7 @@ where
         device: &Dev,
         ubos: &GraphicsPipelineUBOS<UfVert, UfGeom, UfFrag>,
     ) -> [vk::DescriptorSetLayout; 1] {
-        let bindings = Self::get_bindings(&ubos);
+        let bindings = Self::get_bindings(ubos);
 
         let desc_set_layout_info =
             vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings[..]);
@@ -565,7 +563,7 @@ where
     fn write_descriptor_sets_for_ubo<Uf>(
         device: &Dev,
         desc_sets: &[vk::DescriptorSet],
-        ubo: &Vec<RwLock<UniformBuffer<Uf>>>,
+        ubo: &[RwLock<UniformBuffer<Uf>>],
         binding: u32,
     ) where
         Uf: PartialEq,
@@ -619,6 +617,7 @@ where
     UfFrag: Uniform,
 {
     fn drop(&mut self) {
+        log::debug!("Dropping GraphicsPipeline");
         unsafe {
             self.device
                 .destroy_pipeline_layout(self.pipeline_layout, None);

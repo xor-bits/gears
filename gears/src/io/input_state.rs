@@ -29,15 +29,13 @@ impl InputState {
     }
 
     pub fn update_key(&mut self, input: &KeyboardInput) {
-        input.virtual_keycode.map(|keycode| {
-            self.keymap.insert(
+        if let Some(keycode) = input.virtual_keycode { self.keymap.insert(
                 keycode,
                 match input.state {
                     ElementState::Pressed => true,
                     _ => false,
                 },
-            );
-        });
+            ); }
     }
 
     pub fn update(&mut self, event: &WindowEvent) {

@@ -104,16 +104,16 @@ const ISLAND: bool = true;
 
 enum MeshMode {
     Cubes,
-    MarchingCubes,
-    SMarchingCubes,
+    Marching,
+    SMarching,
 }
 
 impl MeshMode {
-    fn gen_mesh(&self, voxels: &Vec<f32>) -> (Vec<shader::VertexData>, Vec<u32>) {
+    fn gen_mesh(&self, voxels: &[f32]) -> (Vec<shader::VertexData>, Vec<u32>) {
         match &self {
             MeshMode::Cubes => generate_cubes(voxels),
-            MeshMode::MarchingCubes => generate_marching_cubes(voxels, false),
-            MeshMode::SMarchingCubes => generate_marching_cubes(voxels, true),
+            MeshMode::Marching => generate_marching_cubes(voxels, false),
+            MeshMode::SMarching => generate_marching_cubes(voxels, true),
         }
     }
 }
@@ -212,7 +212,7 @@ impl App {
 
             debug: AtomicBool::new(false),
             voxels,
-            mesh: RwLock::new(MeshMode::MarchingCubes),
+            mesh: RwLock::new(MeshMode::Marching),
 
             update_rate: UpdateRate::PerSecond(UPDATES_PER_SECOND).to_interval(),
             delta_time: RwLock::new(Instant::now()),
@@ -299,6 +299,10 @@ impl EventLoopTarget for App {
         self.input.write().update(event);
         if let WindowEvent::KeyboardInput { input, .. } = event {
             match (input.virtual_keycode, input.state) {
+                (Some(VirtualKeyCode::Escape), ElementState::Pressed) => {
+                    self.renderer.request_rerecord();
+                    self.debug.fetch_xor(true, Ordering::SeqCst); // xor a, 1 == !a
+                }
                 (Some(VirtualKeyCode::Tab), ElementState::Pressed) => {
                     self.renderer.request_rerecord();
                     self.debug.fetch_xor(true, Ordering::SeqCst); // xor a, 1 == !a
@@ -317,13 +321,13 @@ impl EventLoopTarget for App {
                 }
                 (Some(VirtualKeyCode::N), ElementState::Pressed) => {
                     let tp = Instant::now();
-                    *self.mesh.write() = MeshMode::MarchingCubes;
+                    *self.mesh.write() = MeshMode::Marching;
                     self.re_mesh();
                     println!("Re-mesh took: {}ms", tp.elapsed().as_millis());
                 }
                 (Some(VirtualKeyCode::M), ElementState::Pressed) => {
                     let tp = Instant::now();
-                    *self.mesh.write() = MeshMode::SMarchingCubes;
+                    *self.mesh.write() = MeshMode::SMarching;
                     self.re_mesh();
                     println!("Re-mesh took: {}ms", tp.elapsed().as_millis());
                 }
@@ -399,6 +403,12 @@ impl UpdateLoopTarget for App {
     }
 }
 
+impl Drop for App {
+    fn drop(&mut self) {
+        log::debug!("Dropping App");
+    }
+}
+
 fn main() {
     env_logger::init();
 
@@ -418,6 +428,7 @@ fn main() {
         .unwrap();
 
     let app = App::init(frame, renderer);
+    println!("{} {}", Arc::strong_count(&app), Arc::weak_count(&app));
 
     let frame_loop = FrameLoop::new()
         .with_event_loop(event_loop)
@@ -430,6 +441,6 @@ fn main() {
         .with_target(app)
         .build();
 
-    update_loop.run();
-    frame_loop.run();
+    let stopper = update_loop.run();
+    frame_loop.run(|| stopper.stop());
 }
