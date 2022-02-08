@@ -122,19 +122,19 @@ impl PerfQuery {
         }
         .or(Err(PerfQueryError::WaitError))?;
 
-        let pipeline_begin = data[0 as usize];
-        let pipeline_end = data[5 as usize];
+        let pipeline_begin = data[0];
+        let pipeline_end = data[5];
 
-        let vertex_begin = data[1 as usize];
-        let vertex_end = data[2 as usize];
+        let vertex_begin = data[1];
+        let vertex_end = data[2];
 
-        let fragment_begin = data[3 as usize];
-        let fragment_end = data[4 as usize];
+        let fragment_begin = data[3];
+        let fragment_end = data[4];
 
         Ok(PerfQueryResult {
-            whole_pipeline: Duration::from_nanos(pipeline_end - pipeline_begin),
-            vertex: Duration::from_nanos(vertex_end - vertex_begin),
-            fragment: Duration::from_nanos(fragment_end - fragment_begin),
+            whole_pipeline: Duration::from_nanos(pipeline_end.saturating_sub(pipeline_begin)),
+            vertex: Duration::from_nanos(vertex_end.saturating_sub(vertex_begin)),
+            fragment: Duration::from_nanos(fragment_end.saturating_sub(fragment_begin)),
         })
     }
 
