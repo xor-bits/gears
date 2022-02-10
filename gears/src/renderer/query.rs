@@ -71,6 +71,7 @@ impl PerfQuery {
 
 impl<L, P> RecordPerf for AutoCommandBufferBuilder<L, P> {
     fn reset_perf(&mut self, perf: &PerfQuery) -> &'_ mut Self {
+        // TODO: get rid of this unsafe
         unsafe {
             self.reset_query_pool(perf.query_pool.clone(), 0..2)
                 .unwrap();
@@ -79,6 +80,7 @@ impl<L, P> RecordPerf for AutoCommandBufferBuilder<L, P> {
     }
 
     fn begin_perf(&mut self, perf: &PerfQuery) -> &'_ mut Self {
+        // TODO: get rid of this unsafe
         unsafe {
             self.write_timestamp(perf.query_pool.clone(), 0, PipelineStage::TopOfPipe)
                 .unwrap();
@@ -87,6 +89,7 @@ impl<L, P> RecordPerf for AutoCommandBufferBuilder<L, P> {
     }
 
     fn end_perf(&mut self, perf: &PerfQuery) -> &'_ mut Self {
+        // TODO: get rid of this unsafe
         unsafe {
             self.write_timestamp(perf.query_pool.clone(), 1, PipelineStage::BottomOfPipe)
                 .unwrap();
