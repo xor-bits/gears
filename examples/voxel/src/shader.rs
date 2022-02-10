@@ -1,6 +1,5 @@
-use std::sync::Arc;
-
 use gears::{gears_pipeline::Input, glam::Mat4, renderer::simple_renderer::Renderer};
+use std::sync::Arc;
 use vulkano::{
     buffer::CpuBufferPool,
     descriptor_set::pool::StdDescriptorPool,
@@ -38,12 +37,12 @@ mod vert {
     }
 }
 
-/* mod geom {
+mod geom {
     vulkano_shaders::shader! {
         ty: "geometry",
         path: "voxel/res/default.geom.glsl"
     }
-} */
+}
 
 mod frag {
     vulkano_shaders::shader! {
@@ -112,7 +111,7 @@ pub struct DebugPipeline {
 impl DebugPipeline {
     pub fn build(renderer: &Renderer) -> Self {
         let vert = vert::load(renderer.device.logical().clone()).unwrap();
-        // let geom = geom::
+        let geom = geom::load(renderer.device.logical().clone()).unwrap();
         let frag = debug_frag::load(renderer.device.logical().clone()).unwrap();
 
         let pipeline = GraphicsPipeline::start()
@@ -122,6 +121,8 @@ impl DebugPipeline {
             .vertex_input_state(BuffersDefinition::new().vertex::<VertexData>())
             .vertex_shader(vert.entry_point("main").unwrap(), ())
             .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
+            //
+            .geometry_shader(geom.entry_point("main").unwrap(), ())
             //
             .fragment_shader(frag.entry_point("main").unwrap(), ())
             .depth_stencil_state(DepthStencilState::simple_depth_test())
