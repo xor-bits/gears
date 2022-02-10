@@ -53,7 +53,7 @@ fn options(include_path: Option<PathBuf>, defines: &DefinesInput) -> shaderc::Co
     }
 
     for (define, val) in defines.iter() {
-        options.add_macro_definition(define, val.as_ref().map_or(None, |s| Some(s.as_str())));
+        options.add_macro_definition(define, val.as_ref().map(|s| s.as_str()));
     }
 
     options

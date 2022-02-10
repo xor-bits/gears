@@ -24,7 +24,7 @@ impl GPUScore {
             .memory_heaps()
             .filter_map(|heap| heap.is_device_local().then(|| heap))
             .map(|heap| heap.size())
-            .fold(0, |acc, memory| acc + memory);
+            .sum();
 
         Self { type_score, memory }
     }

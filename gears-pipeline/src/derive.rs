@@ -24,8 +24,7 @@ fn parse_ast(ast: DeriveInput) -> (Ident, Vec<Ident>) {
 pub fn impl_trait_input(ast: DeriveInput) -> TokenStream {
     let (name, token_fields) = parse_ast(ast);
 
-    (quote! {
+    quote! {
         gears::vulkano::impl_vertex! { #name, #( #token_fields ),*  }
-    })
-    .into()
+    }
 }

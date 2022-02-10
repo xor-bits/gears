@@ -17,7 +17,6 @@ syn = "~1.0"
 quote = "~1.0"
 shaderc = "~0.7"
 regex = "~1.5"
-glam = "~0.18"
 gears-spirv = { path = "../gears-spirv" }
 
 [dev-dependencies]

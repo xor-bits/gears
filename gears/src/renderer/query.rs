@@ -1,29 +1,12 @@
-use super::device::Dev;
-use std::{
-    ops::{Add, AddAssign},
-    time::Duration,
-};
+use super::{device::Dev, Recorder};
+use std::{sync::Arc, time::Duration};
 use vulkano::{
+    command_buffer::AutoCommandBufferBuilder,
     query::{GetResultsError, QueryPool, QueryResultFlags, QueryType},
     sync::PipelineStage,
 };
 
-const TIMESTAMP_STAGES: [PipelineStage; 6] = [
-    PipelineStage::BottomOfPipe,              // pipeline begin
-    PipelineStage::VertexShader,              // vertex begin
-    PipelineStage::TessellationControlShader, // vertex end
-    PipelineStage::FragmentShader,            // fragment begin
-    PipelineStage::ColorAttachmentOutput,     // fragment end
-    PipelineStage::TopOfPipe,                 // pipeline end
-];
-const TIMESTAMP_COUNT: u32 = TIMESTAMP_STAGES.len() as u32;
-
-pub struct PerfQueryResult {
-    pub whole_pipeline: Duration,
-
-    pub vertex: Duration,
-    pub fragment: Duration,
-}
+//
 
 #[derive(Debug)]
 pub enum PerfQueryError {
@@ -31,91 +14,83 @@ pub enum PerfQueryError {
 }
 
 pub struct PerfQuery {
-    query_pool: QueryPool,
+    query_pool: Arc<QueryPool>,
 }
 
-impl Default for PerfQueryResult {
-    fn default() -> Self {
-        Self {
-            whole_pipeline: Duration::from_secs(0),
-            vertex: Duration::from_secs(0),
-            fragment: Duration::from_secs(0),
-        }
-    }
+pub trait RecordPerf {
+    fn reset_perf(&mut self, perf: &PerfQuery) -> &'_ mut Self;
+    fn begin_perf(&mut self, perf: &PerfQuery) -> &'_ mut Self;
+    fn end_perf(&mut self, perf: &PerfQuery) -> &'_ mut Self;
 }
 
-impl AddAssign for PerfQueryResult {
-    fn add_assign(&mut self, rhs: Self) {
-        self.whole_pipeline += rhs.whole_pipeline;
-        self.vertex += rhs.vertex;
-        self.fragment += rhs.fragment;
-    }
-}
-
-impl Add for PerfQueryResult {
-    type Output = Self;
-
-    fn add(mut self, rhs: Self) -> Self::Output {
-        self += rhs;
-        self
-    }
-}
+//
 
 impl PerfQuery {
     pub fn new_with_device(device: &Dev) -> Self {
-        let query_pool = QueryPool::new(
-            device.logical().clone(),
-            QueryType::Timestamp,
-            TIMESTAMP_COUNT,
-        )
-        .expect("Could not create a query pool");
+        let query_pool = QueryPool::new(device.logical().clone(), QueryType::Timestamp, 2)
+            .expect("Could not create a query pool");
 
         Self { query_pool }
     }
 
-    pub fn get_with_flags(
-        &self,
-        flags: QueryResultFlags,
-    ) -> Result<PerfQueryResult, PerfQueryError> {
-        let mut data = [0u64; TIMESTAMP_STAGES.len()];
-
-        let got_data = self
-            .query_pool
-            .queries_range(0..TIMESTAMP_COUNT)
-            .unwrap()
-            .get_results(&mut data, flags)
-            .map_err(|err| PerfQueryError::GetResultsError(err))?;
-        assert!(got_data);
-
-        let pipeline_begin = data[0 as usize];
-        let pipeline_end = data[5 as usize];
-
-        let vertex_begin = data[1 as usize];
-        let vertex_end = data[2 as usize];
-
-        let fragment_begin = data[3 as usize];
-        let fragment_end = data[4 as usize];
-
-        Ok(PerfQueryResult {
-            whole_pipeline: Duration::from_nanos(pipeline_end - pipeline_begin),
-            vertex: Duration::from_nanos(vertex_end - vertex_begin),
-            fragment: Duration::from_nanos(fragment_end - fragment_begin),
-        })
+    pub fn reset(&self, recorder: &mut Recorder<false>) {
+        recorder.record().reset_perf(self);
     }
 
-    pub fn get(&mut self) -> Result<PerfQueryResult, PerfQueryError> {
-        self.get_with_flags(QueryResultFlags {
-            partial: false,
-            wait: false,
-            with_availability: false,
-        })
+    pub fn begin(&self, recorder: &mut Recorder<true>) {
+        recorder.record().begin_perf(self);
     }
 
-    /* pub fn get_wait(&mut self) -> Result<PerfQueryResult, PerfQueryError> {
-        self.get_with_flags(QueryResultFlags {
-            partial: false,
-            wait: true,
-            with_availability: false,
-        })
-    } */
+    pub fn end(&self, recorder: &mut Recorder<true>) {
+        recorder.record().end_perf(self);
+    }
+
+    pub fn get(&self) -> Option<Duration> {
+        let mut data = [0_u64; 2];
+        match self.query_pool.queries_range(0..2).unwrap().get_results(
+            &mut data,
+            QueryResultFlags {
+                wait: false,
+                with_availability: false,
+                partial: false,
+            },
+        ) {
+            Ok(true) => {}
+            Ok(false) => return None,
+            Err(err) => panic!("{}", err),
+        };
+
+        let pipeline_begin = data[0];
+        let pipeline_end = data[1];
+
+        Some(Duration::from_nanos(
+            pipeline_end.saturating_sub(pipeline_begin),
+        ))
+    }
+}
+
+impl<L, P> RecordPerf for AutoCommandBufferBuilder<L, P> {
+    fn reset_perf(&mut self, perf: &PerfQuery) -> &'_ mut Self {
+        unsafe {
+            self.reset_query_pool(perf.query_pool.clone(), 0..2)
+                .unwrap();
+        }
+        self
+    }
+
+    fn begin_perf(&mut self, perf: &PerfQuery) -> &'_ mut Self {
+        unsafe {
+            self.write_timestamp(perf.query_pool.clone(), 0, PipelineStage::TopOfPipe)
+                .unwrap();
+        }
+        self
+    }
+
+    fn end_perf(&mut self, perf: &PerfQuery) -> &'_ mut Self {
+        unsafe {
+            self.write_timestamp(perf.query_pool.clone(), 1, PipelineStage::BottomOfPipe)
+                .unwrap();
+        }
+        self
+    }
 }

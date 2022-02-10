@@ -1,6 +1,8 @@
+use super::{point_to_index, shader, DEPTH, HEIGHT, WIDTH};
+use crate::shader::VertexData;
 use gears::glam::Vec3;
 
-use super::{point_to_index, shader, DEPTH, HEIGHT, WIDTH};
+//
 
 enum Lighting {
     Top,
@@ -29,7 +31,7 @@ fn quad(
     sz: u8,
     inv: bool,
     light: Lighting,
-    vertices: &mut Vec<shader::VertexData>,
+    vertices: &mut Vec<VertexData>,
 ) {
     let (al, bl, ar, br) = if inv { (0, 1, 1, 0) } else { (1, 0, 1, 0) };
 
@@ -40,37 +42,41 @@ fn quad(
     let varying_az = if sz == 1 { 1 } else { 0 };
     let varying_bz = if sz == 2 { 1 } else { 0 };
 
-    vertices.push(shader::VertexData {
-        position: Vec3::new(
+    vertices.push(VertexData {
+        vi_pos: Vec3::new(
             (x + al * varying_ax + ar * varying_bx) as f32,
             (y + al * varying_ay + ar * varying_by) as f32,
             (z + al * varying_az + ar * varying_bz) as f32,
-        ),
-        exposure: light.to_exposure(),
+        )
+        .to_array(),
+        vi_exp: light.to_exposure(),
     });
-    vertices.push(shader::VertexData {
-        position: Vec3::new(
+    vertices.push(VertexData {
+        vi_pos: Vec3::new(
             (x + al * varying_ax + br * varying_bx) as f32,
             (y + al * varying_ay + br * varying_by) as f32,
             (z + al * varying_az + br * varying_bz) as f32,
-        ),
-        exposure: light.to_exposure(),
+        )
+        .to_array(),
+        vi_exp: light.to_exposure(),
     });
-    vertices.push(shader::VertexData {
-        position: Vec3::new(
+    vertices.push(VertexData {
+        vi_pos: Vec3::new(
             (x + bl * varying_ax + br * varying_bx) as f32,
             (y + bl * varying_ay + br * varying_by) as f32,
             (z + bl * varying_az + br * varying_bz) as f32,
-        ),
-        exposure: light.to_exposure(),
+        )
+        .to_array(),
+        vi_exp: light.to_exposure(),
     });
     vertices.push(shader::VertexData {
-        position: Vec3::new(
+        vi_pos: Vec3::new(
             (x + bl * varying_ax + ar * varying_bx) as f32,
             (y + bl * varying_ay + ar * varying_by) as f32,
             (z + bl * varying_az + ar * varying_bz) as f32,
-        ),
-        exposure: light.to_exposure(),
+        )
+        .to_array(),
+        vi_exp: light.to_exposure(),
     });
 }
 
@@ -106,7 +112,7 @@ fn cube(
     }
 }
 
-pub fn generate_cubes(voxels: &Vec<f32>) -> (Vec<shader::VertexData>, Vec<u32>) {
+pub fn generate_cubes(voxels: &[f32]) -> (Vec<shader::VertexData>, Vec<u32>) {
     const VERT_PER_QUAD: usize = 4;
     const INDX_PER_QUAD: usize = 6;
 

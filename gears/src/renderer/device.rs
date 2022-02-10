@@ -1,54 +1,30 @@
-use super::{
-    queue::{QueueFamilies, Queues},
-    target::window::WindowTargetBuilder,
-};
-use crate::context::{
-    gpu::{any::AnyGPU, suitable::SuitableGPU},
-    Context, ContextError,
+use super::queue::{QueueFamilies, Queues};
+use crate::{
+    context::{gpu::any::AnyGPU, Context, ContextError},
+    frame::Frame,
 };
 use std::sync::Arc;
-use vulkano::{
-    device::{
-        physical::{MemoryType, PhysicalDevice},
-        Device, DeviceExtensions, Features,
-    },
-    instance::{debug::DebugCallback, Instance},
-    swapchain::Surface,
+use vulkano::device::{
+    physical::{MemoryType, PhysicalDevice},
+    Device, DeviceExtensions, Features,
 };
-use winit::window::Window;
 
-pub struct ReducedContext {
-    pub debugger: Option<DebugCallback>,
-    pub p_device: SuitableGPU,
-    pub instance: Arc<Instance>,
-    surface: Arc<Surface<Arc<Window>>>,
-}
-
-impl ReducedContext {
-    pub fn new(context: Context) -> (ReducedContext, WindowTargetBuilder) {
-        (
-            ReducedContext {
-                debugger: context.debugger,
-                p_device: context.p_device,
-                instance: context.instance,
-                surface: context.target.surface.clone(),
-            },
-            context.target,
-        )
-    }
-}
+//
 
 pub struct RenderDevice {
-    _debugger: Option<DebugCallback>,
+    context: Context,
 
     device: Arc<Device>,
     p_device: usize,
 
     pub queues: Queues,
-    pub instance: Arc<Instance>,
 }
 
+//
+
 pub type Dev = Arc<RenderDevice>;
+
+//
 
 impl RenderDevice {
     pub fn logical(&self) -> &'_ Arc<Device> {
@@ -56,7 +32,7 @@ impl RenderDevice {
     }
 
     pub fn physical(&self) -> PhysicalDevice<'_> {
-        PhysicalDevice::from_index(&self.instance, self.p_device).unwrap()
+        PhysicalDevice::from_index(&self.context.instance, self.p_device).unwrap()
     }
 
     pub fn memory_types(&self) -> impl ExactSizeIterator<Item = MemoryType<'_>> {
@@ -66,12 +42,15 @@ impl RenderDevice {
     fn device_extensions(p_device: PhysicalDevice) -> DeviceExtensions {
         DeviceExtensions {
             khr_swapchain: true,
-            ..p_device.required_extensions().clone()
+            ..*p_device.required_extensions()
         }
     }
 
-    pub fn from_context(context: ReducedContext) -> Result<Dev, ContextError> {
-        let p_device = context.p_device.device();
+    pub fn from_frame(frame: &Frame) -> Result<Dev, ContextError> {
+        let context = frame.context();
+        let gpu = frame.gpu();
+        let p_device = gpu.device();
+        let surface = frame.surface();
 
         // device extensions
 
@@ -79,7 +58,7 @@ impl RenderDevice {
 
         // queue infos
 
-        let queue_families = QueueFamilies::new(&context.surface, p_device)?
+        let queue_families = QueueFamilies::new(&surface, p_device)?
             .expect("Selected physical device was not suitable");
         let queue_create_infos = queue_families.get();
 
@@ -94,20 +73,25 @@ impl RenderDevice {
 
         let (device, queues) =
             Device::new(p_device, &features, &device_extensions, queue_create_infos)
-                .map_err(|err| ContextError::DeviceCreationError(err))?;
+                .map_err(ContextError::DeviceCreationError)?;
 
         // queues
 
         let queues = queue_families.get_queues(queues);
 
         Ok(Arc::new(Self {
-            _debugger: context.debugger,
+            context,
 
             device,
             p_device: p_device.index(),
 
             queues,
-            instance: context.instance,
         }))
+    }
+}
+
+impl Drop for RenderDevice {
+    fn drop(&mut self) {
+        log::debug!("Dropping RenderDevice");
     }
 }

@@ -1,9 +1,6 @@
 use vulkano::device::physical::PhysicalDevice;
 
-use super::{
-    score::GPUScore, suitable::SuitableGPU,
-    unsuitable::UnsuitableGPU,
-};
+use super::{score::GPUScore, suitable::SuitableGPU, unsuitable::UnsuitableGPU};
 
 pub trait AnyGPU {
     fn score(&self) -> &'_ GPUScore;

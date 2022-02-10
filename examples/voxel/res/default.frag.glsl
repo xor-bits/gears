@@ -1,17 +1,17 @@
 #version 420
 
-layout(location = 0) in float in_exposure;
+layout(location = 0) in float fi_exp;
 
-layout(location = 0) out vec4 out_col;
+layout(location = 0) out vec4 color;
 
 
 
 void main() {
 	vec3 c = 
 #if defined(DEBUGGING)
-		vec3(in_exposure, in_exposure * 0.5, 0.0);
+		vec3(fi_exp, fi_exp * 0.5, 0.0);
 #else
-		vec3(in_exposure);
+		vec3(fi_exp);
 #endif
-	out_col = vec4(c, 1.0);
+	color = vec4(c, 1.0);
 }

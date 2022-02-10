@@ -21,7 +21,7 @@ pub mod unsuitable;
 impl SuitableGPU {
     pub fn pick(
         instance: &Arc<Instance>,
-        surface: &Arc<Surface<Arc<Window>>>,
+        surface: &Arc<Surface<Window>>,
         pick: ContextGPUPick,
     ) -> Result<Self, ContextError> {
         let p_devices = PhysicalDevice::enumerate(instance)
@@ -48,10 +48,7 @@ impl SuitableGPU {
         Self::pick_best(&p_devices, pick)
     }
 
-    fn list<'a>(
-        p_devices: impl Iterator<Item = &'a dyn AnyGPU>,
-        ignore_invalid: bool,
-    ) -> String {
+    fn list<'a>(p_devices: impl Iterator<Item = &'a dyn AnyGPU>, ignore_invalid: bool) -> String {
         let mut buf = String::new();
         for (i, p_device) in p_devices
             .filter(|p_device| {
@@ -85,7 +82,7 @@ impl SuitableGPU {
     }
 
     fn pick_best(
-        p_devices: &Vec<GPUPicker>,
+        p_devices: &[GPUPicker],
         pick: ContextGPUPick,
     ) -> Result<SuitableGPU, ContextError> {
         let mut suitable = p_devices
@@ -98,7 +95,7 @@ impl SuitableGPU {
         let all_iter = p_devices.iter().map(|d| d as &dyn AnyGPU);
         let suitable_iter = suitable.iter().map(|d| d as &dyn AnyGPU);
 
-        let p_device = if suitable.len() == 0 {
+        let p_device = if suitable.is_empty() {
             None
         } else if suitable.len() == 1 {
             if pick == ContextGPUPick::Manual {

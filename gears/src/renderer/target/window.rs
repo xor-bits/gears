@@ -1,19 +1,17 @@
+use crate::{context::ContextError, renderer::device::Dev, SyncMode};
 use std::sync::Arc;
-
 use vulkano::{
     format::Format,
     image::{ImageUsage, SwapchainImage},
-    instance::Instance,
     swapchain::{
         acquire_next_image, Capabilities, ColorSpace, CompositeAlpha, PresentMode, Surface,
         SurfaceTransform, Swapchain, SwapchainAcquireFuture,
     },
     sync::SharingMode,
 };
-use vulkano_win::create_vk_surface;
 use winit::window::Window;
 
-use crate::{context::ContextError, renderer::device::Dev, SyncMode};
+//
 
 pub struct SwapchainInfo {
     format: (Format, ColorSpace),
@@ -26,15 +24,18 @@ pub struct SwapchainInfo {
 
 pub struct WindowTargetBuilder {
     pub extent: [u32; 2],
-    pub surface: Arc<Surface<Arc<Window>>>,
+    pub surface: Arc<Surface<Window>>,
 }
 
-impl WindowTargetBuilder {
-    pub fn new(window: Arc<Window>, instance: Arc<Instance>) -> Result<Self, ContextError> {
-        let size = window.inner_size();
-        let surface = create_vk_surface(window, instance)
-            .map_err(|err| ContextError::SurfaceCreationError(err))?;
+//
 
+pub type SwapchainImages = Vec<Arc<SwapchainImage<Window>>>;
+
+//
+
+impl WindowTargetBuilder {
+    pub fn new(surface: Arc<Surface<Window>>) -> Result<Self, ContextError> {
+        let size = surface.window().inner_size();
         Ok(Self {
             extent: [size.width, size.height],
             surface,
@@ -45,7 +46,7 @@ impl WindowTargetBuilder {
         mut self,
         device: &Dev,
         sync: SyncMode,
-    ) -> Result<(WindowTarget, Vec<Arc<SwapchainImage<Arc<Window>>>>), ContextError> {
+    ) -> Result<(WindowTarget, SwapchainImages), ContextError> {
         let info = self.swapchain_info(device, sync)?;
 
         let sharing = if device.queues.present == device.queues.graphics {
@@ -67,7 +68,7 @@ impl WindowTargetBuilder {
             .clipped(true)
             .layers(1)
             .build()
-            .map_err(|err| ContextError::SwapchainCreationError(err))?;
+            .map_err(ContextError::SwapchainCreationError)?;
 
         Ok((
             WindowTarget {
@@ -99,7 +100,7 @@ impl WindowTargetBuilder {
     fn capabilities(&self, device: &Dev) -> Result<Capabilities, ContextError> {
         self.surface
             .capabilities(device.physical())
-            .map_err(|err| ContextError::CapabilitiesError(err))
+            .map_err(ContextError::CapabilitiesError)
     }
 
     fn pick_format(
@@ -110,10 +111,10 @@ impl WindowTargetBuilder {
             .supported_formats
             .iter()
             .find(|(format, color_space)| {
-                format == &Format::R8G8B8A8Srgb && color_space == &ColorSpace::SrgbNonLinear
+                format == &Format::R8G8B8A8_SRGB && color_space == &ColorSpace::SrgbNonLinear
             })
             .unwrap_or(&surface_caps.supported_formats[0]);
-        let format = format.clone();
+        let format = *format;
 
         log::debug!(
             "Surface format chosen: {:?} from {:?}",
@@ -172,7 +173,7 @@ impl WindowTargetBuilder {
             }
         };
 
-        self.extent.clone()
+        self.extent
     }
 
     fn swapchain_transform(&self, surface_caps: &Capabilities) -> SurfaceTransform {
@@ -195,13 +196,14 @@ impl WindowTargetBuilder {
 pub struct WindowTarget {
     pub base: WindowTargetBuilder,
     pub format: (Format, ColorSpace),
-    pub swapchain: Arc<Swapchain<Arc<Window>>>,
+    pub swapchain: Arc<Swapchain<Window>>,
 }
 
 impl WindowTarget {
-    pub fn acquire_image(&self) -> Option<(usize, SwapchainAcquireFuture<Arc<Window>>)> {
+    pub fn acquire_image(&self) -> Option<(usize, SwapchainAcquireFuture<Window>)> {
         match acquire_next_image(self.swapchain.clone(), None) {
-            Ok((image_index, _, future)) => Some((image_index, future)),
+            Ok((image_index, false, future)) => Some((image_index, future)),
+            Ok((_, true, _)) => None,
             Err(_) => None,
         }
     }
@@ -211,13 +213,14 @@ impl WindowTarget {
         Ok(self.base.swapchain_extent(&surface_caps))
     }
 
-    pub fn recreate(&mut self) -> Result<Vec<Arc<SwapchainImage<Arc<Window>>>>, ContextError> {
+    pub fn recreate(&mut self) -> Result<SwapchainImages, ContextError> {
         let (swapchain, images) = self
             .swapchain
             .recreate()
             .build()
-            .map_err(|err| ContextError::SwapchainCreationError(err))?;
+            .map_err(ContextError::SwapchainCreationError)?;
 
+        self.base.extent = swapchain.dimensions();
         self.swapchain = swapchain;
         Ok(images)
     }

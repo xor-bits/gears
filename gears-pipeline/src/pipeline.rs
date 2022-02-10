@@ -2,11 +2,10 @@ use gears_spirv::parse::name_to_kind;
 use proc_macro2::{Ident, TokenStream, TokenTree};
 use quote::quote;
 use shaderc::ShaderKind;
-use std::{collections::HashMap};
-use syn::{Error, LitInt, LitStr, Token, parse::Parse, parse_macro_input};
+use std::collections::{hash_map::Entry, HashMap};
+use syn::{parse::Parse, parse_macro_input, Error, LitInt, LitStr, Token};
 
 struct PipelineIO {
-	
     in_struct: TokenTree,
     _arrow: Token![->],
     out_struct: TokenTree,
@@ -15,7 +14,7 @@ struct PipelineIO {
 impl Parse for PipelineIO {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         Ok(Self {
-			in_struct: input.parse()?,
+            in_struct: input.parse()?,
             _arrow: input.parse()?,
             out_struct: input.parse()?,
         })
@@ -123,13 +122,13 @@ impl Parse for PipelineInput {
                     }
                     _ => {
                         let kind_id = kind as usize;
-                        if modules.contains_key(&kind_id) {
+                        if let Entry::Vacant(e) = modules.entry(kind_id) {
+                            e.insert(module);
+                        } else {
                             return Err(Error::new(
                                 module.module_kind.span(),
                                 format!("Duplicate '{}' module", module.module_kind.value()),
                             ));
-                        } else {
-                            modules.insert(kind_id, module);
                         }
                     }
                 }
@@ -201,16 +200,28 @@ impl PipelineInput {
             Self::get_uniform_tokens(module),
             Self::get_uniform_assert_tokens(module, &module_name),
             module_name,
-			module.uniforms.as_ref().map(|u| u.in_module.in_binding.base10_digits().parse::<u32>().expect("Binding must be u32"))
+            module.uniforms.as_ref().map(|u| {
+                u.in_module
+                    .in_binding
+                    .base10_digits()
+                    .parse::<u32>()
+                    .expect("Binding must be u32")
+            }),
         )
     }
 
-    fn get_module2(module: Option<&PipelineModule>) -> (TokenStream, TokenStream, Option<(Ident, Option<u32>)>) {
+    fn get_module2(
+        module: Option<&PipelineModule>,
+    ) -> (TokenStream, TokenStream, Option<(Ident, Option<u32>)>) {
         match module {
             Some(module) => {
-				let get_module = Self::get_module(module);
-				(get_module.0, get_module.1, Some((get_module.2, get_module.3)))
-			},
+                let get_module = Self::get_module(module);
+                (
+                    get_module.0,
+                    get_module.1,
+                    Some((get_module.2, get_module.3)),
+                )
+            }
             None => (quote! {}, quote! {}, None),
         }
     }
@@ -220,67 +231,74 @@ impl PipelineInput {
         let input = self.input.in_struct;
         let output = self.input.out_struct;
 
-		let load_spirv = quote! {
-			::load_spirv()?
-		};
-		let wrap_err = quote! {
-			.map_err(|err| gears::renderer::pipeline::PipelineError::BufferError(err))?
-		};
+        let load_spirv = quote! {
+            ::load_spirv()?
+        };
+        let wrap_err = quote! {
+            .map_err(|err| gears::renderer::pipeline::PipelineError::BufferError(err))?
+        };
 
-		// mandatory modules
-        let (vert_uniform, vert_uniform_assert, vert, vert_uniform_binding) = Self::get_module(&self.vertex);
-        let (frag_uniform, frag_uniform_assert, frag, frag_uniform_binding) = Self::get_module(&self.fragment);
-		
-		let vert_call = if let Some(binding) = vert_uniform_binding {
-			quote! { .vertex_uniform(#vert #load_spirv, #vert_uniform::default(), #binding) }
-		} else {
-			quote! { .vertex(#vert #load_spirv) }
-		};
-		
-		let frag_call = if let Some(binding) = frag_uniform_binding {
-			quote! { .fragment_uniform(#frag #load_spirv, #frag_uniform::default(), #binding) }
-		} else {
-			quote! { .fragment(#frag #load_spirv) }
-		};
+        // mandatory modules
+        let (vert_uniform, vert_uniform_assert, vert, vert_uniform_binding) =
+            Self::get_module(&self.vertex);
+        let (frag_uniform, frag_uniform_assert, frag, frag_uniform_binding) =
+            Self::get_module(&self.fragment);
 
-		// optional modules
-        let (geom_uniform, geom_uniform_assert, geom) = Self::get_module2(self.modules.get(&(ShaderKind::Geometry as usize)));
+        let vert_call = if let Some(binding) = vert_uniform_binding {
+            quote! { .vertex_uniform(#vert #load_spirv, #vert_uniform::default(), #binding) }
+        } else {
+            quote! { .vertex(#vert #load_spirv) }
+        };
 
-		let geom_call = match &geom {
-			Some((geom, Some(binding))) => {
-				quote! { .geometry_uniform(#geom #load_spirv, #geom_uniform::default(), #binding) }
-			}
-			Some((geom, None)) => {
-				quote! { .geometry(#geom #load_spirv) }
-			}
-			None => quote! {}
-		};
-		
-		// type list
-		
-		let geom_uniform = if geom.is_some() {
-			quote! { #geom_uniform }
-		} else {
-			quote! { () }
-		};
+        let frag_call = if let Some(binding) = frag_uniform_binding {
+            quote! { .fragment_uniform(#frag #load_spirv, #frag_uniform::default(), #binding) }
+        } else {
+            quote! { .fragment(#frag #load_spirv) }
+        };
 
-		// pipeline stage asserts
+        // optional modules
+        let (geom_uniform, geom_uniform_assert, geom) =
+            Self::get_module2(self.modules.get(&(ShaderKind::Geometry as usize)));
 
-		let vert_stage = vert.clone();
-		let geom_stage = geom.as_ref().map(|(geom, _)| geom.clone());
-		let frag_stage = frag.clone();
-		let stages = [Some(vert_stage), geom_stage, Some(frag_stage)].iter().filter_map(|stage| stage.to_owned()).collect::<Vec<Ident>>();
+        let geom_call = match &geom {
+            Some((geom, Some(binding))) => {
+                quote! { .geometry_uniform(#geom #load_spirv, #geom_uniform::default(), #binding) }
+            }
+            Some((geom, None)) => {
+                quote! { .geometry(#geom #load_spirv) }
+            }
+            None => quote! {},
+        };
 
-		let mut stage_asserts = TokenStream::new();
-		for (l, r) in stages.iter().zip(stages.iter().skip(1)) {
-			stage_asserts = quote! {
-				#stage_asserts
-				gears::static_assertions::assert_type_eq_all!(#l::OUTPUT, #r::INPUT);
-			};
-		};
+        // type list
 
-		// type
-        let target_type_generics = quote! { #input, #output, #vert_uniform, #geom_uniform, #frag_uniform };
+        let geom_uniform = if geom.is_some() {
+            quote! { #geom_uniform }
+        } else {
+            quote! { () }
+        };
+
+        // pipeline stage asserts
+
+        let vert_stage = vert.clone();
+        let geom_stage = geom.as_ref().map(|(geom, _)| geom.clone());
+        let frag_stage = frag.clone();
+        let stages = [Some(vert_stage), geom_stage, Some(frag_stage)]
+            .iter()
+            .filter_map(|stage| stage.to_owned())
+            .collect::<Vec<Ident>>();
+
+        let mut stage_asserts = TokenStream::new();
+        for (l, r) in stages.iter().zip(stages.iter().skip(1)) {
+            stage_asserts = quote! {
+                #stage_asserts
+                gears::static_assertions::assert_type_eq_all!(#l::OUTPUT, #r::INPUT);
+            };
+        }
+
+        // type
+        let target_type_generics =
+            quote! { #input, #output, #vert_uniform, #geom_uniform, #frag_uniform };
         let target_type =
             quote! { gears::renderer::pipeline::GraphicsPipeline<#target_type_generics> };
 

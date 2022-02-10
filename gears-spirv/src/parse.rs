@@ -59,10 +59,10 @@ impl Parse for LayoutDef {
                 target.location = n0;
                 if let Ok((id1, n1)) = n1 {
                     if id1.to_string().as_str() != "binding" {
-                        Err(Error::new(
+                        return Err(Error::new(
                             Span::call_site(),
                             "Only one of location or binding is allowed",
-                        ))?
+                        ));
                     }
                     target.binding = n1;
                 }
@@ -71,18 +71,20 @@ impl Parse for LayoutDef {
                 target.binding = n0;
                 if let Ok((id1, n1)) = n1 {
                     if id1.to_string().as_str() != "location" {
-                        Err(Error::new(
+                        return Err(Error::new(
                             Span::call_site(),
                             "Only one of location or binding is allowed",
-                        ))?
+                        ));
                     }
                     target.location = n1;
                 }
             }
-            other => Err(Error::new(
-                Span::call_site(),
-                format!("Invalid layout attribute: '{}'", other),
-            ))?,
+            other => {
+                return Err(Error::new(
+                    Span::call_site(),
+                    format!("Invalid layout attribute: '{}'", other),
+                ))
+            }
         }
 
         Ok(target)
@@ -98,9 +100,8 @@ pub enum LayoutType {
 
 impl Parse for LayoutType {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        match input.parse::<Token![in]>() {
-            Ok(_) => return Ok(Self::In),
-            Err(_) => {}
+        if input.parse::<Token![in]>().is_ok() {
+            return Ok(Self::In);
         };
 
         let token = input.parse::<Ident>()?;
@@ -240,23 +241,23 @@ pub enum FieldType {
 
 impl FieldType {
     pub fn to_ident(&self) -> Ident {
-        match self {
-            &FieldType::Float => Ident::new("f32", Span::call_site()),
-            &FieldType::Double => Ident::new("f64", Span::call_site()),
-            &FieldType::Vec2 => Ident::new("Vec2", Span::call_site()),
-            &FieldType::Vec3 => Ident::new("Vec3", Span::call_site()),
-            &FieldType::Vec4 => Ident::new("Vec4", Span::call_site()),
-            &FieldType::DVec2 => Ident::new("DVec2", Span::call_site()),
-            &FieldType::DVec3 => Ident::new("DVec3", Span::call_site()),
-            &FieldType::DVec4 => Ident::new("DVec4", Span::call_site()),
-            &FieldType::Mat2 => Ident::new("Mat2", Span::call_site()),
-            &FieldType::Mat3 => Ident::new("Mat3", Span::call_site()),
-            &FieldType::Mat4 => Ident::new("Mat4", Span::call_site()),
-            &FieldType::DMat2 => Ident::new("DMat2", Span::call_site()),
-            &FieldType::DMat3 => Ident::new("DMat3", Span::call_site()),
-            &FieldType::DMat4 => Ident::new("DMat4", Span::call_site()),
-            &FieldType::Int => Ident::new("i32", Span::call_site()),
-            &FieldType::Uint => Ident::new("u32", Span::call_site()),
+        match *self {
+            FieldType::Float => Ident::new("f32", Span::call_site()),
+            FieldType::Double => Ident::new("f64", Span::call_site()),
+            FieldType::Vec2 => Ident::new("Vec2", Span::call_site()),
+            FieldType::Vec3 => Ident::new("Vec3", Span::call_site()),
+            FieldType::Vec4 => Ident::new("Vec4", Span::call_site()),
+            FieldType::DVec2 => Ident::new("DVec2", Span::call_site()),
+            FieldType::DVec3 => Ident::new("DVec3", Span::call_site()),
+            FieldType::DVec4 => Ident::new("DVec4", Span::call_site()),
+            FieldType::Mat2 => Ident::new("Mat2", Span::call_site()),
+            FieldType::Mat3 => Ident::new("Mat3", Span::call_site()),
+            FieldType::Mat4 => Ident::new("Mat4", Span::call_site()),
+            FieldType::DMat2 => Ident::new("DMat2", Span::call_site()),
+            FieldType::DMat3 => Ident::new("DMat3", Span::call_site()),
+            FieldType::DMat4 => Ident::new("DMat4", Span::call_site()),
+            FieldType::Int => Ident::new("i32", Span::call_site()),
+            FieldType::Uint => Ident::new("u32", Span::call_site()),
         }
     }
 }
@@ -291,23 +292,23 @@ impl Parse for FieldType {
 
 impl ToTokens for FieldType {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-        let res = match self {
-            &FieldType::Float => quote! { gears::gears_spirv::parse::FieldType::Float },
-            &FieldType::Double => quote! { gears::gears_spirv::parse::FieldType::Double },
-            &FieldType::Vec2 => quote! { gears::gears_spirv::parse::FieldType::Vec2 },
-            &FieldType::Vec3 => quote! { gears::gears_spirv::parse::FieldType::Vec3 },
-            &FieldType::Vec4 => quote! { gears::gears_spirv::parse::FieldType::Vec4 },
-            &FieldType::DVec2 => quote! { gears::gears_spirv::parse::FieldType::DVec2 },
-            &FieldType::DVec3 => quote! { gears::gears_spirv::parse::FieldType::DVec3 },
-            &FieldType::DVec4 => quote! { gears::gears_spirv::parse::FieldType::DVec4 },
-            &FieldType::Mat2 => quote! { gears::gears_spirv::parse::FieldType::Mat2 },
-            &FieldType::Mat3 => quote! { gears::gears_spirv::parse::FieldType::Mat3 },
-            &FieldType::Mat4 => quote! { gears::gears_spirv::parse::FieldType::Mat4 },
-            &FieldType::DMat2 => quote! { gears::gears_spirv::parse::FieldType::DMat2 },
-            &FieldType::DMat3 => quote! { gears::gears_spirv::parse::FieldType::DMat3 },
-            &FieldType::DMat4 => quote! { gears::gears_spirv::parse::FieldType::DMat4 },
-            &FieldType::Int => quote! { gears::gears_spirv::parse::FieldType::Int },
-            &FieldType::Uint => quote! { gears::gears_spirv::parse::FieldType::Uint },
+        let res = match *self {
+            FieldType::Float => quote! { gears::gears_spirv::parse::FieldType::Float },
+            FieldType::Double => quote! { gears::gears_spirv::parse::FieldType::Double },
+            FieldType::Vec2 => quote! { gears::gears_spirv::parse::FieldType::Vec2 },
+            FieldType::Vec3 => quote! { gears::gears_spirv::parse::FieldType::Vec3 },
+            FieldType::Vec4 => quote! { gears::gears_spirv::parse::FieldType::Vec4 },
+            FieldType::DVec2 => quote! { gears::gears_spirv::parse::FieldType::DVec2 },
+            FieldType::DVec3 => quote! { gears::gears_spirv::parse::FieldType::DVec3 },
+            FieldType::DVec4 => quote! { gears::gears_spirv::parse::FieldType::DVec4 },
+            FieldType::Mat2 => quote! { gears::gears_spirv::parse::FieldType::Mat2 },
+            FieldType::Mat3 => quote! { gears::gears_spirv::parse::FieldType::Mat3 },
+            FieldType::Mat4 => quote! { gears::gears_spirv::parse::FieldType::Mat4 },
+            FieldType::DMat2 => quote! { gears::gears_spirv::parse::FieldType::DMat2 },
+            FieldType::DMat3 => quote! { gears::gears_spirv::parse::FieldType::DMat3 },
+            FieldType::DMat4 => quote! { gears::gears_spirv::parse::FieldType::DMat4 },
+            FieldType::Int => quote! { gears::gears_spirv::parse::FieldType::Int },
+            FieldType::Uint => quote! { gears::gears_spirv::parse::FieldType::Uint },
         };
 
         tokens.extend(res);
@@ -348,7 +349,7 @@ pub fn get_layout(source: &str) -> SortedLayout {
         uniforms: Vec::new(),
     };
 
-    for m in io_layout_finder.find_iter(&source) {
+    for m in io_layout_finder.find_iter(source) {
         let f: IOLayoutField = syn::parse_str(m.as_str()).unwrap();
         match f.layout_type {
             LayoutType::In => layout.inputs.push((f.layout_def.location, f.data.ty)),
@@ -357,7 +358,7 @@ pub fn get_layout(source: &str) -> SortedLayout {
         };
     }
 
-    for m in uniform_layout_finder.find_iter(&source) {
+    for m in uniform_layout_finder.find_iter(source) {
         let f: UniformLayoutField = syn::parse_str(m.as_str()).unwrap();
         match f.layout_type {
             LayoutType::In => unreachable!(),

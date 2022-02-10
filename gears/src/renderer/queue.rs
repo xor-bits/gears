@@ -24,7 +24,7 @@ pub struct Queues {
 
 impl<'a> QueueFamilies<'a> {
     pub fn new(
-        surface: &Arc<Surface<Arc<Window>>>,
+        surface: &Arc<Surface<Window>>,
         p_device: PhysicalDevice<'a>,
     ) -> Result<Option<Self>, ContextError> {
         let mut present = None;
@@ -33,10 +33,10 @@ impl<'a> QueueFamilies<'a> {
 
         let queue_family_properties = p_device.queue_families();
 
-        for queue_family_property in queue_family_properties.into_iter() {
+        for queue_family_property in queue_family_properties {
             let present_support = surface
                 .is_supported(queue_family_property)
-                .map_err(|err| ContextError::CapabilitiesError(err))?;
+                .map_err(ContextError::CapabilitiesError)?;
 
             let graphics_support = queue_family_property.supports_graphics();
             /* let transfer_support = queue_family_property.explicitly_supports_transfers(); */

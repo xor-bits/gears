@@ -29,7 +29,7 @@ impl AnyGPU for UnsuitableGPU {
 
 impl Ord for UnsuitableGPU {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.score().cmp(&other.score())
+        self.score().cmp(other.score())
     }
 }
 

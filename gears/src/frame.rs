@@ -1,120 +1,111 @@
-use std::{env, sync::Arc};
-
+use crate::{
+    context::{gpu::suitable::SuitableGPU, Context, ContextError, ContextGPUPick},
+    game_loop::{Event, Loop},
+    ExpectLog, SyncMode,
+};
+use std::{sync::Arc, time::Instant};
+use vulkano::swapchain::Surface;
+use vulkano_win::VkSurfaceBuild;
 use winit::{
-    dpi::{LogicalSize, PhysicalSize},
-    event::WindowEvent,
+    dpi::LogicalSize,
+    event::{Event as WinitEvent, WindowEvent},
     event_loop::EventLoop,
     window::{Window, WindowBuilder},
 };
 
-use crate::{
-    context::{Context, ContextError, ContextGPUPick, ContextValidation},
-    ExpectLog,
-};
-
 pub struct Frame {
-    window: Arc<Window>,
+    context: Context,
+    window: Arc<Surface<Window>>,
+    p_device: Arc<SuitableGPU>,
+    sync: SyncMode,
+
     size: (u32, u32),
     aspect: f32,
+
+    event_loop: Option<EventLoop<()>>,
+    init_timer: Instant,
 }
 
 pub struct FrameBuilder<'a> {
+    context: Context,
     title: &'a str,
     size: (u32, u32),
     min_size: (u32, u32),
     max_size: Option<(u32, u32)>,
+    sync: SyncMode,
 }
 
 impl Frame {
-    pub const fn new() -> FrameBuilder<'static> {
+    pub fn builder<'a>(context: Context) -> FrameBuilder<'a> {
         FrameBuilder {
+            context,
             title: "Gears",
             size: (600, 600),
             min_size: (32, 32),
             max_size: None,
+            sync: SyncMode::Mailbox,
         }
     }
 
-    ///
-    pub fn default_context(&self) -> Result<Context, ContextError> {
-        Context::new(
+    pub fn game_loop(&mut self) -> Option<Loop> {
+        Some(Loop::new(
             self.window.clone(),
-            ContextGPUPick::default(),
-            ContextValidation::default(),
-        )
+            self.event_loop.take()?,
+            self.init_timer,
+        ))
     }
 
-    /// Environment value `GEARS_GPU_PICK` overrides the `pick` argument if present.
-    /// Possible values: `auto`, `pick`
-    ///
-    /// Environment value `GEARS_VALIDATION` overrides the `valid` argument if present.
-    /// Possible values: `none`, `full`
-    pub fn context(
-        &self,
-        pick: ContextGPUPick,
-        valid: ContextValidation,
-    ) -> Result<Context, ContextError> {
-        let pick = env::var("GEARS_GPU_PICK").map_or(pick, |value| {
-            let valid = match value.to_lowercase().as_str() {
-                "auto" => ContextGPUPick::Automatic,
-                "pick" => ContextGPUPick::Manual,
-                other => {
-                    log::warn!("Ignored invalid value: {}", other);
-                    pick
-                }
-            };
-
-            log::info!("Using override ContextGPUPick: {:?}", valid);
-            valid
-        });
-
-        let valid = env::var("GEARS_VALIDATION").map_or(valid, |value| {
-            let valid = match value.to_lowercase().as_str() {
-                "full" => ContextValidation::WithValidation,
-                "none" => ContextValidation::NoValidation,
-                other => {
-                    log::warn!("Ignored invalid value: {}", other);
-                    return valid;
-                }
-            };
-
-            log::info!("Using override ContextValidation: {:?}", valid);
-            valid
-        });
-
-        Context::new(self.window.clone(), pick, valid)
-    }
-
+    /// Won't update unless events are sent to the surface as well
     pub const fn size(&self) -> (u32, u32) {
         self.size
     }
 
+    /// Won't update unless events are sent to the surface as well
     pub const fn aspect(&self) -> f32 {
         self.aspect
     }
 
+    pub const fn sync(&self) -> SyncMode {
+        self.sync
+    }
+
     pub fn scale(&self) -> f64 {
-        self.window.scale_factor()
+        self.window.window().scale_factor()
     }
 
-    pub const fn window(&self) -> &Arc<Window> {
-        &self.window
+    pub fn window(&self) -> &Window {
+        self.window.window()
     }
 
-    pub fn event(&mut self, event: &WindowEvent) {
-        match event {
-            WindowEvent::Resized(size) => {
-                let (size, aspect) =
-                    Self::calc_size_and_aspect(size.clone(), self.window.scale_factor());
+    pub fn surface(&self) -> Arc<Surface<Window>> {
+        self.window.clone()
+    }
 
-                self.size = size;
-                self.aspect = aspect;
-            }
-            _ => {}
+    pub fn gpu(&self) -> Arc<SuitableGPU> {
+        self.p_device.clone()
+    }
+
+    pub fn context(&self) -> Context {
+        self.context.clone()
+    }
+
+    pub fn event(&mut self, event: &Event) {
+        if let Event::WinitEvent(WinitEvent::WindowEvent {
+            event: WindowEvent::Resized(_),
+            ..
+        }) = event
+        {
+            let (size, aspect) = Self::calc_size_and_aspect(self.window());
+
+            self.size = size;
+            self.aspect = aspect;
         }
     }
 
-    fn calc_size_and_aspect(size: PhysicalSize<u32>, scale: f64) -> ((u32, u32), f32) {
+    fn calc_size_and_aspect(window: &Window) -> ((u32, u32), f32) {
+        let size = window.inner_size();
+        let scale = window.scale_factor();
+
         let size = lsize_to_tuple(size.to_logical(scale));
         let mut aspect = (size.0 as f32) / (size.1 as f32);
         aspect = if !aspect.is_finite() { 1.0 } else { aspect };
@@ -144,37 +135,62 @@ impl<'a> FrameBuilder<'a> {
         self
     }
 
-    pub fn build(self) -> (Frame, EventLoop<()>) {
+    /// No sync, Fifo or Mailbox
+    pub const fn with_sync(mut self, sync: SyncMode) -> Self {
+        self.sync = sync;
+        self
+    }
+
+    pub fn build(self) -> Result<Frame, ContextError> {
+        let FrameBuilder {
+            context,
+            title,
+            size,
+            min_size,
+            max_size,
+            sync,
+        } = self;
+
         // events loop
         let event_loop = EventLoop::new();
 
         // window info
         let mut window_builder = WindowBuilder::new()
-            .with_min_inner_size(tuple_to_lsize(self.min_size))
-            .with_inner_size(tuple_to_lsize(self.size));
-        if let Some(max_size) = self.max_size {
+            .with_min_inner_size(tuple_to_lsize(min_size))
+            .with_inner_size(tuple_to_lsize(size))
+            .with_title(title)
+            .with_visible(false);
+        if let Some(max_size) = max_size {
             window_builder = window_builder.with_max_inner_size(tuple_to_lsize(max_size));
         }
 
         // window itself
-        let window = Arc::new(
-            window_builder
-                .with_title(self.title)
-                .build(&event_loop)
-                .expect_log("Window creation failed"),
-        );
+        let window = window_builder
+            .build_vk_surface(&event_loop, context.instance.clone())
+            .expect_log("Window creation failed");
 
-        let (size, aspect) =
-            Frame::calc_size_and_aspect(window.inner_size(), window.scale_factor());
+        let (size, aspect) = Frame::calc_size_and_aspect(window.window());
 
-        (
-            Frame {
-                window,
-                size,
-                aspect,
-            },
-            event_loop,
-        )
+        // physical device
+
+        let p_device = Arc::new(SuitableGPU::pick(
+            &context.instance,
+            &window,
+            ContextGPUPick::default(),
+        )?);
+
+        Ok(Frame {
+            context,
+            window,
+            p_device,
+            sync,
+
+            size,
+            aspect,
+
+            event_loop: Some(event_loop),
+            init_timer: Instant::now(),
+        })
     }
 }
 

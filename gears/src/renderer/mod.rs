@@ -1,3 +1,12 @@
+use glam::Vec4;
+use std::{
+    ops::{Deref, DerefMut},
+    time::Duration,
+};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
+
+//
+
 pub mod buffer;
 pub mod device;
 pub mod object;
@@ -7,26 +16,11 @@ pub mod queue;
 pub mod simple_renderer;
 pub mod target;
 
-use self::query::PerfQueryResult;
-use glam::Vec4;
-use std::{
-    ops::{Deref, DerefMut},
-    time::Duration,
-};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
+//
 
+#[derive(Debug, Default)]
 pub struct FramePerfReport {
-    pub cpu_frame_time: Duration,
-    pub gpu_frame_time: PerfQueryResult,
-}
-
-impl Default for FramePerfReport {
-    fn default() -> Self {
-        Self {
-            cpu_frame_time: Duration::from_secs(0),
-            gpu_frame_time: PerfQueryResult::default(),
-        }
-    }
+    pub gpu_frame_time: Duration,
 }
 
 pub type BeginInfoRecorder<'a> = (
@@ -133,7 +127,7 @@ impl Recorder<true> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ClearColor(Vec4);
+pub struct ClearColor(pub Vec4);
 
 impl ClearColor {
     fn c(&self) -> [f32; 4] {

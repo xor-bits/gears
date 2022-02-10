@@ -1,5 +1,4 @@
-use self::gpu::suitable::SuitableGPU;
-use crate::{debug, renderer::target::window::WindowTargetBuilder};
+use crate::debug;
 use std::{env, sync::Arc};
 use vulkano::{
     device::DeviceCreationError,
@@ -11,15 +10,12 @@ use vulkano::{
     swapchain::{CapabilitiesError, SurfaceCreationError, SwapchainCreationError},
     Version,
 };
-use winit::window::Window;
 
 pub mod gpu;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum ContextGPUPick {
     /// Automatically picks the GPU.
-    ///
-    /// This is the default value.
     Automatic,
 
     /// Pick the GPU with the commandline.
@@ -28,26 +24,54 @@ pub enum ContextGPUPick {
 
 impl Default for ContextGPUPick {
     fn default() -> Self {
-        ContextGPUPick::Automatic
+        env::var("GEARS_GPU_PICK")
+            .map_err(|_| ())
+            .and_then(|value| {
+                let valid = match value.to_lowercase().as_str() {
+                    "auto" => ContextGPUPick::Automatic,
+                    "pick" => ContextGPUPick::Manual,
+                    other => {
+                        log::warn!("Ignored invalid value: {}", other);
+                        return Err(());
+                    }
+                };
+
+                log::info!("Using override ContextGPUPick: {:?}", valid);
+                Ok(valid)
+            })
+            .unwrap_or(ContextGPUPick::Automatic)
     }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum ContextValidation {
-    /// No vulkan validation layers: greatly increased performance, but reduced debug output.
+    /// No Vulkan validation layers: greatly increased performance, but reduced debug output.
     /// Used when testing performance or when exporting release builds in production.
     NoValidation,
 
-    /// Vulkan validation: Sacrafice the performance for vulkan API usage validity.
+    /// Vulkan validation: Sacrifice the performance for Vulkan API usage validity.
     /// Should be used almost always.
-    ///
-    /// This is the default value.
     WithValidation,
 }
 
 impl Default for ContextValidation {
     fn default() -> Self {
-        ContextValidation::WithValidation
+        env::var("GEARS_VALIDATION")
+            .map_err(|_| ())
+            .and_then(|value| {
+                let valid = match value.to_lowercase().as_str() {
+                    "full" => ContextValidation::WithValidation,
+                    "none" => ContextValidation::NoValidation,
+                    other => {
+                        log::warn!("Ignored invalid value: {}", other);
+                        return Err(());
+                    }
+                };
+
+                log::info!("Using override ContextValidation: {:?}", valid);
+                Ok(valid)
+            })
+            .unwrap_or(ContextValidation::WithValidation)
     }
 }
 
@@ -63,16 +87,16 @@ pub enum ContextError {
     NoSuitableGPUs,
 }
 
+#[derive(Clone)]
 pub struct Context {
+    pub pick: ContextGPUPick,
     pub validation: ContextValidation,
-    pub debugger: Option<DebugCallback>,
-    pub p_device: SuitableGPU,
-    pub target: WindowTargetBuilder,
+    pub debugger: Arc<Option<DebugCallback>>,
     pub instance: Arc<Instance>,
 }
 
 impl Context {
-    fn get_layers(valid: ContextValidation) -> Vec<&'static str> {
+    fn get_layers(validation: ContextValidation) -> Vec<&'static str> {
         // query available layers from instance
 
         let available_layers = layers_list().unwrap().collect::<Vec<LayerProperties>>();
@@ -84,8 +108,8 @@ impl Context {
         ];
         const NO_VALIDATE: [&str; 0] = [];
 
-        let requested_layers = if valid == ContextValidation::WithValidation {
-            &VALIDATE[..]
+        let requested_layers = if validation == ContextValidation::WithValidation {
+            VALIDATE
         } else {
             &NO_VALIDATE[..]
         };
@@ -93,13 +117,12 @@ impl Context {
         // remove missing layers
 
         requested_layers
-            .into_iter()
+            .iter()
             .cloned()
             .filter(|requested| {
                 let found = available_layers
                     .iter()
-                    .find(|available| available.name() == *requested)
-                    .is_some();
+                    .any(|available| available.name() == *requested);
 
                 if !found {
                     log::warn!("Missing layer: {:?}, continuing without it", requested);
@@ -110,18 +133,33 @@ impl Context {
             .collect()
     }
 
-    fn get_extensions(valid: ContextValidation) -> InstanceExtensions {
+    fn get_extensions(validation: ContextValidation) -> InstanceExtensions {
         InstanceExtensions {
-            ext_debug_utils: valid == ContextValidation::WithValidation,
+            ext_debug_utils: validation == ContextValidation::WithValidation,
             ..vulkano_win::required_extensions()
         }
     }
 
-    pub fn new(
-        window: Arc<Window>,
-        pick: ContextGPUPick,
-        valid: ContextValidation,
-    ) -> Result<Self, ContextError> {
+    /// ### ContextGPUPick
+    ///
+    /// Environment value `GEARS_GPU_PICK` overrides the `ContextGPUPick` if present.
+    ///
+    /// Possible values: `auto`, `pick`.
+    ///
+    /// Defaults to `auto`.
+    ///
+    /// ### ContextValidation
+    ///
+    /// Environment value `GEARS_VALIDATION` overrides the `ContextValidation` if present.
+    ///
+    /// Possible values: `none`, `full`.
+    ///
+    /// Defaults to `full`.
+    pub fn env() -> Result<Self, ContextError> {
+        Self::new(Default::default(), Default::default())
+    }
+
+    pub fn new(pick: ContextGPUPick, validation: ContextValidation) -> Result<Self, ContextError> {
         // versions
 
         let api_version = Version::V1_2;
@@ -140,11 +178,11 @@ impl Context {
 
         // layers
 
-        let layers = Self::get_layers(valid);
+        let layers = Self::get_layers(validation);
 
         // extensions
 
-        let extensions = Self::get_extensions(valid);
+        let extensions = Self::get_extensions(validation);
 
         // instance
 
@@ -154,34 +192,25 @@ impl Context {
             &extensions,
             layers.iter().cloned(),
         )
-        .map_err(|err| ContextError::InstanceCreationError(err))?;
+        .map_err(ContextError::InstanceCreationError)?;
 
         // debugger
 
-        let debugger = if valid == ContextValidation::WithValidation {
+        let debugger = Arc::new(if validation == ContextValidation::WithValidation {
             let debugger =
                 DebugCallback::new(&instance, debug::SEVERITY, debug::TY, debug::callback)
-                    .map_err(|err| ContextError::DebugCallbackCreationError(err))?;
+                    .map_err(ContextError::DebugCallbackCreationError)?;
 
             log::warn!("Debugger enabled");
             Some(debugger)
         } else {
             None
-        };
-
-        // target
-
-        let target = WindowTargetBuilder::new(window, instance.clone())?;
-
-        // physical device
-
-        let p_device = SuitableGPU::pick(&instance, &target.surface, pick)?;
+        });
 
         Ok(Self {
-            validation: valid,
+            pick,
+            validation,
             instance,
-            target,
-            p_device,
             debugger,
         })
     }

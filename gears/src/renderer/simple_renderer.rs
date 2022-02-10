@@ -1,14 +1,14 @@
 use super::{
-    device::Dev, query::PerfQuery, target::window::WindowTarget, BeginInfoRecorder,
-    FramePerfReport, Recorder,
+    device::Dev,
+    query::{PerfQuery, RecordPerf},
+    target::window::{SwapchainImages, WindowTarget},
+    BeginInfoRecorder, Recorder,
 };
 use crate::{
-    context::{Context, ContextError},
-    renderer::{
-        device::{ReducedContext, RenderDevice},
-        query::PerfQueryResult,
-    },
-    SyncMode,
+    context::ContextError,
+    frame::Frame,
+    game_loop::State,
+    renderer::{device::RenderDevice, target::window::WindowTargetBuilder},
 };
 use parking_lot::{Mutex, MutexGuard};
 use std::{
@@ -16,22 +16,23 @@ use std::{
         atomic::{AtomicU8, Ordering},
         Arc,
     },
-    time::Instant,
+    time::Duration,
 };
 use vulkano::{
     command_buffer::{
-        AutoCommandBufferBuilder, CommandBufferUsage, DynamicState, PrimaryAutoCommandBuffer,
-        SubpassContents,
+        AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, SubpassContents,
     },
     format::{ClearValue, Format},
-    image::{view::ImageView, AttachmentImage, SwapchainImage},
-    pipeline::viewport::Viewport,
-    render_pass::{Framebuffer, FramebufferAbstract, RenderPass},
+    image::{view::ImageView, AttachmentImage, ImageAccess, SwapchainImage},
+    pipeline::graphics::viewport::{Scissor, Viewport},
+    render_pass::{Framebuffer, RenderPass},
     single_pass_renderpass,
     swapchain::SwapchainAcquireFuture,
     sync::{self, FenceSignalFuture, FlushError, GpuFuture, JoinFuture},
 };
 use winit::window::Window;
+
+//
 
 struct SwapchainObjects {
     render_pass: Arc<RenderPass>,
@@ -41,47 +42,47 @@ struct SwapchainObjects {
 #[allow(unused)]
 struct RenderTarget {
     // the actual render target
-    framebuffer: Arc<dyn FramebufferAbstract + Send + Sync>,
+    framebuffer: Arc<Framebuffer>,
 
     // performance debugging
-    perf: PerfQuery,
+    perf: Arc<PerfQuery>,
     triangles: usize,
 }
+
+//
 
 impl RenderTarget {
     fn new(
         device: Dev,
         render_pass: Arc<RenderPass>,
-        color_image: Arc<SwapchainImage<Arc<Window>>>,
+        color_image: Arc<SwapchainImage<Window>>,
     ) -> Self {
         // images
         let color_image = color_image;
         let depth_image = AttachmentImage::new(
             device.logical().clone(),
-            color_image.dimensions(),
-            Format::D24Unorm_S8Uint,
+            color_image.dimensions().width_height(),
+            Format::D24_UNORM_S8_UINT,
         )
         .unwrap();
 
         // image views
-        let color_image_view = ImageView::new(color_image.clone()).unwrap();
+        let color_image_view = ImageView::new(color_image).unwrap();
         let depth_image_view = ImageView::new(depth_image).unwrap();
 
         // framebuffer
-        let framebuffer = Arc::new(
-            Framebuffer::start(render_pass)
-                .add(color_image_view)
-                .unwrap()
-                .add(depth_image_view)
-                .unwrap()
-                .build()
-                .unwrap(),
-        );
+        let framebuffer = Framebuffer::start(render_pass)
+            .add(color_image_view)
+            .unwrap()
+            .add(depth_image_view)
+            .unwrap()
+            .build()
+            .unwrap();
 
         Self {
             framebuffer,
 
-            perf: PerfQuery::new_with_device(&device),
+            perf: Arc::new(PerfQuery::new_with_device(&device)),
             triangles: 0,
         }
     }
@@ -97,38 +98,42 @@ pub struct Renderer {
     previous_frame: Option<Box<dyn GpuFuture>>,
 
     frame_in_flight: AtomicU8,
-    frame_fences: [Option<Arc<FenceSignalFuture<Box<dyn GpuFuture>>>>; Renderer::frame_count()],
+    frame_fences: [Option<Arc<Future>>; Renderer::frame_count()],
 
     pub device: Dev,
 }
 
-pub struct RendererBuilder {
-    sync: SyncMode,
+type Future = FenceSignalFuture<Box<dyn GpuFuture>>;
+
+pub struct RendererBuilder<'f> {
+    frame: &'f Frame,
 }
 
 #[must_use]
 pub struct FrameData {
     pub recorder: Recorder<false>,
-    pub dynamic: DynamicState,
+    pub viewport: Viewport,
+    pub scissor: Scissor,
+    pub perf: Arc<PerfQuery>,
 
     pub image_index: usize,
     pub frame_in_flight: usize,
-    pub future: JoinFuture<Box<dyn GpuFuture>, SwapchainAcquireFuture<Arc<Window>>>,
-
-    beginning: Instant,
+    pub future: JoinFuture<Box<dyn GpuFuture>, SwapchainAcquireFuture<Window>>,
 }
 
 impl FrameData {
     pub fn cleanup_finished(&mut self) {
         self.future.cleanup_finished()
     }
+
+    pub fn viewport_and_scissor(&self) -> (Viewport, Scissor) {
+        (self.viewport.clone(), self.scissor)
+    }
 }
 
 impl Renderer {
-    pub fn new() -> RendererBuilder {
-        RendererBuilder {
-            sync: SyncMode::Mailbox,
-        }
+    pub fn builder(frame: &Frame) -> RendererBuilder {
+        RendererBuilder { frame }
     }
 
     pub fn render_pass(&self) -> Arc<RenderPass> {
@@ -147,9 +152,16 @@ impl Renderer {
         2
     }
 
-    pub fn begin_frame(&mut self) -> Option<FrameData> {
-        let beginning = Instant::now();
+    pub fn begin_frame(&mut self, state: &mut State) -> FrameData {
+        loop {
+            match self.try_begin_frame(state) {
+                Some(frame_data) => break frame_data,
+                None => continue,
+            }
+        }
+    }
 
+    pub fn try_begin_frame(&mut self, state: &mut State) -> Option<FrameData> {
         // frame in flight can be 0 or 1
         // xor:ing with 1 swaps it between these two
         //   xor 0,0 = 0
@@ -158,7 +170,6 @@ impl Renderer {
         //   xor 1,1 = 0
         // so with fetch_xor 1 we can cycle the frame in flight
         // and get the index for this frame
-        // *my longest and the most in detail comment so far*
         let frame_in_flight = self.frame_in_flight.fetch_xor(1, Ordering::SeqCst) as usize;
         assert!((0..=1).contains(&frame_in_flight));
 
@@ -181,23 +192,24 @@ impl Renderer {
         let target = &self.render_targets[image_index];
 
         // begin recording a render command buffer
-        let recorder = Self::begin_record(
+        let (recorder, perf, gpu_time) = Self::begin_record(
             &self.device,
             &mut target.lock(),
             image_index,
             /* frame_in_flight, */
         );
+        if let Some(gpu_time) = gpu_time {
+            state.gpu_frame_reporter.manual(gpu_time);
+        }
 
         // setup default dynamic state
         let extent = self.swapchain_objects.window_target.base.extent;
-        let dynamic = DynamicState {
-            viewports: Some(vec![Viewport {
-                origin: [0.0, 0.0],
-                dimensions: [extent[0] as f32, extent[1] as f32],
-                depth_range: 0.0..1.0,
-            }]),
-            ..DynamicState::none()
+        let viewport = Viewport {
+            origin: [0.0, 0.0],
+            dimensions: [extent[0] as f32, extent[1] as f32],
+            depth_range: 0.0..1.0,
         };
+        let scissor = Scissor::irrelevant();
 
         // wait for the fence set up in the last same frame_in_flight
         // waiting is necessary to unlock any resources it uses
@@ -207,17 +219,17 @@ impl Renderer {
 
         Some(FrameData {
             recorder,
-            dynamic,
+            viewport,
+            scissor,
+            perf,
 
             image_index,
             frame_in_flight,
             future,
-
-            beginning,
         })
     }
 
-    pub fn end_frame(&mut self, frame_data: FrameData) -> Option<FramePerfReport> {
+    pub fn end_frame(&mut self, frame_data: FrameData) {
         // end recording
         let cb = Self::end_record(frame_data.recorder);
 
@@ -254,11 +266,6 @@ impl Renderer {
         if self.previous_frame.is_none() {
             self.previous_frame = Some(sync::now(self.device.logical().clone()).boxed())
         }
-
-        Some(FramePerfReport {
-            cpu_frame_time: frame_data.beginning.elapsed(),
-            gpu_frame_time: /* TODO */ PerfQueryResult::default(),
-        })
     }
 
     fn begin_record(
@@ -266,9 +273,9 @@ impl Renderer {
         render_target: &mut MutexGuard<RenderTarget>,
         image_index: usize,
         /* frame_in_flight: usize, */
-    ) -> Recorder<false> {
+    ) -> (Recorder<false>, Arc<PerfQuery>, Option<Duration>) {
         // allocate a new command buffer for render calls
-        let render_cb = AutoCommandBufferBuilder::primary(
+        let mut render_cb = AutoCommandBufferBuilder::primary(
             device.logical().clone(),
             device.queues.graphics.family(),
             CommandBufferUsage::OneTimeSubmit,
@@ -290,12 +297,20 @@ impl Renderer {
             .unwrap();
         };
 
+        let perf = render_target.perf.clone();
+        let gpu_time = perf.get();
+        render_cb.reset_perf(&perf);
+
         // let the user record whatever
-        Recorder::new(
-            render_cb,
-            begin_render_pass_lambda,
-            image_index,
-            /* frame_in_flight, */
+        (
+            Recorder::new(
+                render_cb,
+                begin_render_pass_lambda,
+                image_index,
+                /* frame_in_flight, */
+            ),
+            perf,
+            gpu_time,
         )
     }
 
@@ -317,20 +332,14 @@ impl Renderer {
     }
 }
 
-impl RendererBuilder {
-    /// No sync, Fifo or Mailbox
-    pub fn with_sync(mut self, sync: SyncMode) -> Self {
-        self.sync = sync;
-        self
-    }
-
-    pub fn build(self, context: Context) -> Result<Renderer, ContextError> {
+impl<'f> RendererBuilder<'f> {
+    pub fn build(self) -> Result<Renderer, ContextError> {
         // device
-        let (r_context, target_builder) = ReducedContext::new(context);
-        let device = RenderDevice::from_context(r_context)?;
+        let device = RenderDevice::from_frame(self.frame)?;
 
-        // surface + swapchain + images
-        let (target, color_images) = target_builder.build(&device, self.sync)?;
+        // swapchain + images
+        let (target, color_images) =
+            WindowTargetBuilder::new(self.frame.surface())?.build(&device, self.frame.sync())?;
 
         // main render pass
         let render_pass = Self::create_render_pass(&device, &target);
@@ -367,37 +376,35 @@ impl RendererBuilder {
     fn create_render_pass(device: &Dev, target: &WindowTarget) -> Arc<RenderPass> {
         // AttachmentDesc
 
-        Arc::new(
-            single_pass_renderpass!(device.logical().clone(),
-                attachments: {
-                    c: {
-                        load: Clear,
-                        store: Store,
-                        format: target.format.0,
-                        samples: 1,
-                        initial_layout: ImageLayout::Undefined,
-                        final_layout: ImageLayout::PresentSrc,
-                    },
-                    d: {
-                        load: Clear,
-                        store: DontCare,
-                        format: Format::D24Unorm_S8Uint,
-                        samples: 1,
-                        initial_layout: ImageLayout::Undefined,
-                        final_layout: ImageLayout::DepthStencilAttachmentOptimal,
-                    }
+        single_pass_renderpass!(device.logical().clone(),
+            attachments: {
+                c: {
+                    load: Clear,
+                    store: Store,
+                    format: target.format.0,
+                    samples: 1,
+                    initial_layout: ImageLayout::Undefined,
+                    final_layout: ImageLayout::PresentSrc,
                 },
-                pass: {
-                    color: [ c ],
-                    depth_stencil: { d }
+                d: {
+                    load: Clear,
+                    store: DontCare,
+                    format: Format::D24_UNORM_S8_UINT,
+                    samples: 1,
+                    initial_layout: ImageLayout::Undefined,
+                    final_layout: ImageLayout::DepthStencilAttachmentOptimal,
                 }
-            )
-            .unwrap(),
+            },
+            pass: {
+                color: [ c ],
+                depth_stencil: { d }
+            }
         )
+        .unwrap()
     }
 
     fn create_render_targets(
-        color_images: Vec<Arc<SwapchainImage<Arc<Window>>>>,
+        color_images: SwapchainImages,
         device: &Dev,
         render_pass: &Arc<RenderPass>,
     ) -> Box<[Arc<Mutex<RenderTarget>>]> {

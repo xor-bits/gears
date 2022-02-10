@@ -52,8 +52,6 @@ pub fn modules(input: TokenStream) -> TokenStream {
         modules = quote! {
             #modules
             pub mod #name {
-                use gears::vulkano;
-                use gears::vulkano_shaders;
                 vulkano_shaders::shader! {
                     #tokens
                 }

@@ -10,7 +10,6 @@ license = "MIT"
 [dependencies]
 shaderc = "~0.7"
 regex = "~1.5"
-glam = "~0.17"
 proc-macro2 = "~1.0"
 syn = "~1.0"
 quote = "~1.0"

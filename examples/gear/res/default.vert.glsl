@@ -1,9 +1,9 @@
 #version 420
 
-layout(location = 0) in vec3 pos;
-layout(location = 1) in vec3 norm;
+layout(location = 0) in vec3 vi_pos;
+layout(location = 1) in vec3 vi_norm;
 
-layout(location = 0) out float exposure;
+layout(location = 0) out float fi_exp;
 
 layout(binding = 0) uniform UBO {
 	mat4 model_matrix;
@@ -16,8 +16,8 @@ layout(binding = 0) uniform UBO {
 
 void main() {
 	mat4 mvp = ubo.projection_matrix * ubo.view_matrix * ubo.model_matrix;
-	gl_Position = mvp * vec4(pos, 1.0);
-	vec3 normal = (ubo.model_matrix * vec4(norm, 1.0)).xyz;
+	gl_Position = mvp * vec4(vi_pos, 1.0);
+	vec3 normal = (ubo.model_matrix * vec4(vi_norm, 1.0)).xyz;
 
-	exposure = 1.0 + dot(normal, ubo.light_dir);
+	fi_exp = 1.0 + dot(normal, ubo.light_dir);
 }

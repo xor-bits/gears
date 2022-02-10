@@ -1,102 +1,30 @@
 use gears::{
+    context::Context,
     frame::Frame,
+    game_loop::{Event, Runnable, State},
     glam::{Mat4, Vec3},
-    io::input_state::InputState,
-    loops::frame::{FrameLoop, FrameLoopTarget},
+    io::input_state::{Input, InputAxis, InputState, Triggered},
     renderer::{
-        buffer::StagedBuffer, object::load_obj, simple_renderer::Renderer, FramePerfReport,
+        buffer::StagedBuffer,
+        object::load_obj,
+        query::RecordPerf,
+        simple_renderer::{FrameData, Renderer},
     },
-    vulkano::{buffer::BufferUsage, descriptor_set::DescriptorSetsCollection},
+    vulkano::buffer::{BufferUsage, TypedBufferAccess},
     SyncMode,
 };
 use shader::UniformData;
-use std::time::Instant;
-use winit::event::{VirtualKeyCode, WindowEvent};
+use std::{sync::Arc, time::Instant};
+use vulkano::{
+    descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet},
+    pipeline::{Pipeline, PipelineBindPoint},
+};
 
-mod shader {
-    use gears::{
-        glam::{Mat4, Vec3},
-        renderer::simple_renderer::Renderer,
-        vulkano::{
-            buffer::CpuBufferPool,
-            descriptor_set::FixedSizeDescriptorSetsPool,
-            pipeline::{vertex::BuffersDefinition, GraphicsPipeline, GraphicsPipelineAbstract},
-            render_pass::Subpass,
-        },
-        Input,
-    };
-    use std::sync::Arc;
+//
 
-    #[derive(Input, Debug, PartialEq, Copy, Clone, Default)]
-    #[repr(C)]
-    pub struct VertexData {
-        pub pos: Vec3,
-        pub norm: Vec3,
-    }
+mod shader;
 
-    #[derive(Debug, PartialEq, Copy, Clone, Default)]
-    #[repr(C)]
-    pub struct UniformData {
-        pub model_matrix: Mat4,
-        pub view_matrix: Mat4,
-        pub projection_matrix: Mat4,
-        pub light_dir: Vec3,
-    }
-
-    gears::modules! {
-        vert: {
-            ty: "vertex",
-            path: "gear/res/default.vert.glsl"
-        }
-        frag: {
-            ty: "fragment",
-            path: "gear/res/default.frag.glsl"
-        }
-    }
-
-    pub struct DefaultPipeline {
-        pub pipeline: Arc<GraphicsPipeline<BuffersDefinition>>,
-        pub buffer_pool: CpuBufferPool<UniformData>,
-        pub desc_pool: FixedSizeDescriptorSetsPool,
-    }
-
-    impl DefaultPipeline {
-        pub fn build(renderer: &Renderer) -> Self {
-            let vert = vert::Shader::load(renderer.device.logical().clone()).unwrap();
-            let frag = frag::Shader::load(renderer.device.logical().clone()).unwrap();
-
-            let pipeline = Arc::new(
-                GraphicsPipeline::start()
-                    .vertex_input_single_buffer::<VertexData>()
-                    .vertex_shader(vert.main_entry_point(), ())
-                    .fragment_shader(frag.main_entry_point(), ())
-                    .depth_stencil_simple_depth()
-                    .render_pass(Subpass::from(renderer.render_pass().clone(), 0).unwrap())
-                    .viewports_dynamic_scissors_irrelevant(1)
-                    .build(renderer.device.logical().clone())
-                    .unwrap(),
-            );
-
-            let layout = pipeline.layout().descriptor_set_layouts()[0].clone();
-            let desc_pool = FixedSizeDescriptorSetsPool::new(layout);
-            let buffer_pool =
-                CpuBufferPool::<UniformData>::uniform_buffer(renderer.device.logical().clone());
-
-            Self {
-                pipeline,
-                buffer_pool,
-                desc_pool,
-            }
-        }
-    }
-
-    /* TODO: pipeline! {
-        "DefaultPipeline"
-        VertexData -> RGBAOutput
-        mod "VERT" as "vert" where { in UniformData as 0 }
-        mod "FRAG" as "frag"
-    } */
-}
+//
 
 struct App {
     frame: Frame,
@@ -106,9 +34,9 @@ struct App {
     shader: shader::DefaultPipeline,
     vb: StagedBuffer<[shader::VertexData]>,
 
-    delta_time: Instant,
     distance: f32,
     position: Vec3,
+    dt: Instant,
 }
 
 impl App {
@@ -132,51 +60,35 @@ impl App {
             shader,
             vb,
 
-            delta_time: Instant::now(),
             distance: 2.5,
             position: Vec3::new(0.0, 0.0, 0.0),
+            dt: Instant::now(),
         }
     }
 
     fn vertex_data() -> Vec<shader::VertexData> {
         // TODO: make a macro for loading objects at compile time
         load_obj(include_str!("../res/gear.obj"), None, |pos, norm| {
-            shader::VertexData { pos, norm }
+            shader::VertexData {
+                vi_pos: pos.to_array(),
+                vi_norm: norm.to_array(),
+            }
         })
     }
 
-    fn update_uniform_buffer(&mut self) -> impl DescriptorSetsCollection {
+    fn update_uniform_buffer(&mut self) -> Arc<PersistentDescriptorSet> {
         let aspect = self.frame.aspect();
-        let dt_s = self.delta_time.elapsed().as_secs_f32();
-        self.delta_time = Instant::now();
 
-        let mut distance_delta = 0.0;
-        let mut velocity = Vec3::new(0.0, 0.0, 0.0);
-        {
-            if self.input.key_held(VirtualKeyCode::E) {
-                distance_delta += 1.0;
-            }
-            if self.input.key_held(VirtualKeyCode::Q) {
-                distance_delta -= 1.0;
-            }
-            if self.input.key_held(VirtualKeyCode::A) {
-                velocity.x += 1.0;
-            }
-            if self.input.key_held(VirtualKeyCode::D) {
-                velocity.x -= 1.0;
-            }
-            if self.input.key_held(VirtualKeyCode::W) {
-                velocity.y += 1.0;
-            }
-            if self.input.key_held(VirtualKeyCode::S) {
-                velocity.y -= 1.0;
-            }
-            if self.input.key_held(VirtualKeyCode::Space) {
-                velocity.z += 2.0;
-            }
-        }
-        self.distance += distance_delta * 3.0 * dt_s;
-        self.position += velocity * 3.0 * dt_s;
+        let delta = self.dt.elapsed().as_secs_f32();
+        self.dt = Instant::now();
+
+        let distance_delta = self.input.get_axis(InputAxis::Roll, 0).x;
+        let velocity = self.input.get_axis(InputAxis::Move, 0);
+        let roll = self.input.get_axis(InputAxis::Trigger, 0).x;
+        let velocity = Vec3::new(-velocity.x, velocity.y, roll);
+
+        self.distance += distance_delta * 3.0 * delta;
+        self.position += velocity * 3.0 * delta;
         self.position.y = self
             .position
             .y
@@ -198,24 +110,32 @@ impl App {
             light_dir: Vec3::new(0.2, 2.0, 0.5).normalize(),
         };
 
-        let buffer = self.shader.buffer_pool.next(ubo).unwrap();
-
-        self.shader
-            .desc_pool
-            .next()
-            .add_buffer(buffer)
-            .unwrap()
-            .build()
-            .unwrap()
+        let ubo = self.shader.buffer_pool.next(ubo).unwrap();
+        let layout = self.shader.pipeline.layout().descriptor_set_layouts()[0].clone();
+        PersistentDescriptorSet::new_with_pool(
+            layout,
+            0,
+            &mut self.shader.desc_pool,
+            [WriteDescriptorSet::buffer(0, ubo)],
+        )
+        .unwrap()
     }
 }
 
-impl FrameLoopTarget for App {
-    fn frame(&mut self) -> Option<FramePerfReport> {
-        let mut frame = self.renderer.begin_frame()?;
+impl Runnable for App {
+    fn draw(&mut self, state: &mut State, _: f32) {
+        let FrameData {
+            mut recorder,
+            viewport,
+            scissor,
+            perf,
+
+            image_index,
+            frame_in_flight,
+            future,
+        } = self.renderer.begin_frame(state);
 
         // outside of render pass
-        let mut recorder = frame.recorder;
         self.vb.update(&mut recorder).unwrap();
         let set = self.update_uniform_buffer();
 
@@ -223,44 +143,65 @@ impl FrameLoopTarget for App {
         let mut recorder = recorder.begin_render_pass();
         recorder
             .record()
-            .draw(
-                self.shader.pipeline.clone(),
-                &frame.dynamic,
-                self.vb.local.clone(),
-                set,
-                (),
+            .begin_perf(&perf)
+            .bind_pipeline_graphics(self.shader.pipeline.clone())
+            .bind_descriptor_sets(
+                PipelineBindPoint::Graphics,
+                self.shader.pipeline.layout().clone(),
+                0,
+                vec![set],
             )
-            .unwrap();
+            .bind_vertex_buffers(0, self.vb.local.clone())
+            .set_viewport(0, [viewport.clone()])
+            .draw(self.vb.local.len() as u32, 1, 0, 0)
+            .unwrap()
+            .end_perf(&perf);
 
         // outside of render pass again
         let recorder = recorder.end_render_pass();
-        frame.recorder = recorder;
 
-        self.renderer.end_frame(frame)
+        self.renderer.end_frame(FrameData {
+            recorder,
+            viewport,
+            scissor,
+            perf,
+
+            image_index,
+            frame_in_flight,
+            future,
+        });
     }
 
-    fn event(&mut self, event: &WindowEvent) {
-        self.input.event(event);
+    fn event(&mut self, state: &mut State, event: &Event) {
         self.frame.event(event);
+        self.input.event(event);
+
+        if self.input.should_close()
+            || self.input.get_input(Input::Pause, 0).triggered()
+            || self.input.get_input(Input::RollLeft, 0).triggered()
+        {
+            state.stop = true
+        }
     }
 }
 
 fn main() {
     env_logger::init();
 
-    let (frame, event_loop) = Frame::new()
+    let context = Context::env().unwrap();
+
+    let mut frame = Frame::builder(context)
         .with_title("Simple Example")
         .with_size(600, 600)
-        .build();
-
-    let context = frame.default_context();
-
-    let renderer = Renderer::new()
         .with_sync(SyncMode::Immediate)
-        .build(context.unwrap())
+        .build()
         .unwrap();
+
+    let game_loop = frame.game_loop().unwrap();
+
+    let renderer = Renderer::builder(&frame).build().unwrap();
 
     let app = App::init(frame, renderer);
 
-    FrameLoop::new(event_loop, Box::new(app)).run()
+    game_loop.run(None, app);
 }
