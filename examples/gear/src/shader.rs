@@ -8,8 +8,11 @@ use std::sync::Arc;
 use vulkano::{
     descriptor_set::pool::StdDescriptorPool,
     pipeline::graphics::{
-        depth_stencil::DepthStencilState, input_assembly::InputAssemblyState,
-        vertex_input::BuffersDefinition, viewport::ViewportState,
+        depth_stencil::DepthStencilState,
+        input_assembly::InputAssemblyState,
+        rasterization::{CullMode, FrontFace, RasterizationState},
+        vertex_input::BuffersDefinition,
+        viewport::ViewportState,
     },
 };
 
@@ -30,6 +33,7 @@ pub struct UniformData {
 }
 
 mod vert {
+    #![allow(clippy::needless_question_mark)]
     vulkano_shaders::shader! {
         ty: "vertex",
         path: "gear/res/default.vert.glsl"
@@ -37,6 +41,7 @@ mod vert {
 }
 
 mod frag {
+    #![allow(clippy::needless_question_mark)]
     vulkano_shaders::shader! {
         ty: "fragment",
         path: "gear/res/default.frag.glsl"
@@ -65,6 +70,11 @@ impl DefaultPipeline {
             .fragment_shader(frag.entry_point("main").unwrap(), ())
             .depth_stencil_state(DepthStencilState::simple_depth_test())
             //
+            .rasterization_state(
+                RasterizationState::new()
+                    .cull_mode(CullMode::Back)
+                    .front_face(FrontFace::Clockwise),
+            )
             .render_pass(Subpass::from(renderer.render_pass(), 0).unwrap())
             //
             .build(renderer.device.logical().clone())

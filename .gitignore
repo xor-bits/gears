@@ -1,6 +1,7 @@
 /target
 /pkg
 /.vscode
+*.xopp
 Cargo.lock
 expand.rs
 callgrind.out.*

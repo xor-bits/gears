@@ -58,6 +58,7 @@ fn pentagon(
     triangle(p_a, p_d, p_e, vertices, indices);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn hexagon(
     p_a: Vec3,
     p_b: Vec3,
@@ -216,6 +217,7 @@ pub fn generate_marching_cubes(
                     (true, true, true, true, true, true, true, false) => {
                         tri!(f l h, vertices, indices);
                     }
+
                     // same face corners
                     // a    b      c      d      e      f      g      h
                     (false, true, true, false, true, true, true, true) => {
@@ -316,6 +318,52 @@ pub fn generate_marching_cubes(
                     (false, false, true, false, true, false, false, false) => {
                         qua!(d g i a, vertices, indices);
                         qua!(k e g d, vertices, indices);
+                    }
+
+                    // opposite corners
+                    // a    b      c      d      e      f      g      h
+                    (true, false, false, false, false, false, false, true) => {
+                        tri!(a i c, vertices, indices);
+                        tri!(f h l, vertices, indices);
+                    }
+                    (false, true, false, false, false, false, true, false) => {
+                        tri!(e k h, vertices, indices);
+                        tri!(j b c, vertices, indices);
+                    }
+                    (false, false, true, false, false, true, false, false) => {
+                        tri!(g f j, vertices, indices);
+                        tri!(k a d, vertices, indices);
+                    }
+                    (false, false, false, true, true, false, false, false) => {
+                        tri!(i g e, vertices, indices);
+                        tri!(b l d, vertices, indices);
+                    }
+
+                    // inverted opposite corners
+                    // a    b      c      d      e      f      g      h
+                    (true, true, true, false, false, true, true, true) => {
+                        tri!(i e g, vertices, indices);
+                        tri!(b d l, vertices, indices);
+                    }
+                    (true, true, false, true, true, false, true, true) => {
+                        tri!(g j f, vertices, indices);
+                        tri!(k d a, vertices, indices);
+                    }
+                    (true, false, true, true, true, true, false, true) => {
+                        tri!(e h k, vertices, indices);
+                        tri!(j c b, vertices, indices);
+                    }
+                    (false, true, true, true, true, true, true, false) => {
+                        tri!(f l h, vertices, indices);
+                        tri!(a c i, vertices, indices);
+                    }
+
+                    // triple corners
+                    // a    b      c      d      e      f      g      h
+                    (true, true, true, false, true, false, false, true) => {
+                        tri!(e h k, vertices, indices);
+                        tri!(g j f, vertices, indices);
+                        tri!(b d l, vertices, indices);
                     }
 
                     // single edges
@@ -446,6 +494,112 @@ pub fn generate_marching_cubes(
                     (false, false, true, true, true, true, false, false) => {
                         qua!(l k a b, vertices, indices);
                         qua!(e f j i, vertices, indices);
+                    }
+
+                    // edge + corner
+                    // a    b      c      d      e      f      g      h
+                    (true, true, true, false, false, true, true, false) => {
+                        qua!(h f b d, vertices, indices);
+                        tri!(e i g, vertices, indices);
+                    }
+                    (true, true, true, false, false, true, false, true) => {
+                        qua!(k i g h, vertices, indices);
+                        tri!(d b l, vertices, indices);
+                    }
+                    (true, true, true, false, false, false, true, true) => {
+                        qua!(e i j f, vertices, indices);
+                        tri!(b d l, vertices, indices);
+                    }
+                    (true, true, false, true, true, false, true, false) => {
+                        qua!(h g j l, vertices, indices);
+                        tri!(a k d, vertices, indices);
+                    }
+                    // a    b      c      d      e      f      g      h
+                    (true, true, false, true, true, false, false, true) => {
+                        qua!(d a e h, vertices, indices);
+                        tri!(f g j, vertices, indices);
+                    }
+                    (true, true, false, true, false, false, true, true) => {
+                        qua!(e i j f, vertices, indices);
+                        tri!(a k d, vertices, indices);
+                    }
+                    (true, true, false, false, true, false, true, true) => {
+                        qua!(a k l b, vertices, indices);
+                        tri!(g j f, vertices, indices);
+                    }
+                    (true, true, false, false, false, true, true, true) => {
+                        qua!(a k l b, vertices, indices);
+                        tri!(i g e, vertices, indices);
+                    }
+                    // a    b      c      d      e      f      g      h
+                    (true, false, true, true, true, true, false, false) => {
+                        qua!(k e f l, vertices, indices);
+                        tri!(j c b, vertices, indices);
+                    }
+                    (true, false, true, true, true, false, false, true) => {
+                        qua!(f g c b, vertices, indices);
+                        tri!(e h k, vertices, indices);
+                    }
+                    (true, false, true, false, false, true, true, true) => {
+                        qua!(l j c d, vertices, indices);
+                        tri!(e i g, vertices, indices);
+                    }
+                    (true, false, true, true, false, true, false, true) => {
+                        qua!(k i g h, vertices, indices);
+                        tri!(j c b, vertices, indices);
+                    }
+                    // a    b      c      d      e      f      g      h
+                    (true, false, true, false, true, true, false, true) => {
+                        qua!(l j c d, vertices, indices);
+                        tri!(e h k, vertices, indices);
+                    }
+                    (true, false, false, true, true, true, false, true) => {
+                        qua!(d a e h, vertices, indices);
+                        tri!(j c b, vertices, indices);
+                    }
+                    (true, false, false, true, true, false, true, true) => {
+                        qua!(f g c b, vertices, indices);
+                        tri!(d a k, vertices, indices);
+                    }
+                    (false, true, true, true, true, true, false, false) => {
+                        qua!(k e f l, vertices, indices);
+                        tri!(a c i, vertices, indices);
+                    }
+                    // a    b      c      d      e      f      g      h
+                    (false, true, true, true, true, false, true, false) => {
+                        qua!(h g j l, vertices, indices);
+                        tri!(a c i, vertices, indices);
+                    }
+                    (false, true, true, true, false, true, true, false) => {
+                        qua!(a c g e, vertices, indices);
+                        tri!(h f l, vertices, indices);
+                    }
+                    (false, true, true, false, true, true, true, false) => {
+                        qua!(h f b d, vertices, indices);
+                        tri!(a c i, vertices, indices);
+                    }
+                    (false, true, true, false, false, true, true, true) => {
+                        qua!(a c g e, vertices, indices);
+                        tri!(l b d, vertices, indices);
+                    }
+                    // a    b      c      d      e      f      g      h
+                    (false, true, false, true, true, true, true, false) => {
+                        // a problem avoided
+                        qua!(d c i k, vertices, indices);
+                        tri!(h f l, vertices, indices);
+                    }
+                    (false, true, false, true, true, false, true, true) => {
+                        // another problem avoided
+                        qua!(d c i k, vertices, indices);
+                        tri!(f g j, vertices, indices);
+                    }
+                    (false, false, true, true, true, true, true, false) => {
+                        qua!(b j i a, vertices, indices);
+                        tri!(h f l, vertices, indices);
+                    }
+                    (false, false, true, true, true, true, false, true) => {
+                        qua!(b j i a, vertices, indices);
+                        tri!(k e h, vertices, indices);
                     }
 
                     // pentagons
@@ -660,16 +814,90 @@ pub fn generate_marching_cubes(
                     }
                     (false, false, true, true, true, false, true, false) => {
                         hex!(a b l h g i, vertices, indices);
-                    }
-
-                    // TODO: Add opposite corners (case 4)
-
-                    // new
-                    /* (false, false, false, false, false, false, false, false) => {
-                        tri!(0 0 0, vertices, indices);
-                        qua!(0 0 0 0, vertices, indices);
-                        hex!(0 0 0 0 0 0, vertices, indices);
-                    } */
+                    } // TODO:
+                    // a    b      c      d      e      f      g      h
+                    /* (true, true, false, true, false, true, true, false) => todo!(),
+                    (true, false, true, true, false, true, true, false) => todo!(),
+                    (true, false, false, true, true, true, true, false) => todo!(),
+                    (true, false, false, true, false, true, true, true) => todo!(),
+                    (false, true, true, true, true, false, false, true) => todo!(),
+                    (false, true, true, false, true, true, false, true) => todo!(),
+                    (false, true, true, false, true, false, true, true) => todo!(), */
+                    // a    b      c      d      e      f      g      h
+                    /* (true, true, true, false, false, true, false, false) => todo!(),
+                    (true, true, true, false, false, false, true, false) => todo!(),
+                    (true, true, true, false, false, false, false, true) => todo!(),
+                    (true, true, false, true, false, false, true, false) => todo!(),
+                    (true, true, false, true, false, false, false, true) => todo!(),
+                    (true, true, false, false, true, false, true, false) => todo!(),
+                    (true, true, false, false, true, false, false, true) => todo!(),
+                    (true, true, false, false, false, true, true, false) => todo!(),
+                    (true, true, false, false, false, false, true, false) => todo!(),
+                    (true, true, false, false, false, false, false, true) => todo!(),
+                    (true, false, true, true, true, false, false, false) => todo!(),
+                    (true, false, true, true, false, true, false, false) => todo!(),
+                    (true, false, true, false, true, false, false, true) => todo!(),
+                    (true, false, true, false, false, true, true, false) => todo!(),
+                    (true, false, true, false, false, true, false, false) => todo!(),
+                    (true, false, true, false, false, false, true, true) => todo!(),
+                    (true, false, true, false, false, false, false, true) => todo!(),
+                    (true, false, false, true, true, true, false, false) => todo!(),
+                    (true, false, false, true, true, false, true, false) => todo!(),
+                    (true, false, false, true, true, false, false, false) => todo!(),
+                    (true, false, false, true, false, true, true, false) => todo!(),
+                    (true, false, false, true, false, true, false, true) => todo!(),
+                    (true, false, false, true, false, true, false, false) => todo!(),
+                    (true, false, false, true, false, false, true, true) => todo!(),
+                    (true, false, false, true, false, false, true, false) => todo!(),
+                    (true, false, false, true, false, false, false, true) => todo!(),
+                    (true, false, false, false, true, true, false, true) => todo!(),
+                    (true, false, false, false, true, false, true, true) => todo!(),
+                    (true, false, false, false, true, false, false, true) => todo!(),
+                    (true, false, false, false, false, true, true, true) => todo!(),
+                    (true, false, false, false, false, true, true, false) => todo!(),
+                    (true, false, false, false, false, true, false, true) => todo!(),
+                    (true, false, false, false, false, false, true, true) => todo!(),
+                    (false, true, true, true, true, false, false, false) => todo!(),
+                    (false, true, true, true, false, true, false, false) => todo!(),
+                    (false, true, true, true, false, false, true, false) => todo!(),
+                    (false, true, true, false, true, true, false, false) => todo!(),
+                    (false, true, true, false, true, false, true, false) => todo!(),
+                    (false, true, true, false, true, false, false, true) => todo!(),
+                    (false, true, true, false, true, false, false, false) => todo!(),
+                    (false, true, true, false, false, true, false, true) => todo!(),
+                    (false, true, true, false, false, true, false, false) => todo!(),
+                    (false, true, true, false, false, false, true, true) => todo!(),
+                    (false, true, true, false, false, false, true, false) => todo!(),
+                    (false, true, true, false, false, false, false, true) => todo!(),
+                    (false, true, false, true, true, true, false, false) => todo!(),
+                    (false, true, false, true, true, false, false, true) => todo!(),
+                    (false, true, false, true, true, false, false, false) => todo!(),
+                    (false, true, false, true, false, true, true, false) => todo!(),
+                    (false, true, false, true, false, false, true, false) => todo!(),
+                    (false, true, false, false, true, false, true, true) => todo!(),
+                    (false, true, false, false, true, false, true, false) => todo!(),
+                    (false, true, false, false, true, false, false, true) => todo!(),
+                    (false, true, false, false, false, true, true, true) => todo!(),
+                    (false, true, false, false, false, true, true, false) => todo!(),
+                    (false, true, false, false, false, false, true, true) => todo!(),
+                    (false, false, true, true, true, false, false, true) => todo!(),
+                    (false, false, true, true, true, false, false, false) => todo!(),
+                    (false, false, true, true, false, true, true, false) => todo!(),
+                    (false, false, true, true, false, true, false, true) => todo!(),
+                    (false, false, true, true, false, true, false, false) => todo!(),
+                    (false, false, true, false, true, true, true, false) => todo!(),
+                    (false, false, true, false, true, true, false, true) => todo!(),
+                    (false, false, true, false, true, true, false, false) => todo!(),
+                    (false, false, true, false, true, false, false, true) => todo!(),
+                    (false, false, true, false, false, true, true, false) => todo!(),
+                    (false, false, true, false, false, true, false, true) => todo!(),
+                    (false, false, false, true, true, true, true, false) => todo!(),
+                    (false, false, false, true, true, true, false, true) => todo!(),
+                    (false, false, false, true, true, true, false, false) => todo!(),
+                    (false, false, false, true, true, false, true, true) => todo!(),
+                    (false, false, false, true, true, false, true, false) => todo!(),
+                    (false, false, false, true, true, false, false, true) => todo!(),
+                    (false, false, false, true, false, true, true, false) => todo!(), */
                     // debug
                     _ => {
                         println!(

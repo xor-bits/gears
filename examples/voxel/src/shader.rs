@@ -5,8 +5,11 @@ use vulkano::{
     descriptor_set::pool::StdDescriptorPool,
     pipeline::{
         graphics::{
-            depth_stencil::DepthStencilState, input_assembly::InputAssemblyState,
-            vertex_input::BuffersDefinition, viewport::ViewportState,
+            depth_stencil::DepthStencilState,
+            input_assembly::InputAssemblyState,
+            rasterization::{CullMode, FrontFace, RasterizationState},
+            vertex_input::BuffersDefinition,
+            viewport::ViewportState,
         },
         GraphicsPipeline,
     },
@@ -31,6 +34,7 @@ pub struct UniformData {
 //
 
 mod vert {
+    #![allow(clippy::needless_question_mark)]
     vulkano_shaders::shader! {
         ty: "vertex",
         path: "voxel/res/default.vert.glsl"
@@ -38,6 +42,7 @@ mod vert {
 }
 
 mod geom {
+    #![allow(clippy::needless_question_mark)]
     vulkano_shaders::shader! {
         ty: "geometry",
         path: "voxel/res/default.geom.glsl"
@@ -45,6 +50,7 @@ mod geom {
 }
 
 mod frag {
+    #![allow(clippy::needless_question_mark)]
     vulkano_shaders::shader! {
         ty: "fragment",
         path: "voxel/res/default.frag.glsl"
@@ -52,6 +58,7 @@ mod frag {
 }
 
 mod debug_frag {
+    #![allow(clippy::needless_question_mark)]
     vulkano_shaders::shader! {
         ty: "fragment",
         path: "voxel/res/default.frag.glsl",
@@ -83,6 +90,11 @@ impl DefaultPipeline {
             .fragment_shader(frag.entry_point("main").unwrap(), ())
             .depth_stencil_state(DepthStencilState::simple_depth_test())
             //
+            .rasterization_state(
+                RasterizationState::new()
+                    .cull_mode(CullMode::Back)
+                    .front_face(FrontFace::Clockwise),
+            )
             .render_pass(Subpass::from(renderer.render_pass(), 0).unwrap())
             //
             .build(renderer.device.logical().clone())
@@ -127,6 +139,11 @@ impl DebugPipeline {
             .fragment_shader(frag.entry_point("main").unwrap(), ())
             .depth_stencil_state(DepthStencilState::simple_depth_test())
             //
+            .rasterization_state(
+                RasterizationState::new()
+                    .cull_mode(CullMode::Back)
+                    .front_face(FrontFace::Clockwise),
+            )
             .render_pass(Subpass::from(renderer.render_pass(), 0).unwrap())
             //
             .build(renderer.device.logical().clone())

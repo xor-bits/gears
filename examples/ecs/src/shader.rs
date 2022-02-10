@@ -15,7 +15,7 @@ use gears::{
     },
 };
 use std::sync::Arc;
-use vulkano::{descriptor_set::SingleLayoutDescSetPool, pipeline::Pipeline};
+use vulkano::{descriptor_set::SingleLayoutDescSetPool, pipeline::{Pipeline, graphics::rasterization::{RasterizationState, CullMode, FrontFace}}};
 
 //
 
@@ -66,6 +66,11 @@ impl DefaultPipeline {
             //
             .fragment_shader(frag.entry_point("main").unwrap(), ())
             //
+            .rasterization_state(
+                RasterizationState::new()
+                    .cull_mode(CullMode::Back)
+                    .front_face(FrontFace::Clockwise),
+            )
             .render_pass(Subpass::from(renderer.render_pass(), 0).unwrap())
             //
             .build(renderer.device.logical().clone())

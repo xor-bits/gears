@@ -22,6 +22,7 @@ impl Lighting {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn quad(
     x: u8,
     y: u8,
@@ -80,6 +81,7 @@ fn quad(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cube(
     x: u8,
     y: u8,
