@@ -5,7 +5,7 @@ mod derive;
 mod modules;
 mod pipeline;
 
-/// ## `shader!` macro
+/* /// ## `shader!` macro
 /// WIP easier to use AIO shader macro
 #[proc_macro]
 pub fn shader(_input: TokenStream) -> TokenStream {
@@ -22,7 +22,7 @@ pub fn pipeline(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn modules(input: TokenStream) -> TokenStream {
     modules::modules(input)
-}
+} */
 
 /// ## Input derive macro
 #[proc_macro_derive(Input)]

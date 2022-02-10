@@ -32,7 +32,9 @@ gilrs = "0.8.2"
 # vulkano-shaders = "0.28.0"
 # vulkano-win = "0.28.0"
 vulkano = { git = "https://github.com/vulkano-rs/vulkano" }
-vulkano-shaders = { git = "https://github.com/vulkano-rs/vulkano" }
+vulkano-shaders = { git = "https://github.com/vulkano-rs/vulkano", features = [
+	"shaderc-build-from-source",
+] }
 vulkano-win = { git = "https://github.com/vulkano-rs/vulkano" }
 # vulkano = { git = "https://github.com/Overpeek/vulkano" }
 # vulkano-shaders = { git = "https://github.com/Overpeek/vulkano" }

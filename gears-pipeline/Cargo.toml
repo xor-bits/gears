@@ -15,9 +15,9 @@ proc_macro = true
 proc-macro2 = "~1.0"
 syn = "~1.0"
 quote = "~1.0"
-shaderc = "~0.7"
+# shaderc = "~0.7"
 regex = "~1.5"
-gears-spirv = { path = "../gears-spirv" }
+# gears-spirv = { path = "../gears-spirv" }
 
 [dev-dependencies]
 gears = { path = "../gears" }

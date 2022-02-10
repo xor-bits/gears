@@ -1,4 +1,4 @@
-use proc_macro2::{Group, Ident, Span};
+/* use proc_macro2::{Group, Ident, Span};
 use quote::{quote, ToTokens};
 use regex::Regex;
 use syn::{
@@ -328,58 +328,59 @@ pub struct SortedLayout {
     pub outputs: Vec<FieldType>,
     pub uniforms: Vec<Vec<FieldType>>,
 }
+ */
 
-pub fn get_layout(source: &str) -> SortedLayout {
-    // warning: regex monsters
-    // let comment_remover = Regex::new(r#"//.*(.|\n)"#).unwrap();
-    // let comment_block_remover = Regex::new(r#"/\*(.|\n)*?\*/"#).unwrap();
-    let io_layout_finder =
-        Regex::new(r#"layout(\s|)*?\(.*?\)(\s|)*?(in|out)(\s|)*?[a-zA-Z0-9_].*?;"#).unwrap();
-    let uniform_layout_finder = Regex::new(
-        r#"layout(\s|)*?\(.*?\)(\s|)*?uniform(\s|)*?(.|\n)*?(\s|)*?\{(.|\n)*?\}(\s|)*?(.|\n)*?;"#,
-    )
-    .unwrap();
-
-    // let source = comment_remover.replace_all(&source, "");
-    // let source = comment_block_remover.replace_all(&source, "");
-
-    let mut layout = Layout {
-        inputs: Vec::new(),
-        outputs: Vec::new(),
-        uniforms: Vec::new(),
-    };
-
-    for m in io_layout_finder.find_iter(source) {
-        let f: IOLayoutField = syn::parse_str(m.as_str()).unwrap();
-        match f.layout_type {
-            LayoutType::In => layout.inputs.push((f.layout_def.location, f.data.ty)),
-            LayoutType::Out => layout.outputs.push((f.layout_def.location, f.data.ty)),
-            LayoutType::Uniform => unreachable!(),
-        };
-    }
-
-    for m in uniform_layout_finder.find_iter(source) {
-        let f: UniformLayoutField = syn::parse_str(m.as_str()).unwrap();
-        match f.layout_type {
-            LayoutType::In => unreachable!(),
-            LayoutType::Out => unreachable!(),
-            LayoutType::Uniform => {
-                let mut uniform = Vec::new();
-                for field in f.fields.data {
-                    uniform.push(field.ty);
-                }
-                layout.uniforms.push((f.layout_def.location, uniform));
-            }
-        };
-    }
-
-    layout.inputs.sort_by(|a, b| a.0.cmp(&b.0));
-    layout.outputs.sort_by(|a, b| a.0.cmp(&b.0));
-    layout.uniforms.sort_by(|a, b| a.0.cmp(&b.0));
-
-    SortedLayout {
-        inputs: layout.inputs.into_iter().map(|(_, f)| f).collect(),
-        outputs: layout.outputs.into_iter().map(|(_, f)| f).collect(),
-        uniforms: layout.uniforms.into_iter().map(|(_, f)| f).collect(),
-    }
-}
+// pub fn get_layout(source: &str) -> SortedLayout {
+//     // warning: regex monsters
+//     // let comment_remover = Regex::new(r#"//.*(.|\n)"#).unwrap();
+//     // let comment_block_remover = Regex::new(r#"/\*(.|\n)*?\*/"#).unwrap();
+//     let io_layout_finder =
+//         Regex::new(r#"layout(\s|)*?\(.*?\)(\s|)*?(in|out)(\s|)*?[a-zA-Z0-9_].*?;"#).unwrap();
+//     let uniform_layout_finder = Regex::new(
+//         r#"layout(\s|)*?\(.*?\)(\s|)*?uniform(\s|)*?(.|\n)*?(\s|)*?\{(.|\n)*?\}(\s|)*?(.|\n)*?;"#,
+//     )
+//     .unwrap();
+//
+//     // let source = comment_remover.replace_all(&source, "");
+//     // let source = comment_block_remover.replace_all(&source, "");
+//
+//     let mut layout = Layout {
+//         inputs: Vec::new(),
+//         outputs: Vec::new(),
+//         uniforms: Vec::new(),
+//     };
+//
+//     for m in io_layout_finder.find_iter(source) {
+//         let f: IOLayoutField = syn::parse_str(m.as_str()).unwrap();
+//         match f.layout_type {
+//             LayoutType::In => layout.inputs.push((f.layout_def.location, f.data.ty)),
+//             LayoutType::Out => layout.outputs.push((f.layout_def.location, f.data.ty)),
+//             LayoutType::Uniform => unreachable!(),
+//         };
+//     }
+//
+//     for m in uniform_layout_finder.find_iter(source) {
+//         let f: UniformLayoutField = syn::parse_str(m.as_str()).unwrap();
+//         match f.layout_type {
+//             LayoutType::In => unreachable!(),
+//             LayoutType::Out => unreachable!(),
+//             LayoutType::Uniform => {
+//                 let mut uniform = Vec::new();
+//                 for field in f.fields.data {
+//                     uniform.push(field.ty);
+//                 }
+//                 layout.uniforms.push((f.layout_def.location, uniform));
+//             }
+//         };
+//     }
+//
+//     layout.inputs.sort_by(|a, b| a.0.cmp(&b.0));
+//     layout.outputs.sort_by(|a, b| a.0.cmp(&b.0));
+//     layout.uniforms.sort_by(|a, b| a.0.cmp(&b.0));
+//
+//     SortedLayout {
+//         inputs: layout.inputs.into_iter().map(|(_, f)| f).collect(),
+//         outputs: layout.outputs.into_iter().map(|(_, f)| f).collect(),
+//         uniforms: layout.uniforms.into_iter().map(|(_, f)| f).collect(),
+//     }
+// }

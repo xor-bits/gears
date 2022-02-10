@@ -1,4 +1,4 @@
-use gears_spirv::parse::name_to_kind;
+/* use gears_spirv::parse::name_to_kind;
 use proc_macro2::{Ident, TokenStream, TokenTree};
 use quote::quote;
 use shaderc::ShaderKind;
@@ -303,29 +303,29 @@ impl PipelineInput {
             quote! { gears::renderer::pipeline::GraphicsPipeline<#target_type_generics> };
 
         (quote! {
-			pub struct #name (#target_type);
+            pub struct #name (#target_type);
             impl #name {
-				pub fn build(renderer: &gears::renderer::Renderer) -> Result<Self, gears::renderer::pipeline::PipelineError> {
-					gears::static_assertions::assert_type_eq_all!(<#input as gears::renderer::pipeline::Input>::Fields, #vert::INPUT);
-					gears::static_assertions::assert_type_eq_all!(<#output as gears::renderer::pipeline::Output>::Fields, #frag::OUTPUT);
-					
-					#stage_asserts
-		
-					#vert_uniform_assert
-					#geom_uniform_assert
-					#frag_uniform_assert
-					
-					Ok(Self {
-						0: gears::renderer::pipeline::factory::Pipeline::builder()
-							#vert_call
-							#frag_call
-							#geom_call
-							.input::<#input>()
-							.output::<#output>()
-							.build(renderer)
-							#wrap_err
-					})
-				}
+                pub fn build(renderer: &gears::renderer::Renderer) -> Result<Self, gears::renderer::pipeline::PipelineError> {
+                    gears::static_assertions::assert_type_eq_all!(<#input as gears::renderer::pipeline::Input>::Fields, #vert::INPUT);
+                    gears::static_assertions::assert_type_eq_all!(<#output as gears::renderer::pipeline::Output>::Fields, #frag::OUTPUT);
+
+                    #stage_asserts
+
+                    #vert_uniform_assert
+                    #geom_uniform_assert
+                    #frag_uniform_assert
+
+                    Ok(Self {
+                        0: gears::renderer::pipeline::factory::Pipeline::builder()
+                            #vert_call
+                            #frag_call
+                            #geom_call
+                            .input::<#input>()
+                            .output::<#output>()
+                            .build(renderer)
+                            #wrap_err
+                    })
+                }
             }
             impl std::ops::Deref for #name {
                 type Target = #target_type;
@@ -341,3 +341,4 @@ impl PipelineInput {
 pub fn pipeline(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     parse_macro_input!(input as PipelineInput).output()
 }
+ */
