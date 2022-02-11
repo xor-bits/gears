@@ -15,7 +15,13 @@ use gears::{
     },
 };
 use std::sync::Arc;
-use vulkano::{descriptor_set::SingleLayoutDescSetPool, pipeline::{Pipeline, graphics::rasterization::{RasterizationState, CullMode, FrontFace}}};
+use vulkano::{
+    descriptor_set::SingleLayoutDescSetPool,
+    pipeline::{
+        graphics::rasterization::{CullMode, FrontFace, RasterizationState},
+        Pipeline,
+    },
+};
 
 //
 
@@ -32,6 +38,7 @@ pub struct UniformData {
 }
 
 mod vert {
+    #![allow(clippy::needless_question_mark)]
     vulkano_shaders::shader! {
         ty: "vertex",
         path: "ecs/res/vert.glsl"
@@ -39,6 +46,7 @@ mod vert {
 }
 
 mod frag {
+    #![allow(clippy::needless_question_mark)]
     vulkano_shaders::shader! {
         ty: "fragment",
         path: "ecs/res/frag.glsl"
