@@ -162,6 +162,8 @@ impl Renderer {
     }
 
     pub fn try_begin_frame(&mut self, state: &mut State) -> Option<FrameData> {
+        self.previous_frame.as_mut().unwrap().cleanup_finished();
+
         // frame in flight can be 0 or 1
         // xor:ing with 1 swaps it between these two
         //   xor 0,0 = 0
@@ -171,15 +173,13 @@ impl Renderer {
         // so with fetch_xor 1 we can cycle the frame in flight
         // and get the index for this frame
         let frame_in_flight = self.frame_in_flight.fetch_xor(1, Ordering::SeqCst) as usize;
-        assert!((0..=1).contains(&frame_in_flight));
-
-        self.previous_frame.as_mut().unwrap().cleanup_finished();
 
         // acquire the target image (future) and its index
         let (image_index, acquire_future) =
             match self.swapchain_objects.window_target.acquire_image() {
                 Some(v) => v,
                 None => {
+                    // log::debug!("Failed to acquire image");
                     self.recreate_swapchain().unwrap();
                     return None;
                 }
@@ -192,12 +192,8 @@ impl Renderer {
         let target = &self.render_targets[image_index];
 
         // begin recording a render command buffer
-        let (recorder, perf, gpu_time) = Self::begin_record(
-            &self.device,
-            &mut target.lock(),
-            image_index,
-            /* frame_in_flight, */
-        );
+        let (recorder, perf, gpu_time) =
+            Self::begin_record(&self.device, &mut target.lock(), image_index);
         if let Some(gpu_time) = gpu_time {
             state.gpu_frame_reporter.manual(gpu_time);
         }
@@ -210,12 +206,6 @@ impl Renderer {
             depth_range: 0.0..1.0,
         };
         let scissor = Scissor::irrelevant();
-
-        // wait for the fence set up in the last same frame_in_flight
-        // waiting is necessary to unlock any resources it uses
-        if let Some(fence) = self.frame_fences[frame_in_flight].as_ref() {
-            fence.wait(None).unwrap();
-        }
 
         Some(FrameData {
             recorder,
@@ -234,16 +224,25 @@ impl Renderer {
         let cb = Self::end_record(frame_data.recorder);
 
         // rendering
+
+        // wait for the fence set up in the last same frame_in_flight
+        // waiting is necessary to unlock any resources it uses
+        if let Some(fence) = self.frame_fences[frame_data.frame_in_flight].as_ref() {
+            fence.wait(None).unwrap();
+        }
         // signal fence to wait for unlocking resources
         // wrap to Arc so that it can be cloned
-        let future = Arc::new(
-            frame_data
-                .future
-                .then_execute(self.device.queues.graphics.clone(), cb)
-                .unwrap()
-                .boxed()
-                .then_signal_fence(),
-        );
+        let future = match frame_data
+            .future
+            .then_execute(self.device.queues.graphics.clone(), cb)
+        {
+            Ok(future) => Arc::new(future.boxed().then_signal_fence()),
+            Err(err) => {
+                log::error!("Error: {err}");
+                self.previous_frame = Some(sync::now(self.device.logical().clone()).boxed());
+                return;
+            }
+        };
         // store the fence and wait for it the next time this same frame_in_flight is used
         self.frame_fences[frame_data.frame_in_flight] = Some(future.clone());
 

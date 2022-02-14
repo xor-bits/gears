@@ -34,7 +34,7 @@ use gears::{
     winit::event::ElementState,
     SyncMode, UpdateRate,
 };
-use marching_cubes::generate_marching_cubes;
+use mcubes::generate_mcubes;
 use shader::{DebugPipeline, DefaultPipeline, UniformData, VertexData};
 use simdnoise::NoiseBuilder;
 use std::time::Instant;
@@ -47,17 +47,19 @@ use vulkano::{
 //
 
 mod cubes;
-mod marching_cubes;
+mod mcubes;
+// mod marching_cubes;
 mod shader;
 
 //
 
 const UPDATE_RATE: UpdateRate = UpdateRate::PerSecond(60);
 
-const WIDTH: usize = 64;
-const HEIGHT: usize = 64;
-const DEPTH: usize = 64;
-
+const RES: usize = 64;
+const SCALE: f32 = 1.0;
+const WIDTH: usize = RES;
+const HEIGHT: usize = RES;
+const DEPTH: usize = RES;
 const ISLAND: bool = true;
 
 //
@@ -72,8 +74,8 @@ impl MeshMode {
     fn gen_mesh(&self, voxels: &[f32]) -> (Vec<shader::VertexData>, Vec<u32>) {
         match &self {
             MeshMode::Cubes => generate_cubes(voxels),
-            MeshMode::Marching => generate_marching_cubes(voxels, false),
-            MeshMode::SMarching => generate_marching_cubes(voxels, true),
+            MeshMode::Marching => generate_mcubes(voxels, false),
+            MeshMode::SMarching => generate_mcubes(voxels, true),
         }
     }
 }
@@ -101,7 +103,7 @@ struct App {
 
 fn generate_voxels(seed: i32) -> Vec<f32> {
     let voxels = NoiseBuilder::fbm_3d(WIDTH, HEIGHT, DEPTH)
-        .with_freq(0.02)
+        .with_freq(SCALE / RES as f32)
         .with_octaves(4)
         .with_gain(0.95)
         .with_lacunarity(1.7)
@@ -151,8 +153,8 @@ impl App {
         )
         .unwrap();
 
-        let fill_shader = shader::DefaultPipeline::build(&renderer);
-        let line_shader = shader::DebugPipeline::build(&renderer);
+        let fill_shader = DefaultPipeline::build(&renderer);
+        let line_shader = DebugPipeline::build(&renderer);
 
         let input = InputState::new();
         let fpcam = FPCam::with_dir(Vec2::new(
@@ -294,12 +296,13 @@ impl Runnable for App {
             future,
         } = self.renderer.begin_frame(state);
 
+        // outside of render pass
         self.vb.update(&mut recorder).unwrap();
         self.ib.update(&mut recorder).unwrap();
 
         let ubo = self.ubo(delta);
         let (layout, set, pipeline) = if self.debug {
-            let ubo = self.shaders.0.buffer_pool.next(ubo).unwrap();
+            let ubo = self.shaders.1.buffer_pool.next(ubo).unwrap();
             let layout = self.shaders.1.pipeline.layout().descriptor_set_layouts()[0].clone();
             (
                 self.shaders.1.pipeline.layout().clone(),
@@ -328,19 +331,16 @@ impl Runnable for App {
             )
         };
 
-        // outside of render pass
-        self.vb.update(&mut recorder).unwrap();
-
         // inside of render pass
         let mut recorder = recorder.begin_render_pass();
         recorder
             .record()
             .begin_perf(&perf)
+            .set_viewport(0, [viewport.clone()])
             .bind_pipeline_graphics(pipeline)
             .bind_descriptor_sets(PipelineBindPoint::Graphics, layout, 0, vec![set])
             .bind_vertex_buffers(0, self.vb.local.clone())
             .bind_index_buffer(self.ib.local.clone())
-            .set_viewport(0, [viewport.clone()])
             .draw_indexed(self.ib.len() as _, 1, 0, 0, 0)
             .unwrap()
             .end_perf(&perf);

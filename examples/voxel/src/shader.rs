@@ -6,7 +6,7 @@ use vulkano::{
     pipeline::{
         graphics::{
             depth_stencil::DepthStencilState,
-            input_assembly::InputAssemblyState,
+            input_assembly::{InputAssemblyState},
             rasterization::{CullMode, FrontFace, RasterizationState},
             vertex_input::BuffersDefinition,
             viewport::ViewportState,
@@ -18,14 +18,14 @@ use vulkano::{
 
 //
 
-#[derive(Debug, Input, PartialEq, Default)]
+#[derive(Debug, Input, Clone, PartialEq, Default)]
 #[repr(C)]
 pub struct VertexData {
     pub vi_pos: [f32; 3],
     pub vi_exp: f32,
 }
 
-#[derive(Debug, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 #[repr(C)]
 pub struct UniformData {
     pub mvp: Mat4,

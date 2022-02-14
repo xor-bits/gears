@@ -24,9 +24,9 @@ impl Lighting {
 
 #[allow(clippy::too_many_arguments)]
 fn quad(
-    x: u8,
-    y: u8,
-    z: u8,
+    x: usize,
+    y: usize,
+    z: usize,
     sx: u8,
     sy: u8,
     sz: u8,
@@ -83,9 +83,9 @@ fn quad(
 
 #[allow(clippy::too_many_arguments)]
 fn cube(
-    x: u8,
-    y: u8,
-    z: u8,
+    x: usize,
+    y: usize,
+    z: usize,
     neg_x: bool,
     pos_x: bool,
     neg_y: bool,
@@ -142,9 +142,9 @@ pub fn generate_cubes(voxels: &[f32]) -> (Vec<shader::VertexData>, Vec<u32>) {
                     || !exists(voxels[point_to_index(voxel_x, voxel_y, voxel_z + 1)]);
 
                 cube(
-                    voxel_x as u8,
-                    voxel_y as u8,
-                    voxel_z as u8,
+                    voxel_x,
+                    voxel_y,
+                    voxel_z,
                     neg_x,
                     pos_x,
                     neg_y,
@@ -162,7 +162,7 @@ pub fn generate_cubes(voxels: &[f32]) -> (Vec<shader::VertexData>, Vec<u32>) {
     // 4 5 6   4 6 7
     // ...
     let cube_indices = [0, 1, 2, 0, 2, 3];
-    let indices: Vec<u32> = (0..vertices.len() / VERT_PER_QUAD * INDX_PER_QUAD)
+    let indices: Vec<u32> = (0..vertices.len() * INDX_PER_QUAD / VERT_PER_QUAD)
         .map(|i| {
             let cube_index = (i / 6) as u32;
             cube_index * 4 + cube_indices[i % 6]
