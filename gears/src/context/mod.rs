@@ -4,7 +4,7 @@ use vulkano::{
     device::DeviceCreationError,
     instance::{
         debug::{DebugCallback, DebugCallbackCreationError},
-        layers_list, ApplicationInfo, Instance, InstanceCreationError, InstanceExtensions,
+        layers_list, Instance, InstanceCreateInfo, InstanceCreationError, InstanceExtensions,
         LayerProperties, LayersListError,
     },
     swapchain::{CapabilitiesError, SurfaceCreationError, SwapchainCreationError},
@@ -96,7 +96,7 @@ pub struct Context {
 }
 
 impl Context {
-    fn get_layers(validation: ContextValidation) -> Vec<&'static str> {
+    fn get_layers(validation: ContextValidation) -> Vec<String> {
         // query available layers from instance
 
         let available_layers = layers_list().unwrap().collect::<Vec<LayerProperties>>();
@@ -130,6 +130,7 @@ impl Context {
 
                 found
             })
+            .map(str::to_string)
             .collect()
     }
 
@@ -162,37 +163,33 @@ impl Context {
     pub fn new(pick: ContextGPUPick, validation: ContextValidation) -> Result<Self, ContextError> {
         // versions
 
-        let api_version = Version::V1_2;
-
         let engine_version = (
             env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap(),
             env!("CARGO_PKG_VERSION_MINOR").parse().unwrap(),
         );
 
-        let application_info = ApplicationInfo {
-            application_name: None,
-            application_version: None,
-            engine_name: Some("gears".into()),
-            engine_version: Some(Version::major_minor(engine_version.0, engine_version.1)),
-        };
-
         // layers
 
-        let layers = Self::get_layers(validation);
+        let enabled_layers = Self::get_layers(validation);
 
         // extensions
 
-        let extensions = Self::get_extensions(validation);
+        let enabled_extensions = Self::get_extensions(validation);
 
         // instance
 
-        let instance = Instance::new(
-            Some(&application_info),
-            api_version,
-            &extensions,
-            layers.iter().cloned(),
-        )
-        .map_err(ContextError::InstanceCreationError)?;
+        let instance_info = InstanceCreateInfo {
+            application_name: None,
+            application_version: Version::V1_0,
+            engine_name: Some("gears".into()),
+            engine_version: Version::major_minor(engine_version.0, engine_version.1),
+
+            enabled_layers,
+            enabled_extensions,
+
+            ..Default::default()
+        };
+        let instance = Instance::new(instance_info).map_err(ContextError::InstanceCreationError)?;
 
         // debugger
 

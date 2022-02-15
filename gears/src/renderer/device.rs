@@ -6,7 +6,7 @@ use crate::{
 use std::sync::Arc;
 use vulkano::device::{
     physical::{MemoryType, PhysicalDevice},
-    Device, DeviceExtensions, Features,
+    Device, DeviceCreateInfo, DeviceExtensions, Features,
 };
 
 //
@@ -54,7 +54,7 @@ impl RenderDevice {
 
         // device extensions
 
-        let device_extensions = Self::device_extensions(p_device);
+        let enabled_extensions = Self::device_extensions(p_device);
 
         // queue infos
 
@@ -64,16 +64,21 @@ impl RenderDevice {
 
         // features
 
-        let features = Features {
+        let enabled_features = Features {
             geometry_shader: true,
             ..Default::default()
         };
 
         // device
 
+        let device_info = DeviceCreateInfo {
+            enabled_extensions,
+            enabled_features,
+            queue_create_infos,
+            ..Default::default()
+        };
         let (device, queues) =
-            Device::new(p_device, &features, &device_extensions, queue_create_infos)
-                .map_err(ContextError::DeviceCreationError)?;
+            Device::new(p_device, device_info).map_err(ContextError::DeviceCreationError)?;
 
         // queues
 

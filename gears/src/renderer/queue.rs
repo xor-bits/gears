@@ -4,7 +4,7 @@ use std::sync::Arc;
 use vulkano::{
     device::{
         physical::{PhysicalDevice, QueueFamily},
-        Queue, QueuesIter,
+        Queue, QueueCreateInfo,
     },
     swapchain::Surface,
 };
@@ -71,15 +71,18 @@ impl<'a> QueueFamilies<'a> {
         Ok(None)
     }
 
-    pub fn get(&self) -> Vec<(QueueFamily<'_>, f32)> {
+    pub fn get(&self) -> Vec<QueueCreateInfo<'_>> {
         if self.present == self.graphics {
-            vec![(self.present, 1.0)]
+            vec![QueueCreateInfo::family(self.present)]
         } else {
-            vec![(self.present, 1.0), (self.graphics, 1.0)]
+            vec![
+                QueueCreateInfo::family(self.present),
+                QueueCreateInfo::family(self.graphics),
+            ]
         }
     }
 
-    pub fn get_queues(&self, mut queue_iter: QueuesIter) -> Queues {
+    pub fn get_queues(&self, mut queue_iter: impl ExactSizeIterator<Item = Arc<Queue>>) -> Queues {
         let present = queue_iter.next().expect("Missing queue");
         if self.present == self.graphics {
             Queues {
