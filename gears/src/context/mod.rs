@@ -1,13 +1,13 @@
 use crate::debug;
 use std::{env, sync::Arc};
 use vulkano::{
-    device::DeviceCreationError,
+    device::{physical::SurfacePropertiesError, DeviceCreationError},
     instance::{
         debug::{DebugCallback, DebugCallbackCreationError},
         layers_list, Instance, InstanceCreateInfo, InstanceCreationError, InstanceExtensions,
         LayerProperties, LayersListError,
     },
-    swapchain::{CapabilitiesError, SurfaceCreationError, SwapchainCreationError},
+    swapchain::{SurfaceCreationError, SwapchainCreationError},
     Version,
 };
 
@@ -80,8 +80,8 @@ pub enum ContextError {
     InstanceCreationError(InstanceCreationError),
     LayersListError(LayersListError),
     DebugCallbackCreationError(DebugCallbackCreationError),
+    SurfacePropertiesError(SurfacePropertiesError),
     SurfaceCreationError(SurfaceCreationError),
-    CapabilitiesError(CapabilitiesError),
     DeviceCreationError(DeviceCreationError),
     SwapchainCreationError(SwapchainCreationError),
     NoSuitableGPUs,

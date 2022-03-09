@@ -36,7 +36,7 @@ impl<'a> QueueFamilies<'a> {
         for queue_family_property in queue_family_properties {
             let present_support = surface
                 .is_supported(queue_family_property)
-                .map_err(ContextError::CapabilitiesError)?;
+                .map_err(ContextError::SurfaceCapabilitiesError)?;
 
             let graphics_support = queue_family_property.supports_graphics();
             /* let transfer_support = queue_family_property.explicitly_supports_transfers(); */

@@ -1,13 +1,14 @@
 use crate::{context::ContextError, renderer::device::Dev, SyncMode};
-use std::sync::Arc;
+use smallvec::SmallVec;
+use std::{iter::FromIterator, sync::Arc};
 use vulkano::{
     format::Format,
     image::{ImageUsage, SwapchainImage},
     swapchain::{
-        acquire_next_image, Capabilities, ColorSpace, CompositeAlpha, PresentMode, Surface,
-        SurfaceTransform, Swapchain, SwapchainAcquireFuture,
+        acquire_next_image, ColorSpace, CompositeAlpha, PresentMode, Surface, SurfaceCapabilities,
+        SurfaceInfo, SurfaceTransform, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo,
     },
-    sync::SharingMode,
+    sync::{Sharing, SharingMode},
 };
 use winit::window::Window;
 
@@ -50,25 +51,32 @@ impl WindowTargetBuilder {
         let info = self.swapchain_info(device, sync)?;
 
         let sharing = if device.queues.present == device.queues.graphics {
-            SharingMode::Exclusive
+            Sharing::Exclusive
         } else {
-            SharingMode::from(&[&device.queues.present, &device.queues.graphics][..])
+            Sharing::Concurrent(SmallVec::from_iter([
+                device.queues.present.family().id(),
+                device.queues.graphics.family().id(),
+            ]))
         };
 
-        let (swapchain, images) = Swapchain::start(device.logical().clone(), self.surface.clone())
-            .num_images(info.len)
-            .format(info.format.0)
-            .color_space(info.format.1)
-            .dimensions(info.extent)
-            .usage(ImageUsage::color_attachment())
-            .sharing_mode(sharing)
-            .transform(info.transform)
-            .composite_alpha(info.composite_alpha)
-            .present_mode(info.present)
-            .clipped(true)
-            .layers(1)
-            .build()
-            .map_err(ContextError::SwapchainCreationError)?;
+        let create_info = SwapchainCreateInfo {
+            min_image_count: info.len,
+            image_format: Some(info.format.0),
+            image_color_space: info.format.1,
+            image_extent: info.extent,
+            image_array_layers: 1,
+            image_usage: ImageUsage::color_attachment(),
+            image_sharing: sharing,
+            pre_transform: info.transform,
+            composite_alpha: info.composite_alpha,
+            present_mode: info.present,
+            clipped: true,
+            ..Default::default()
+        };
+
+        let (swapchain, images) =
+            Swapchain::new(device.logical().clone(), self.surface.clone(), create_info)
+                .map_err(ContextError::SwapchainCreationError)?;
 
         Ok((
             WindowTarget {
@@ -97,17 +105,19 @@ impl WindowTargetBuilder {
         })
     }
 
-    fn capabilities(&self, device: &Dev) -> Result<Capabilities, ContextError> {
-        self.surface
-            .capabilities(device.physical())
-            .map_err(ContextError::CapabilitiesError)
+    fn capabilities(&self, device: &Dev) -> Result<SurfaceCapabilities, ContextError> {
+        device
+            .physical()
+            .surface_capabilities(&self.surface, Default::default())
+            .map_err(ContextError::SurfacePropertiesError)
     }
 
     fn pick_format(
         &self,
-        surface_caps: &Capabilities,
+        surface_caps: &SurfaceCapabilities,
     ) -> Result<(Format, ColorSpace), ContextError> {
         let format = surface_caps
+            .
             .supported_formats
             .iter()
             .find(|(format, color_space)| {
@@ -127,7 +137,7 @@ impl WindowTargetBuilder {
 
     fn pick_present_mode(
         &self,
-        surface_caps: &Capabilities,
+        surface_caps: &SurfaceCapabilities,
         sync: SyncMode,
     ) -> Result<PresentMode, ContextError> {
         let fallback = |a: bool, b: PresentMode| -> PresentMode {
@@ -152,7 +162,7 @@ impl WindowTargetBuilder {
         Ok(mode)
     }
 
-    fn swapchain_len(&self, surface_caps: &Capabilities) -> u32 {
+    fn swapchain_len(&self, surface_caps: &SurfaceCapabilities) -> u32 {
         let preferred = surface_caps.min_image_count + 1;
 
         if let Some(max_image_count) = surface_caps.max_image_count {
@@ -162,7 +172,7 @@ impl WindowTargetBuilder {
         }
     }
 
-    fn swapchain_extent(&mut self, surface_caps: &Capabilities) -> [u32; 2] {
+    fn swapchain_extent(&mut self, surface_caps: &SurfaceCapabilities) -> [u32; 2] {
         if let Some(extent) = surface_caps.current_extent {
             self.extent = extent;
         } else {
@@ -176,7 +186,7 @@ impl WindowTargetBuilder {
         self.extent
     }
 
-    fn swapchain_transform(&self, surface_caps: &Capabilities) -> SurfaceTransform {
+    fn swapchain_transform(&self, surface_caps: &SurfaceCapabilities) -> SurfaceTransform {
         if surface_caps.supported_transforms.identity {
             SurfaceTransform::Identity
         } else {
@@ -184,7 +194,7 @@ impl WindowTargetBuilder {
         }
     }
 
-    fn swapchain_composite_alpha(&self, surface_caps: &Capabilities) -> CompositeAlpha {
+    fn swapchain_composite_alpha(&self, surface_caps: &SurfaceCapabilities) -> CompositeAlpha {
         if surface_caps.supported_composite_alpha.opaque {
             CompositeAlpha::Opaque
         } else {
@@ -209,7 +219,7 @@ impl WindowTarget {
     }
 
     pub fn extent(&mut self, device: &Dev) -> Result<[u32; 2], ContextError> {
-        let surface_caps = self.base.capabilities(device)?;
+        let surface_caps = self.base.SurfaceCapabilities(device)?;
         Ok(self.base.swapchain_extent(&surface_caps))
     }
 
