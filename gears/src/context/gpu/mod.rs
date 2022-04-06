@@ -20,11 +20,11 @@ pub mod unsuitable;
 
 impl SuitableGPU {
     pub fn pick(
-        instance: &Arc<Instance>,
-        surface: &Arc<Surface<Window>>,
+        instance: Arc<Instance>,
+        surface: &Surface<Window>,
         pick: ContextGPUPick,
     ) -> Result<Self, ContextError> {
-        let p_devices = PhysicalDevice::enumerate(instance)
+        let p_devices = PhysicalDevice::enumerate(&instance)
             .map(|p_device| {
                 let queue_families = QueueFamilies::new(surface, p_device)?;
                 let score = GPUScore::new(p_device);

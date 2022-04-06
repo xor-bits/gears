@@ -28,15 +28,16 @@ anyhow = "~1.0"
 gears-pipeline = { path = "../gears-pipeline" }
 gilrs = "0.8.2"
 smallvec = "1.8.0"
+bytemuck = "1.8.0"
 
-# vulkano = "0.28.0"
-# vulkano-shaders = "0.28.0"
-# vulkano-win = "0.28.0"
-vulkano = { git = "https://github.com/vulkano-rs/vulkano" }
-vulkano-shaders = { git = "https://github.com/vulkano-rs/vulkano", features = [
-	"shaderc-build-from-source",
-] }
-vulkano-win = { git = "https://github.com/vulkano-rs/vulkano" }
+vulkano = "0.29.0"
+vulkano-shaders = "0.29.0"
+vulkano-win = "0.29.0"
+# vulkano = { git = "https://github.com/vulkano-rs/vulkano" }
+# vulkano-shaders = { git = "https://github.com/vulkano-rs/vulkano", features = [
+# 	"shaderc-build-from-source",
+# ] }
+# vulkano-win = { git = "https://github.com/vulkano-rs/vulkano" }
 # vulkano = { git = "https://github.com/Overpeek/vulkano" }
 # vulkano-shaders = { git = "https://github.com/Overpeek/vulkano" }
 # vulkano-win = { git = "https://github.com/Overpeek/vulkano" }

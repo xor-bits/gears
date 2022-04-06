@@ -1,4 +1,5 @@
-use gears::{gears_pipeline::Input, glam::Mat4, renderer::simple_renderer::Renderer};
+use bytemuck::{Pod, Zeroable};
+use gears::{gears_pipeline::Input, renderer::simple_renderer::Renderer};
 use std::sync::Arc;
 use vulkano::{
     buffer::CpuBufferPool,
@@ -6,7 +7,7 @@ use vulkano::{
     pipeline::{
         graphics::{
             depth_stencil::DepthStencilState,
-            input_assembly::{InputAssemblyState},
+            input_assembly::InputAssemblyState,
             rasterization::{CullMode, FrontFace, RasterizationState},
             vertex_input::BuffersDefinition,
             viewport::ViewportState,
@@ -18,17 +19,17 @@ use vulkano::{
 
 //
 
-#[derive(Debug, Input, Clone, PartialEq, Default)]
+#[derive(Debug, Zeroable, Pod, Input, Copy, Clone, PartialEq, Default)]
 #[repr(C)]
 pub struct VertexData {
     pub vi_pos: [f32; 3],
     pub vi_exp: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Zeroable, Pod, Copy, Clone, PartialEq, Default)]
 #[repr(C)]
 pub struct UniformData {
-    pub mvp: Mat4,
+    pub mvp: [[f32; 4]; 4],
 }
 
 //

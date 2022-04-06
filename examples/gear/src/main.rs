@@ -104,14 +104,14 @@ impl App {
         let up = Vec3::new(0.0, -1.0, 0.0);
 
         let ubo = UniformData {
-            model_matrix: Mat4::from_rotation_x(self.position.z),
-            view_matrix: Mat4::look_at_rh(eye, focus, up),
-            projection_matrix: Mat4::perspective_rh(1.0, aspect, 0.01, 100.0),
-            light_dir: Vec3::new(0.2, 2.0, 0.5).normalize(),
+            model_matrix: Mat4::from_rotation_x(self.position.z).to_cols_array_2d(),
+            view_matrix: Mat4::look_at_rh(eye, focus, up).to_cols_array_2d(),
+            projection_matrix: Mat4::perspective_rh(1.0, aspect, 0.01, 100.0).to_cols_array_2d(),
+            light_dir: Vec3::new(0.2, 2.0, 0.5).normalize().to_array(),
         };
 
         let ubo = self.shader.buffer_pool.next(ubo).unwrap();
-        let layout = self.shader.pipeline.layout().descriptor_set_layouts()[0].clone();
+        let layout = self.shader.pipeline.layout().set_layouts()[0].clone();
         PersistentDescriptorSet::new_with_pool(
             layout,
             0,

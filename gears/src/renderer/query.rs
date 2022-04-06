@@ -2,7 +2,7 @@ use super::{device::Dev, Recorder};
 use std::{sync::Arc, time::Duration};
 use vulkano::{
     command_buffer::AutoCommandBufferBuilder,
-    query::{GetResultsError, QueryPool, QueryResultFlags, QueryType},
+    query::{GetResultsError, QueryPool, QueryPoolCreateInfo, QueryResultFlags, QueryType},
     sync::PipelineStage,
 };
 
@@ -27,8 +27,12 @@ pub trait RecordPerf {
 
 impl PerfQuery {
     pub fn new_with_device(device: &Dev) -> Self {
-        let query_pool = QueryPool::new(device.logical().clone(), QueryType::Timestamp, 2)
-            .expect("Could not create a query pool");
+        let info = QueryPoolCreateInfo {
+            query_count: 2,
+            ..QueryPoolCreateInfo::query_type(QueryType::Timestamp)
+        };
+        let query_pool =
+            QueryPool::new(device.logical().clone(), info).expect("Could not create a query pool");
 
         Self { query_pool }
     }

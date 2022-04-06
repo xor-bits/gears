@@ -8,7 +8,7 @@ use vulkano::{
         acquire_next_image, ColorSpace, CompositeAlpha, PresentMode, Surface, SurfaceCapabilities,
         SurfaceInfo, SurfaceTransform, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo,
     },
-    sync::{Sharing, SharingMode},
+    sync::Sharing,
 };
 use winit::window::Window;
 
@@ -95,8 +95,8 @@ impl WindowTargetBuilder {
     ) -> Result<SwapchainInfo, ContextError> {
         let caps = self.capabilities(device)?;
         Ok(SwapchainInfo {
-            format: self.pick_format(&caps)?,
-            present: self.pick_present_mode(&caps, sync)?,
+            format: self.pick_format(device)?,
+            present: self.pick_present_mode(device, sync)?,
 
             len: self.swapchain_len(&caps),
             extent: self.swapchain_extent(&caps),
@@ -112,34 +112,41 @@ impl WindowTargetBuilder {
             .map_err(ContextError::SurfacePropertiesError)
     }
 
-    fn pick_format(
-        &self,
-        surface_caps: &SurfaceCapabilities,
-    ) -> Result<(Format, ColorSpace), ContextError> {
-        let format = surface_caps
-            .
-            .supported_formats
+    fn pick_format(&self, device: &Dev) -> Result<(Format, ColorSpace), ContextError> {
+        let supported_formats = device
+            .physical()
+            .surface_formats(&self.surface, SurfaceInfo::default() /* ? */)
+            .map_err(ContextError::SurfacePropertiesError)?;
+        let format = supported_formats
             .iter()
             .find(|(format, color_space)| {
                 format == &Format::R8G8B8A8_SRGB && color_space == &ColorSpace::SrgbNonLinear
             })
-            .unwrap_or(&surface_caps.supported_formats[0]);
+            .unwrap_or(&supported_formats[0]);
         let format = *format;
 
         log::debug!(
             "Surface format chosen: {:?} from {:?}",
             format,
-            surface_caps.supported_formats
+            supported_formats
         );
 
         Ok(format)
     }
 
-    fn pick_present_mode(
-        &self,
-        surface_caps: &SurfaceCapabilities,
-        sync: SyncMode,
-    ) -> Result<PresentMode, ContextError> {
+    fn pick_present_mode(&self, device: &Dev, sync: SyncMode) -> Result<PresentMode, ContextError> {
+        let mut immediate_supported = false;
+        let mut mailbox_supported = false;
+        device
+            .physical()
+            .surface_present_modes(&self.surface)
+            .map_err(ContextError::SurfacePropertiesError)?
+            .for_each(|mode| match mode {
+                PresentMode::Immediate => immediate_supported = true,
+                PresentMode::Mailbox => mailbox_supported = true,
+                _ => {}
+            });
+
         let fallback = |a: bool, b: PresentMode| -> PresentMode {
             if a {
                 b
@@ -151,10 +158,8 @@ impl WindowTargetBuilder {
 
         let mode = match sync {
             SyncMode::Fifo => PresentMode::Fifo,
-            SyncMode::Immediate => {
-                fallback(surface_caps.present_modes.immediate, PresentMode::Immediate)
-            }
-            SyncMode::Mailbox => fallback(surface_caps.present_modes.mailbox, PresentMode::Mailbox),
+            SyncMode::Immediate => fallback(immediate_supported, PresentMode::Immediate),
+            SyncMode::Mailbox => fallback(mailbox_supported, PresentMode::Mailbox),
         };
 
         log::debug!("Surface present mode chosen: {:?}", mode,);
@@ -219,18 +224,22 @@ impl WindowTarget {
     }
 
     pub fn extent(&mut self, device: &Dev) -> Result<[u32; 2], ContextError> {
-        let surface_caps = self.base.SurfaceCapabilities(device)?;
+        let surface_caps = self.base.capabilities(device)?;
         Ok(self.base.swapchain_extent(&surface_caps))
     }
 
     pub fn recreate(&mut self) -> Result<SwapchainImages, ContextError> {
+        let create_info = SwapchainCreateInfo {
+            image_extent: [0, 0],
+            ..self.swapchain.create_info()
+        };
+
         let (swapchain, images) = self
             .swapchain
-            .recreate()
-            .build()
+            .recreate(create_info)
             .map_err(ContextError::SwapchainCreationError)?;
 
-        self.base.extent = swapchain.dimensions();
+        self.base.extent = swapchain.image_extent();
         self.swapchain = swapchain;
         Ok(images)
     }

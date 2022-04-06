@@ -1,6 +1,6 @@
+use bytemuck::{Pod, Zeroable};
 use gears::{
     gears_pipeline::Input,
-    glam::Mat4,
     renderer::simple_renderer::Renderer,
     vulkano::{
         buffer::CpuBufferPool,
@@ -25,16 +25,16 @@ use vulkano::{
 
 //
 
-#[derive(Input, Debug, PartialEq, Copy, Clone, Default)]
+#[derive(Debug, Zeroable, Pod, Input, PartialEq, Copy, Clone, Default)]
 #[repr(C)]
 pub struct VertexData {
     pub pos: [f32; 2],
 }
 
-#[derive(Debug, PartialEq, Copy, Clone, Default)]
+#[derive(Debug, Zeroable, Pod, PartialEq, Copy, Clone, Default)]
 #[repr(C)]
 pub struct UniformData {
-    pub mvp: Mat4,
+    pub mvp: [[f32; 4]; 4],
 }
 
 mod vert {
@@ -84,7 +84,7 @@ impl DefaultPipeline {
             .build(renderer.device.logical().clone())
             .unwrap();
 
-        let layout = pipeline.layout().descriptor_set_layouts()[0].clone();
+        let layout = pipeline.layout().set_layouts()[0].clone();
         let desc_pool = SingleLayoutDescSetPool::new(layout);
         let buffer_pool =
             CpuBufferPool::<UniformData>::uniform_buffer(renderer.device.logical().clone());

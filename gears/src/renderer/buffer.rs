@@ -7,24 +7,26 @@ use std::{
         Arc,
     },
 };
+pub use vulkano::buffer::BufferUsage;
 use vulkano::{
     buffer::{
         cpu_access::{ReadLock, WriteLock},
-        CpuAccessibleBuffer, DeviceLocalBuffer,
+        BufferContents, CpuAccessibleBuffer, DeviceLocalBuffer, TypedBufferAccess,
     },
-    memory::Content,
     DeviceSize,
 };
 
-pub use vulkano::buffer::BufferUsage;
+//
 
-pub struct StagedBuffer<T: ?Sized> {
+pub struct StagedBuffer<T: BufferContents + ?Sized> {
     pub stage: Arc<CpuAccessibleBuffer<T>>,
     pub local: Arc<DeviceLocalBuffer<T>>,
     updates: AtomicBool,
 }
 
-impl<T: ?Sized> Deref for StagedBuffer<T> {
+//
+
+impl<T: ?Sized + BufferContents> Deref for StagedBuffer<T> {
     type Target = Arc<DeviceLocalBuffer<T>>;
 
     fn deref(&self) -> &Self::Target {
@@ -32,7 +34,7 @@ impl<T: ?Sized> Deref for StagedBuffer<T> {
     }
 }
 
-impl<T: ?Sized> DerefMut for StagedBuffer<T> {
+impl<T: ?Sized + BufferContents> DerefMut for StagedBuffer<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.local
     }
@@ -40,7 +42,7 @@ impl<T: ?Sized> DerefMut for StagedBuffer<T> {
 
 impl<T> StagedBuffer<T>
 where
-    T: Default + Copy + Send + Sync + 'static,
+    T: BufferContents + Default + Copy,
 {
     pub fn new(device: &Dev, usage: BufferUsage) -> Result<Self> {
         Self::from_data(device, usage, T::default())
@@ -49,7 +51,7 @@ where
 
 impl<T> StagedBuffer<T>
 where
-    T: Copy + Send + Sync + 'static,
+    T: Copy + BufferContents,
 {
     pub fn from_data(device: &Dev, usage: BufferUsage, data: T) -> Result<Self> {
         let (stage_usage, local_usage) = make_usage(usage);
@@ -70,7 +72,7 @@ where
 
 impl<T> StagedBuffer<[T]>
 where
-    T: Send + Sync + 'static,
+    [T]: BufferContents,
 {
     pub fn from_iter<I>(device: &Dev, usage: BufferUsage, data: I) -> Result<Self>
     where
@@ -95,7 +97,9 @@ where
 
 impl<T> StagedBuffer<T>
 where
-    T: ?Sized + Content + Send + Sync + 'static,
+    T: ?Sized + BufferContents,
+    CpuAccessibleBuffer<T>: TypedBufferAccess<Content = T>,
+    DeviceLocalBuffer<T>: TypedBufferAccess<Content = T>,
 {
     /// copy data from the device local buffer back to the stage buffer
     ///
@@ -146,12 +150,14 @@ where
 
 impl<T> StagedBuffer<T>
 where
-    T: ?Sized + Content + 'static,
+    T: ?Sized + BufferContents,
 {
     pub fn read(&self) -> Result<ReadLock<T>> {
         Ok(self.stage.read()?)
     }
 }
+
+//
 
 fn make_usage(usage: BufferUsage) -> (BufferUsage, BufferUsage) {
     (
@@ -166,7 +172,10 @@ fn make_usage(usage: BufferUsage) -> (BufferUsage, BufferUsage) {
     )
 }
 
-fn make_local<T>(device: &Dev, local_usage: BufferUsage) -> Result<Arc<DeviceLocalBuffer<T>>> {
+fn make_local<T>(device: &Dev, local_usage: BufferUsage) -> Result<Arc<DeviceLocalBuffer<T>>>
+where
+    T: BufferContents,
+{
     Ok(DeviceLocalBuffer::new(
         device.logical().clone(),
         local_usage,
@@ -178,7 +187,10 @@ fn make_local_array<T>(
     device: &Dev,
     local_usage: BufferUsage,
     len: DeviceSize,
-) -> Result<Arc<DeviceLocalBuffer<[T]>>> {
+) -> Result<Arc<DeviceLocalBuffer<[T]>>>
+where
+    [T]: BufferContents,
+{
     Ok(DeviceLocalBuffer::array(
         device.logical().clone(),
         len,
@@ -186,69 +198,3 @@ fn make_local_array<T>(
         [device.queues.graphics.family()].iter().cloned(),
     )?)
 }
-
-/* pub trait ResizeBuffer<T>
-where
-    Self: Sized,
-{
-    type ResultType;
-
-    fn resize_with_iter<I>(
-        &self,
-        device: &Dev,
-        usage: BufferUsage,
-        append: I,
-    ) -> Result<Self::ResultType>
-    where
-        I: ExactSizeIterator<Item = T>;
-}
-
-impl<T> ResizeBuffer<T> for CpuAccessibleBuffer<[T]>
-where
-    T: Clone + 'static,
-{
-    type ResultType = Arc<Self>;
-
-    fn resize_with_iter<I>(
-        &self,
-        device: &Dev,
-        usage: BufferUsage,
-        append: I,
-    ) -> Result<Self::ResultType>
-    where
-        I: ExactSizeIterator<Item = T>,
-    {
-        let lock = self.read()?;
-        let data = (*lock).iter().cloned().chain(append).collect::<Box<_>>();
-        let iter = data.into_iter().cloned();
-
-        let buffer = Self::from_iter(device.logical().clone(), usage, false, iter)?;
-
-        Ok(buffer)
-    }
-}
-
-impl<T> ResizeBuffer<T> for StagedBuffer<[T]>
-where
-    T: Clone + 'static,
-{
-    type ResultType = Self;
-
-    fn resize_with_iter<I>(
-        &self,
-        device: &Dev,
-        usage: BufferUsage,
-        append: I,
-    ) -> Result<Self::ResultType>
-    where
-        I: ExactSizeIterator<Item = T>,
-    {
-        let lock = self.read()?;
-        let data = (*lock).iter().cloned().chain(append).collect::<Box<_>>();
-        let iter = data.into_iter().cloned();
-
-        let buffer = Self::from_iter(device, usage, iter)?;
-
-        Ok(buffer)
-    }
-} */

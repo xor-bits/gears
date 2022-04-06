@@ -1,6 +1,6 @@
+use bytemuck::{Pod, Zeroable};
 use gears::{
     gears_pipeline::Input,
-    glam::{Mat4, Vec3},
     renderer::simple_renderer::Renderer,
     vulkano::{buffer::CpuBufferPool, pipeline::GraphicsPipeline, render_pass::Subpass},
 };
@@ -16,20 +16,20 @@ use vulkano::{
     },
 };
 
-#[derive(Input, Debug, PartialEq, Copy, Clone, Default)]
+#[derive(Debug, Zeroable, Pod, Input, PartialEq, Copy, Clone, Default)]
 #[repr(C)]
 pub struct VertexData {
     pub vi_pos: [f32; 3],
     pub vi_norm: [f32; 3],
 }
 
-#[derive(Debug, PartialEq, Copy, Clone, Default)]
+#[derive(Debug, Zeroable, Pod, PartialEq, Copy, Clone, Default)]
 #[repr(C)]
 pub struct UniformData {
-    pub model_matrix: Mat4,
-    pub view_matrix: Mat4,
-    pub projection_matrix: Mat4,
-    pub light_dir: Vec3,
+    pub model_matrix: [[f32; 4]; 4],
+    pub view_matrix: [[f32; 4]; 4],
+    pub projection_matrix: [[f32; 4]; 4],
+    pub light_dir: [f32; 3],
 }
 
 mod vert {

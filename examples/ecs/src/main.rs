@@ -145,7 +145,7 @@ impl Runnable for App {
 
         let mut recorder = recorder.begin_render_pass();
 
-        let mvp = Mat4::orthographic_rh(-1.0, 1.0, -1.0, 1.0, -1.0, 1.0);
+        let mvp = Mat4::orthographic_rh(-1.0, 1.0, -1.0, 1.0, -1.0, 1.0).to_cols_array_2d();
         let ubo = UniformData { mvp };
         let ubo = self.shader.buffer_pool.next(ubo).unwrap();
         let set = self

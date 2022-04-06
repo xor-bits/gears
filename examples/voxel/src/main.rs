@@ -82,12 +82,14 @@ impl MeshMode {
 
 //
 
+type X = StagedBuffer<[VertexData]>;
+
 struct App {
     frame: Frame,
     renderer: Renderer,
 
     shaders: (DefaultPipeline, DebugPipeline),
-    vb: StagedBuffer<[VertexData]>,
+    vb: X,
     ib: StagedBuffer<[u32]>,
 
     input: InputState,
@@ -213,9 +215,10 @@ impl App {
         let up = Vec3::new(0.0, 1.0, 0.0);
 
         UniformData {
-            mvp: Mat4::perspective_rh(1.0, aspect, 0.01, 500.0)
+            mvp: (Mat4::perspective_rh(1.0, aspect, 0.01, 500.0)
                 * Mat4::look_at_rh(eye, focus, up)
-                * Mat4::from_scale(Vec3::new(1.0, 1.0, 1.0)),
+                * Mat4::from_scale(Vec3::new(1.0, 1.0, 1.0)))
+            .to_cols_array_2d(),
         }
     }
 }
@@ -303,7 +306,7 @@ impl Runnable for App {
         let ubo = self.ubo(delta);
         let (layout, set, pipeline) = if self.debug {
             let ubo = self.shaders.1.buffer_pool.next(ubo).unwrap();
-            let layout = self.shaders.1.pipeline.layout().descriptor_set_layouts()[0].clone();
+            let layout = self.shaders.1.pipeline.layout().set_layouts()[0].clone();
             (
                 self.shaders.1.pipeline.layout().clone(),
                 PersistentDescriptorSet::new_with_pool(
@@ -317,7 +320,7 @@ impl Runnable for App {
             )
         } else {
             let ubo = self.shaders.0.buffer_pool.next(ubo).unwrap();
-            let layout = self.shaders.0.pipeline.layout().descriptor_set_layouts()[0].clone();
+            let layout = self.shaders.0.pipeline.layout().set_layouts()[0].clone();
             (
                 self.shaders.0.pipeline.layout().clone(),
                 PersistentDescriptorSet::new_with_pool(

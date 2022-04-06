@@ -28,15 +28,16 @@ specs = { version = "~0.17", features = ["parallel", "derive"] }
 gears = { path = "../gears", features = ["validation_panic"] }
 paste = "1.0.6"
 smallvec = "1.8.0"
+bytemuck = "1.9.1"
 
-# vulkano = "0.28.0"
-# vulkano-shaders = "0.28.0"
-# vulkano-win = "0.28.0"
-vulkano = { git = "https://github.com/vulkano-rs/vulkano" }
-vulkano-shaders = { git = "https://github.com/vulkano-rs/vulkano", features = [
-	"shaderc-build-from-source",
-] }
-vulkano-win = { git = "https://github.com/vulkano-rs/vulkano" }
+vulkano = "0.29.0"
+vulkano-shaders = "0.29.0"
+vulkano-win = "0.29.0"
+# vulkano = { git = "https://github.com/vulkano-rs/vulkano" }
+# vulkano-shaders = { git = "https://github.com/vulkano-rs/vulkano", features = [
+# 	"shaderc-build-from-source",
+# ] }
+# vulkano-win = { git = "https://github.com/vulkano-rs/vulkano" }
 # vulkano = { git = "https://github.com/Overpeek/vulkano" }
 # vulkano-shaders = { git = "https://github.com/Overpeek/vulkano" }
 # vulkano-win = { git = "https://github.com/Overpeek/vulkano" }

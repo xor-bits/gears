@@ -12,6 +12,7 @@ use crate::{
 };
 use parking_lot::{Mutex, MutexGuard};
 use std::{
+    convert::TryFrom,
     sync::{
         atomic::{AtomicU8, Ordering},
         Arc,
@@ -23,9 +24,11 @@ use vulkano::{
         AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, SubpassContents,
     },
     format::{ClearValue, Format},
-    image::{view::ImageView, AttachmentImage, ImageAccess, SwapchainImage},
+    image::{
+        view::ImageView, AttachmentImage, ImageAccess, ImageLayout, SampleCount, SwapchainImage,
+    },
     pipeline::graphics::viewport::{Scissor, Viewport},
-    render_pass::{Framebuffer, RenderPass},
+    render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
     single_pass_renderpass,
     swapchain::SwapchainAcquireFuture,
     sync::{self, FenceSignalFuture, FlushError, GpuFuture, JoinFuture},
@@ -67,17 +70,18 @@ impl RenderTarget {
         .unwrap();
 
         // image views
-        let color_image_view = ImageView::new(color_image).unwrap();
-        let depth_image_view = ImageView::new(depth_image).unwrap();
+        let color_image_view = ImageView::new_default(color_image).unwrap();
+        let depth_image_view = ImageView::new_default(depth_image).unwrap();
 
         // framebuffer
-        let framebuffer = Framebuffer::start(render_pass)
-            .add(color_image_view)
-            .unwrap()
-            .add(depth_image_view)
-            .unwrap()
-            .build()
-            .unwrap();
+        let framebuffer = Framebuffer::new(
+            render_pass,
+            FramebufferCreateInfo {
+                attachments: vec![color_image_view, depth_image_view],
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         Self {
             framebuffer,
@@ -324,7 +328,7 @@ impl Renderer {
         self.render_targets = RendererBuilder::create_render_targets(
             color_images,
             &self.device,
-            &self.swapchain_objects.render_pass,
+            self.swapchain_objects.render_pass.clone(),
         );
 
         Ok(())
@@ -344,7 +348,8 @@ impl<'f> RendererBuilder<'f> {
         let render_pass = Self::create_render_pass(&device, &target);
 
         // render targets (framebuffers, command buffers, ...)
-        let render_targets = Self::create_render_targets(color_images, &device, &render_pass);
+        let render_targets =
+            Self::create_render_targets(color_images, &device, render_pass.clone());
 
         // swapchain + renderpass
         let swapchain_objects = SwapchainObjects {
@@ -381,7 +386,7 @@ impl<'f> RendererBuilder<'f> {
                     load: Clear,
                     store: Store,
                     format: target.format.0,
-                    samples: 1,
+                    samples: SampleCount::Sample1,
                     initial_layout: ImageLayout::Undefined,
                     final_layout: ImageLayout::PresentSrc,
                 },
@@ -389,7 +394,7 @@ impl<'f> RendererBuilder<'f> {
                     load: Clear,
                     store: DontCare,
                     format: Format::D24_UNORM_S8_UINT,
-                    samples: 1,
+                    samples: SampleCount::Sample1,
                     initial_layout: ImageLayout::Undefined,
                     final_layout: ImageLayout::DepthStencilAttachmentOptimal,
                 }
@@ -405,7 +410,7 @@ impl<'f> RendererBuilder<'f> {
     fn create_render_targets(
         color_images: SwapchainImages,
         device: &Dev,
-        render_pass: &Arc<RenderPass>,
+        render_pass: Arc<RenderPass>,
     ) -> Box<[Arc<Mutex<RenderTarget>>]> {
         color_images
             .iter()

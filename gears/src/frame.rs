@@ -174,7 +174,7 @@ impl<'a> FrameBuilder<'a> {
         // physical device
 
         let p_device = Arc::new(SuitableGPU::pick(
-            &context.instance,
+            context.instance.clone(),
             &window,
             ContextGPUPick::default(),
         )?);
